@@ -1,0 +1,35 @@
+syntax = "proto3";
+package dad.xiaomi.uog;
+
+message StreamReq {
+  string auth = 1;
+  optional bytes payload = 2;
+  optional string dstAddr = 3;
+  optional uint32 dstPort = 4;
+}
+
+message StreamRes {
+  bytes payload = 1;
+}
+
+message UdpReq {
+  string auth = 1;
+  optional bytes payload = 2;
+  optional string dstAddr = 3;
+  optional uint32 dstPort = 4;
+  optional string srcAddr = 5;
+  optional uint32 srctPort = 6;
+}
+
+message UdpRes {
+  bytes payload = 1;
+  optional string dstAddr = 2;
+  optional uint32 dstPort = 3;
+  optional string srcAddr = 4;
+  optional uint32 srctPort = 5;
+}
+
+service RogService {
+  rpc stream(stream StreamReq) returns (stream StreamRes) {}
+  rpc udp(stream UdpReq) returns (stream UdpRes) {}
+}
