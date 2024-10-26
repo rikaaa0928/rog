@@ -23,7 +23,7 @@ pub struct TcpConnector {}
 
 // 为 TcpReadHalf 实现 MyReadHalf trait
 impl RunReadHalf for TcpReadHalf {
-    type ReadFuture<'a> = Pin<Box<dyn Future<Output=Result<usize>> + Send + Sync + 'a>>;
+    type ReadFuture<'a> = Pin<Box<dyn Future<Output=Result<usize>> + Send + 'a>>;
 
     fn read<'a>(&'a mut self, buf: &'a mut [u8]) -> Self::ReadFuture<'a> {
         Box::pin(async move {
@@ -34,7 +34,7 @@ impl RunReadHalf for TcpReadHalf {
 
 // 为 TcpWriteHalf 实现 MyWriteHalf trait
 impl RunWriteHalf for TcpWriteHalf {
-    type WriteFuture<'a> = Pin<Box<dyn Future<Output=Result<()>> + Send + Sync + 'a>>;
+    type WriteFuture<'a> = Pin<Box<dyn Future<Output=Result<()>> + Send + 'a>>;
 
     fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::WriteFuture<'a> {
         Box::pin(async move {
@@ -70,7 +70,7 @@ impl TcpConnector {
 }
 impl RunConnector for TcpConnector {
     type Stream = TcpRunStream;
-    type StreamFuture = Pin<Box<dyn Future<Output=Result<Self::Stream>> + Send + Sync>>;
+    type StreamFuture = Pin<Box<dyn Future<Output=Result<Self::Stream>> + Send>>;
 
     fn connect(&self, addr: String) -> Self::StreamFuture {
         Box::pin(async move {
@@ -131,9 +131,10 @@ mod test {
         let (mut read_half, mut write_half) = stream.split();
 
         // Spawn a new task to read the response
-        let read_handle: JoinHandle<result::Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>> = spawn(async move {
+        let read_handle: JoinHandle<result::Result<Vec<u8>, Box<dyn std::error::Error + Send>>> = spawn(async move {
             let mut buf = vec![0; 1024];
-            let n = read_half.read(&mut buf).await?;
+            let x = read_half.read(&mut buf).await;
+            let n = x.unwrap();
             Ok(buf[..n].to_vec())
         });
 

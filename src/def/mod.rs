@@ -2,9 +2,9 @@ use std::io::{Result};
 use std::future::Future;
 
 // 定义读取半边的 trait
-pub trait RunReadHalf: Send + Sync {
+pub trait RunReadHalf: Send  {
     // 使用关联类型来定义返回值，因为 async trait 还不稳定
-    type ReadFuture<'a>: Future<Output=Result<usize>> + Send + Sync + 'a
+    type ReadFuture<'a>: Future<Output=Result<usize>> + Send  + 'a
     where
         Self: 'a;
 
@@ -13,8 +13,8 @@ pub trait RunReadHalf: Send + Sync {
 }
 
 // 定义写入半边的 trait
-pub trait RunWriteHalf: Send + Sync {
-    type WriteFuture<'a>: Future<Output=Result<()>> + Send + Sync + 'a
+pub trait RunWriteHalf: Send  {
+    type WriteFuture<'a>: Future<Output=Result<()>> + Send  + 'a
     where
         Self: 'a;
 
@@ -23,27 +23,27 @@ pub trait RunWriteHalf: Send + Sync {
 }
 
 // 定义流的 trait，用于分割读写
-pub trait RunStream: Send + Sync {
+pub trait RunStream: Send  {
     type ReadHalf: RunReadHalf;
     type WriteHalf: RunWriteHalf;
 
     fn split(self) -> (Self::ReadHalf, Self::WriteHalf);
 }
 
-pub trait RunConnector: Send + Sync {
+pub trait RunConnector: Send  {
     type Stream: RunStream;
-    type StreamFuture: Future<Output=Result<Self::Stream>> + Send + Sync;
+    type StreamFuture: Future<Output=Result<Self::Stream>> + Send ;
 
     fn connect(&self, addr: String) -> Self::StreamFuture;
 }
 
-pub trait RunAcceptor: Send + Sync {
+pub trait RunAcceptor: Send  {
     type Stream: RunStream;
-    type StreamFuture: Future<Output=Result<Self::Stream>> + Send + Sync;
+    type StreamFuture: Future<Output=Result<Self::Stream>> + Send ;
     fn accept(&self) -> Result<Self::StreamFuture>;
 }
 
-pub trait RunListener: Send + Sync {
+pub trait RunListener: Send  {
     type Acceptor: RunAcceptor;
     fn listen(addr: String) -> Result<Self::Acceptor>;
 }
