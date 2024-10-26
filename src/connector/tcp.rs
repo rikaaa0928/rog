@@ -70,7 +70,7 @@ impl TcpConnector {
 }
 impl RunConnector for TcpConnector {
     type Stream = TcpRunStream;
-    type StreamFuture = Pin<Box<dyn Future<Output=Result<Self::Stream>> + Send>>;
+    type StreamFuture = Pin<Box<dyn Future<Output=Result<Self::Stream>>>>;
 
     fn connect(&self, addr: String) -> Self::StreamFuture {
         Box::pin(async move {
@@ -99,7 +99,7 @@ mod test {
         let local_addr = listener.local_addr()?;
         let server_running = Arc::new(AtomicBool::new(true));
 
-        let server_handle: JoinHandle<Result<()>> = {
+        let _: JoinHandle<Result<()>> = {
             let server_running = server_running.clone();
             spawn(async move {
                 while server_running.load(Ordering::SeqCst) {
