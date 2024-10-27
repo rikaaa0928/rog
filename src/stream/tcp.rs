@@ -27,6 +27,12 @@ impl RunReadHalf for TcpReadHalf {
             self.reader.read(buf).await
         })
     }
+
+    fn read_exact<'a>(&'a mut self, buf: &'a mut [u8]) -> Self::ReadFuture<'a> {
+        Box::pin(async move {
+            self.reader.read_exact(buf).await
+        })
+    }
 }
 
 // 为 TcpWriteHalf 实现 MyWriteHalf trait
