@@ -39,7 +39,7 @@ pub trait RunConnector {
 
 pub trait RunAcceptor {
     type Stream: RunStream;
-    type StreamFuture: Future<Output=Result<Self::Stream>> + Send;
+    type StreamFuture: Future<Output=Result<Self::Stream>>;
     fn accept(&self) -> Result<Self::StreamFuture>;
 }
 
