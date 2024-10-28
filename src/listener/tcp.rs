@@ -27,7 +27,7 @@ impl RunAcceptor for TcpRunAcceptor {
         })
     }
 
-    fn handshake(&self, r: &mut Self::Reader, w: &mut Self::Writer) -> Self::HandshakeFuture<'_> {
+    fn handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer) -> Self::HandshakeFuture<'_> {
         Box::pin(async move {
             Ok(RunAddr{
                 addr: "".to_string(),

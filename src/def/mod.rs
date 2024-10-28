@@ -58,7 +58,7 @@ pub trait RunAcceptor {
 
     fn accept(&self) -> Self::StreamFuture<'_>;
 
-    fn handshake(&self, r: &mut Self::Reader, w: &mut Self::Writer) -> Self::HandshakeFuture<'_>;
+    fn handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer) -> Self::HandshakeFuture<'_>;
 
     fn post_handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer, error: bool) -> Self::PostHandshakeFuture<'_>;
 }

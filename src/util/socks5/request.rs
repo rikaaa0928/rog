@@ -3,17 +3,17 @@ use std::pin::Pin;
 use crate::def::RunReadHalf;
 use crate::stream::tcp::TcpReadHalf;
 
-struct Request {
-    version: u8,
-    cmd: u8,
-    rsv: u8,
-    a_typ: u8,
-    dst_addr: Vec<u8>,
-    dst_port: [u8; 2],
+pub struct Request {
+    pub version: u8,
+    pub cmd: u8,
+    pub rsv: u8,
+    pub a_typ: u8,
+    pub dst_addr: Vec<u8>,
+    pub dst_port: [u8; 2],
 }
 
 impl Request {
-    fn parse<'a>(stream: &'a mut TcpReadHalf) -> Pin<Box<dyn Future<Output=std::io::Result<Self>> + 'a>> {
+    pub fn parse<'a>(stream: &'a mut TcpReadHalf) -> Pin<Box<dyn Future<Output=std::io::Result<Self>> + Send + 'a>> {
         Box::pin(async move {
             let mut buf = [0u8; 1];
             let _ = stream.read_exact(&mut buf).await?;
@@ -37,13 +37,10 @@ impl Request {
                 let _ = stream.read_exact(&mut t_dst_addr).await?;
                 t_dst_addr
             } else {
-                let mut t_dst_addr: Vec<u8> = Vec::new();
                 let _ = stream.read_exact(&mut buf).await?;
                 let len = buf[0].clone();
-                t_dst_addr.push(len.clone());
-                let mut t_t_dst_addr = vec![0u8; a_len as usize];
-                let _ = stream.read_exact(&mut t_t_dst_addr).await?;
-                t_dst_addr.extend(t_t_dst_addr);
+                let mut t_dst_addr = vec![0u8; len as usize];
+                let _ = stream.read_exact(&mut t_dst_addr).await?;
                 t_dst_addr
             };
             let mut dst_port = [0u8; 2];

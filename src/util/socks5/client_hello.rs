@@ -1,17 +1,16 @@
 use std::future::Future;
-use std::net::SocketAddr;
 use std::pin::Pin;
-use crate::def::{RunReadHalf, RunStream};
+use crate::def::{RunReadHalf};
 use crate::stream::tcp::{TcpReadHalf};
 
-struct Socks5ClientHello {
-    version: u8,
-    method_num: u8,
-    methods: Vec<u8>,
+pub struct ClientHello {
+    pub version: u8,
+    pub method_num: u8,
+    pub methods: Vec<u8>,
 }
 
-impl Socks5ClientHello {
-    fn parse<'a>(stream: &'a mut TcpReadHalf) -> Pin<Box<dyn Future<Output=std::io::Result<Self>> + 'a>> {
+impl ClientHello {
+    pub fn parse<'a>(stream: &'a mut TcpReadHalf) -> Pin<Box<dyn Future<Output=std::io::Result<Self>> + Send + 'a>> {
         Box::pin(async move {
             let mut buf = vec![0u8; 1];
             let _ = stream.read_exact(&mut buf).await?;
@@ -23,11 +22,15 @@ impl Socks5ClientHello {
             let method_num = buf[0].clone();
             let mut methods = vec![0u8; method_num as usize];
             let _ = stream.read_exact(&mut methods).await?;
-            Ok(Socks5ClientHello {
+            Ok(ClientHello {
                 version,
                 method_num,
                 methods,
             })
         })
+    }
+
+    pub fn contains(&self, method: u8) -> bool {
+        self.methods.contains(&method)
     }
 }

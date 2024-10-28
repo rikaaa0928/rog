@@ -2,19 +2,20 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use crate::def::{RunAcceptor, RunListener};
-use crate::host::tcp::{TcpRunAcceptor, TcpRunListener};
+use crate::listener::tcp::{TcpRunAcceptor, TcpRunListener};
 use crate::stream::tcp::{TcpReadHalf, TcpRunStream, TcpWriteHalf};
 use crate::util::RunAddr;
 use crate::def::RunWriteHalf;
+use crate::util;
 
-struct SocksRunAcceptor {
+pub struct SocksRunAcceptor {
     inner: TcpRunAcceptor,
     user: Option<String>,
     pw: Option<String>,
 }
 
 impl SocksRunAcceptor {
-    fn new(a: TcpRunAcceptor, user: Option<String>, pw: Option<String>) -> SocksRunAcceptor {
+    pub fn new(a: TcpRunAcceptor, user: Option<String>, pw: Option<String>) -> SocksRunAcceptor {
         SocksRunAcceptor {
             inner: a,
             user,
@@ -34,23 +35,23 @@ impl RunAcceptor for SocksRunAcceptor {
         Box::pin(self.inner.accept())
     }
 
-    fn handshake(&self, r: &mut Self::Reader, w: &mut Self::Writer) -> Self::HandshakeFuture<'_> {
+    fn handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer) -> Self::HandshakeFuture<'_> {
         Box::pin(async move {
-            Ok(RunAddr{
-                addr: "".to_string(),
-                port: 0,
-                a_type: 0,
-            })
+            let hello = &util::socks5::client_hello::ClientHello::parse(r).await?;
+            if !hello.contains(util::socks5::NO_AUTH) {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "no available authentication found"));
+            }
+            let hello_back = util::socks5::server_hello::ServerHello::new(hello.version.clone(), util::socks5::NO_AUTH);
+            w.write(&hello_back.to_bytes()).await?;
+            let req = &util::socks5::request::Request::parse(r).await?;
+            req.try_into()
         })
     }
 
     fn post_handshake<'a>(&'a self, _: &'a mut Self::Reader, w: &'a mut TcpWriteHalf, error: bool) -> Self::PostHandshakeFuture<'_> {
         Box::pin(async move {
-            if error {
-                w.write(&[0x05, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff]).await?;
-            } else {
-                w.write(&[0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff]).await?;
-            }
+            let confirm = util::socks5::confirm::Confirm::new(error);
+            w.write(&confirm.to_bytes()).await?;
             Ok(())
         })
     }
