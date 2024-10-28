@@ -15,7 +15,8 @@ async fn test_tcp() -> Result<()> {
         println!("Accepted connection from {}", addr);
         let _ = spawn(async move {
             let (mut r, mut w) = stream.split();
-            listener.handshake(&r, &w).await?;
+            listener.handshake(&mut r, &mut w).await?;
+            listener.post_handshake(&mut r, &mut w, false).await?;
             let a = spawn(async move {
                 let mut buf = vec![0u8; 10];
                 let n = r.read(&mut buf).await?;

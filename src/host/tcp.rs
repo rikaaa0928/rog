@@ -4,6 +4,7 @@ use std::pin::Pin;
 use tokio::net::TcpListener;
 use crate::def::{RunAcceptor, RunListener};
 use crate::stream::tcp::{TcpReadHalf, TcpRunStream, TcpWriteHalf};
+use crate::util::RunAddr;
 
 pub struct TcpRunAcceptor {
     inner: TcpListener,
@@ -16,7 +17,8 @@ impl RunAcceptor for TcpRunAcceptor {
     type Reader = TcpReadHalf;
     type Writer = TcpWriteHalf;
     type StreamFuture<'a> = Pin<Box<dyn Future<Output=std::io::Result<(Self::Stream, SocketAddr)>> + Send + 'a>>;
-    type HandshakeFuture<'a> = Pin<Box<dyn Future<Output=std::io::Result<()>> + Send + 'a>>;
+    type HandshakeFuture<'a> = Pin<Box<dyn Future<Output=std::io::Result<RunAddr>> + Send + 'a>>;
+    type PostHandshakeFuture<'a> = Pin<Box<dyn Future<Output=std::io::Result<()>> + Send + 'a>>;
 
     fn accept(&self) -> Self::StreamFuture<'_> {
         Box::pin(async move {
@@ -25,7 +27,17 @@ impl RunAcceptor for TcpRunAcceptor {
         })
     }
 
-    fn handshake(&self, r: &Self::Reader, w: &Self::Writer) -> Self::HandshakeFuture<'_> {
+    fn handshake(&self, r: &mut Self::Reader, w: &mut Self::Writer) -> Self::HandshakeFuture<'_> {
+        Box::pin(async move {
+            Ok(RunAddr{
+                addr: "".to_string(),
+                port: 0,
+                a_type: 0,
+            })
+        })
+    }
+
+    fn post_handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer, error: bool) -> Self::PostHandshakeFuture<'_> {
         Box::pin(async move {
             Ok(())
         })

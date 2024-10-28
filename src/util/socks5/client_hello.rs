@@ -16,7 +16,7 @@ impl Socks5ClientHello {
             let mut buf = vec![0u8; 1];
             let _ = stream.read_exact(&mut buf).await?;
             let version = buf[0].clone();
-            if version != 4 && version != 5 {
+            if version != 5 {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid socks version"));
             }
             let _ = stream.read_exact(&mut buf).await?;

@@ -1,2 +1,2 @@
 pub(crate) mod tcp;
-pub(crate) mod socks;
+pub(crate) mod socks5;

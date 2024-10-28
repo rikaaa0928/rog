@@ -1,6 +1,7 @@
 use std::io::{Result};
 use std::future::Future;
 use std::net::SocketAddr;
+use crate::util::RunAddr;
 
 // 定义读取半边的 trait
 pub trait RunReadHalf {
@@ -47,13 +48,19 @@ pub trait RunAcceptor {
     type StreamFuture<'a>: Future<Output=Result<(Self::Stream, SocketAddr)>> + Send + 'a
     where
         Self: 'a;
-    type HandshakeFuture<'a>: Future<Output=Result<()>> + Send + 'a
+    type HandshakeFuture<'a>: Future<Output=Result<RunAddr>> + Send + 'a
+    where
+        Self: 'a;
+
+    type PostHandshakeFuture<'a>: Future<Output=Result<()>> + Send + 'a
     where
         Self: 'a;
 
     fn accept(&self) -> Self::StreamFuture<'_>;
 
-    fn handshake(&self, r: &Self::Reader, w: &Self::Writer) -> Self::HandshakeFuture<'_>;
+    fn handshake(&self, r: &mut Self::Reader, w: &mut Self::Writer) -> Self::HandshakeFuture<'_>;
+
+    fn post_handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer, error: bool) -> Self::PostHandshakeFuture<'_>;
 }
 
 pub trait RunListener {
