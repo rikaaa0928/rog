@@ -3,8 +3,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use std::pin::Pin;
 use std::future::Future;
-use crate::def::{RunConnector, RunReadHalf, RunStream, RunWriteHalf};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use crate::def::{RunConnector, RunReadHalf, RunStream, RunUdpConnector, RunUdpStream, RunWriteHalf};
 use crate::stream::tcp::TcpRunStream;
+use crate::stream::udp::UdpRunStream;
 
 pub struct TcpRunConnector {}
 
@@ -13,10 +17,33 @@ impl TcpRunConnector {
         TcpRunConnector {}
     }
 }
+
+impl RunUdpConnector for TcpRunConnector {
+    type UdpStream = UdpRunStream;
+    type UdpFuture = Pin<Box<dyn Future<Output=Result<Option<Self::UdpStream>>> + Send>>;
+    fn udp_tunnel(&self, addr: SocketAddr) -> Self::UdpFuture {
+        Box::pin(async move {
+            Ok(None)
+        })
+    }
+}
+
+impl RunUdpConnector for Arc<Mutex<TcpRunConnector>> {
+    type UdpStream = UdpRunStream;
+    type UdpFuture = Pin<Box<dyn Future<Output=Result<Option<Self::UdpStream>>> + Send>>;
+
+    fn udp_tunnel(&self, addr: SocketAddr) -> Self::UdpFuture {
+        let connector = self.clone();
+        Box::pin(async move {
+            let connector = connector.lock().await;
+            connector.udp_tunnel(addr).await
+        })
+    }
+}
+
 impl RunConnector for TcpRunConnector {
     type Stream = TcpRunStream;
-    type StreamFuture = Pin<Box<dyn Future<Output=Result<Self::Stream>>>>;
-
+    type StreamFuture = Pin<Box<dyn Future<Output=Result<Self::Stream>> + Send>>;
     fn connect(&self, addr: String) -> Self::StreamFuture {
         Box::pin(async move {
             let tcp_stream = TcpStream::connect(addr).await?;

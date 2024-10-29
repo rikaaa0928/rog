@@ -1,8 +1,10 @@
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use tokio::net::TcpListener;
-use crate::def::{RunAcceptor, RunListener};
+use tokio::sync::Mutex;
+use crate::def::{RunAcceptor, RunListener, RunUdpConnector};
 use crate::stream::tcp::{TcpReadHalf, TcpRunStream, TcpWriteHalf};
 use crate::util::RunAddr;
 
@@ -27,9 +29,9 @@ impl RunAcceptor for TcpRunAcceptor {
         })
     }
 
-    fn handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer) -> Self::HandshakeFuture<'_> {
+    fn handshake<'a, T: RunUdpConnector + Send + Sync + 'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer, udp_connector: Option<T>) -> Self::HandshakeFuture<'_> {
         Box::pin(async move {
-            Ok(RunAddr{
+            Ok(RunAddr {
                 addr: "".to_string(),
                 port: 0,
                 a_type: 0,

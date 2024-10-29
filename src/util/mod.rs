@@ -10,6 +10,12 @@ pub struct RunAddr {
     pub a_type: u8,
 }
 
+impl RunAddr {
+    pub(crate) fn endpoint(&self) -> String {
+        format!("{}:{}", self.addr, self.port)
+    }
+}
+
 impl TryFrom<&Request> for RunAddr {
     type Error = std::io::Error;
 

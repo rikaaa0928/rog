@@ -1,7 +1,9 @@
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use crate::def::RunReadHalf;
 use crate::stream::tcp::TcpReadHalf;
+use crate::util::socks5::{CMD_CONNECT, CMD_UDP};
 
 pub struct Request {
     pub version: u8,
@@ -19,11 +21,14 @@ impl Request {
             let _ = stream.read_exact(&mut buf).await?;
             let version = buf[0].clone();
             if version != 5 {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid socks version"));
+                return Err(std::io::Error::new(std::io::ErrorKind::Other, "invalid socks version"));
             }
 
             let _ = stream.read_exact(&mut buf).await?;
             let cmd = buf[0].clone();
+            if cmd != CMD_CONNECT && cmd != CMD_UDP {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid socks cmd, only CONNECT and UDP ASSOCIATE supported"));
+            }
             let _ = stream.read_exact(&mut buf).await?;
             let rsv = buf[0].clone();
             let _ = stream.read_exact(&mut buf).await?;
@@ -56,3 +61,11 @@ impl Request {
         })
     }
 }
+
+// impl TryInto<SocketAddr> for Request {
+//     type Error = ();
+//
+//     fn try_into(self) -> Result<SocketAddr, Self::Error> {
+//         todo!()
+//     }
+// }
