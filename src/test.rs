@@ -1,14 +1,17 @@
 use std::io::{Error, ErrorKind, Result};
-use std::ops::{Deref, DerefMut};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc};
 use std::time::Duration;
+use log::debug;
 use tokio::{select, spawn};
+use tokio::net::UdpSocket;
 use tokio::sync::{oneshot, Mutex};
 use tokio::time::sleep;
 use crate::connector::tcp::TcpRunConnector;
-use crate::def::{RunAcceptor, RunConnector, RunListener, RunReadHalf, RunStream, RunUdpConnector, RunWriteHalf};
+use crate::def::{RunAcceptor, RunConnector, RunListener, RunReadHalf, RunStream, RunUdpConnector, RunWriteHalf, UDPPacket};
 use crate::listener::socks5::SocksRunAcceptor;
 use crate::listener::tcp::TcpRunListener;
+use crate::util;
 use crate::util::socks5::UDP_ERROR_STR;
 
 #[tokio::test]
@@ -20,7 +23,7 @@ async fn test_tcp() -> Result<()> {
         println!("Accepted connection from {}", addr);
         let _ = spawn(async move {
             let (mut r, mut w) = stream.split();
-            listener.handshake::<TcpRunConnector>(&mut r, &mut w, None).await?;
+            listener.handshake(&mut r, &mut w).await?;
             listener.post_handshake(&mut r, &mut w, false).await?;
             let a = spawn(async move {
                 let mut buf = vec![0u8; 10];
@@ -70,18 +73,73 @@ async fn test_socks5() -> Result<()> {
         spawn(async move {
             let (mut r, mut w) = s.split();
             // let udp_tunnel=Arc::new(&connector).lock().await.udp_tunnel();
-            let addr_res = socks5.handshake(&mut r, &mut w, Some(Arc::clone(&connector))).await;
+            let addr_res = socks5.handshake(&mut r, &mut w).await;
             match addr_res {
                 Err(e) => {
-                    if e.kind() == ErrorKind::Other && format!("{}", &e) == UDP_ERROR_STR {
-                        println!("udp? {}", &e)
-                    } else {
-                        println!("Handshake error: {}", e);
-                    }
+                    println!("Handshake error: {}", e);
                 }
                 Ok(addr) => {
-                    println!("Handshake successful {:?}", &addr);
-                    let client_stream_res = Arc::clone(&connector).lock().await.connect((&addr).endpoint()).await;
+                    let addr_ref = &addr;
+                    if addr_ref.udp {
+                        println!("udp? {:?}", addr_ref);
+                        let mut udp_socket_base = UdpSocket::bind("127.0.0.1:0").await?;
+                        let udp_port = udp_socket_base.local_addr()?.port();
+                        let udp_socket = Arc::new(udp_socket_base);
+                        let confirm = util::socks5::confirm::Confirm::new(false, udp_port);
+                        w.write(&confirm.to_bytes()).await?;
+                        let (reader_interrupter, mut reader_interrupt_receiver) = oneshot::channel();
+                        let a: tokio::task::JoinHandle<Result<()>> = spawn(async move {
+                            let mut buf = [0u8; 1];
+                            loop {
+                                let res = r.read(&mut buf).await;
+                                if res.is_err() {
+                                    println!("udp tcp read error {:?}", res.err());
+                                    break;
+                                }
+                            }
+                            let _ = reader_interrupter.send(());
+                            Ok(())
+                        });
+                        let l_addr: std::result::Result<SocketAddr, _> = "127.0.0.1:54321".parse();
+                        if l_addr.is_err() {
+                            return Err(Error::new(ErrorKind::InvalidInput, l_addr.unwrap_err()));
+                        }
+                        let udp_tunnel = connector.udp_tunnel(l_addr.unwrap()).await?;
+                        if udp_tunnel.is_none() {
+                            println!("udp tunnel none");
+                            return Ok(());
+                        }
+                        let udp_tunnel = udp_tunnel.unwrap();
+                        //loop
+                        let b: tokio::task::JoinHandle<Result<()>> = spawn(async move {
+                            let mut buf = [0u8; 65536];
+                            loop {
+                                let interrupt_receiver = &mut reader_interrupt_receiver;
+                                let res: Result<(usize, SocketAddr)> = select! {
+                                    _= interrupt_receiver=>{
+                                        Err(Error::new(ErrorKind::Interrupted, "interrupted"))?
+                                    },
+                                    n=udp_socket.recv_from(&mut buf) => {
+                                       Ok(n?)
+                                    }
+
+                                };
+                                if res.is_err() {
+                                    break;
+                                }
+                                let start: usize = 0;
+                                let (n, src_addr) = res?;
+                                let udp_packet = UDPPacket::parse(&buf[..n], src_addr)?;
+                            }
+                            Ok(())
+                        });
+                        let _ = a.await;
+                        let _ = b.await;
+                        println!("udp done");
+                        return Ok(());
+                    }
+                    println!("Handshake successful {:?}", addr_ref);
+                    let client_stream_res = Arc::clone(&connector).lock().await.connect(addr_ref.endpoint()).await;
                     let mut error = false;
                     if client_stream_res.is_err() {
                         error = true;

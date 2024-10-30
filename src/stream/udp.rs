@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UdpSocket};
-use crate::def::{RunReadHalf, RunStream, RunUdpStream, RunWriteHalf, UDPPacket};
+use crate::def::{RunReadHalf, RunStream, RunUdpStream, RunWriteHalf, UDPMeta, UDPPacket};
 
 
 // UdpStream 的包装
@@ -21,10 +21,12 @@ impl RunUdpStream for UdpRunStream {
     fn read(&mut self) -> Pin<Box<dyn Future<Output=std::io::Result<UDPPacket>> + Send>> {
         Box::pin(async move {
             Ok(UDPPacket {
-                dst_addr: "".to_string(),
-                dst_port: 0,
-                src_addr: "".to_string(),
-                srv_port: 0,
+                meta: UDPMeta {
+                    dst_addr: "".to_string(),
+                    dst_port: 0,
+                    src_addr: "".to_string(),
+                    srv_port: 0,
+                },
                 data: vec![],
             })
         })

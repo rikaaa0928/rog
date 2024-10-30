@@ -1,9 +1,11 @@
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, UdpSocket};
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use crate::def::{RunAcceptor, RunListener, RunUdpConnector};
+use log::debug;
+use tokio::spawn;
+use tokio::sync::oneshot;
+use crate::def::{RunAcceptor, RunListener, RunReadHalf, RunUdpConnector};
 use crate::listener::tcp::{TcpRunAcceptor, TcpRunListener};
 use crate::stream::tcp::{TcpReadHalf, TcpRunStream, TcpWriteHalf};
 use crate::util::RunAddr;
@@ -38,7 +40,7 @@ impl RunAcceptor for SocksRunAcceptor {
         Box::pin(self.inner.accept())
     }
 
-    fn handshake<'a, T: RunUdpConnector + Send + Sync + 'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer, udp_connector: Option<T>) -> Self::HandshakeFuture<'_> {
+    fn handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer) -> Self::HandshakeFuture<'_> {
         Box::pin(async move {
             let hello = &util::socks5::client_hello::ClientHello::parse(r).await?;
             if !hello.contains(util::socks5::NO_AUTH) {
@@ -47,25 +49,21 @@ impl RunAcceptor for SocksRunAcceptor {
             let hello_back = util::socks5::server_hello::ServerHello::new(hello.version.clone(), util::socks5::NO_AUTH);
             w.write(&hello_back.to_bytes()).await?;
             let req = &util::socks5::request::Request::parse(r).await?;
-            if req.cmd == CMD_UDP {
-                if udp_connector.is_none() {
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "no available udp connector found"));
-                }
-                let udp_connector = udp_connector.unwrap();
-                // let addr = req.try_into();
-                // if addr.is_err() {
-                //     return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "udp addr parse error"));
-                // }
-                // let udp_tunnel = udp_connector.udp_tunnel(addr.unwrap());
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, UDP_ERROR_STR.clone()));
-            }
+            // if req.cmd == CMD_UDP {
+            //     let addr: Result<SocketAddr, std::io::Error> = RunAddr::try_from(req)?.try_into();
+            //     if addr.is_err() {
+            //         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "udp addr parse error"));
+            //     }
+            //     debug!("udp request src {:?}",addr);
+            //     return Err(std::io::Error::new(std::io::ErrorKind::Other, UDP_ERROR_STR.clone()));
+            // }
             req.try_into()
         })
     }
 
     fn post_handshake<'a>(&'a self, _: &'a mut Self::Reader, w: &'a mut TcpWriteHalf, error: bool) -> Self::PostHandshakeFuture<'_> {
         Box::pin(async move {
-            let confirm = util::socks5::confirm::Confirm::new(error);
+            let confirm = util::socks5::confirm::Confirm::new(error, 0);
             w.write(&confirm.to_bytes()).await?;
             Ok(())
         })

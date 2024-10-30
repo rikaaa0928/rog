@@ -32,11 +32,11 @@ impl RunUdpConnector for Arc<Mutex<TcpRunConnector>> {
     type UdpStream = UdpRunStream;
     type UdpFuture = Pin<Box<dyn Future<Output=Result<Option<Self::UdpStream>>> + Send>>;
 
-    fn udp_tunnel(&self, addr: SocketAddr) -> Self::UdpFuture {
+    fn udp_tunnel(&self, listen_addr: SocketAddr) -> Self::UdpFuture {
         let connector = self.clone();
         Box::pin(async move {
             let connector = connector.lock().await;
-            connector.udp_tunnel(addr).await
+            connector.udp_tunnel(listen_addr).await
         })
     }
 }
@@ -60,8 +60,9 @@ mod test {
     use tokio::task::JoinHandle;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::thread::sleep;
+
     use std::time::Duration;
+    use tokio::time::sleep;
     use super::*;
     #[tokio::test]
     async fn test_tcp_connector() -> Result<()> {
@@ -94,7 +95,7 @@ mod test {
                 Ok(())
             })
         };
-        sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(100)).await;
         // Use TcpConnector to connect to the server
         let connector = TcpRunConnector::new();
         let addr = format!("{}", local_addr);

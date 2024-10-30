@@ -29,12 +29,13 @@ impl RunAcceptor for TcpRunAcceptor {
         })
     }
 
-    fn handshake<'a, T: RunUdpConnector + Send + Sync + 'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer, udp_connector: Option<T>) -> Self::HandshakeFuture<'_> {
+    fn handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer) -> Self::HandshakeFuture<'_> {
         Box::pin(async move {
             Ok(RunAddr {
                 addr: "".to_string(),
                 port: 0,
                 a_type: 0,
+                udp: false,
             })
         })
     }

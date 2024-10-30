@@ -61,11 +61,3 @@ impl Request {
         })
     }
 }
-
-// impl TryInto<SocketAddr> for Request {
-//     type Error = ();
-//
-//     fn try_into(self) -> Result<SocketAddr, Self::Error> {
-//         todo!()
-//     }
-// }
