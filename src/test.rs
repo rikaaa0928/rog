@@ -1,19 +1,18 @@
 use std::io::{Error, ErrorKind, Result};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{SocketAddr};
 use std::sync::{Arc};
 use std::time::Duration;
-use log::debug;
 use tokio::{select, spawn};
 use tokio::net::UdpSocket;
 use tokio::sync::{oneshot, Mutex};
 use tokio::time::sleep;
 use crate::connector::tcp::TcpRunConnector;
-use crate::def::{RunAcceptor, RunConnector, RunListener, RunReadHalf, RunStream, RunUdpConnector, RunWriteHalf, UDPPacket};
+use crate::def::{RunAcceptor, RunConnector, RunListener, RunReadHalf, RunStream, RunUdpConnector, RunUdpStream, RunWriteHalf, UDPPacket};
 use crate::listener::socks5::SocksRunAcceptor;
 use crate::listener::tcp::TcpRunListener;
 use crate::util;
-use crate::util::socks5::UDP_ERROR_STR;
 
+#[cfg(test)]
 #[tokio::test]
 async fn test_tcp() -> Result<()> {
     spawn(async {
@@ -35,8 +34,8 @@ async fn test_tcp() -> Result<()> {
                 let _ = w.write("abcd".to_string().as_bytes()).await?;
                 Ok::<(), Error>(())
             });
-            a.await?;
-            b.await?;
+            let _ = a.await?;
+            let _ = b.await?;
             Ok::<(), Error>(())
         });
         sleep(Duration::from_secs(1)).await;
@@ -82,12 +81,16 @@ async fn test_socks5() -> Result<()> {
                     let addr_ref = &addr;
                     if addr_ref.udp {
                         println!("udp? {:?}", addr_ref);
-                        let mut udp_socket_base = UdpSocket::bind("127.0.0.1:0").await?;
+                        let udp_socket_base = UdpSocket::bind("127.0.0.1:0").await?;
                         let udp_port = udp_socket_base.local_addr()?.port();
-                        let udp_socket = Arc::new(udp_socket_base);
+                        let udp_socket_base = Arc::new(udp_socket_base);
+                        println!("provide {} for {:?}", &udp_port, addr_ref);
                         let confirm = util::socks5::confirm::Confirm::new(false, udp_port);
+                        println!("post handshake {:?}", &confirm.to_bytes());
                         w.write(&confirm.to_bytes()).await?;
                         let (reader_interrupter, mut reader_interrupt_receiver) = oneshot::channel();
+                        let (reader_interrupter2, mut reader_interrupt_receiver2) = oneshot::channel();
+                        let (writer_interrupter, mut writer_interrupt_receiver) = oneshot::channel();
                         let a: tokio::task::JoinHandle<Result<()>> = spawn(async move {
                             let mut buf = [0u8; 1];
                             loop {
@@ -98,44 +101,102 @@ async fn test_socks5() -> Result<()> {
                                 }
                             }
                             let _ = reader_interrupter.send(());
+                            println!("udp tcp done");
                             Ok(())
                         });
-                        let l_addr: std::result::Result<SocketAddr, _> = "127.0.0.1:54321".parse();
-                        if l_addr.is_err() {
-                            return Err(Error::new(ErrorKind::InvalidInput, l_addr.unwrap_err()));
-                        }
-                        let udp_tunnel = connector.udp_tunnel(l_addr.unwrap()).await?;
+
+                        let udp_tunnel = connector.udp_tunnel(addr.endpoint()).await?;
                         if udp_tunnel.is_none() {
                             println!("udp tunnel none");
                             return Ok(());
                         }
-                        let udp_tunnel = udp_tunnel.unwrap();
+                        let udp_tunnel_base = Arc::new(udp_tunnel.unwrap());
                         //loop
+                        println!("udp loop start");
+                        let udp_tunnel = Arc::clone(&udp_tunnel_base);
+                        let udp_socket = Arc::clone(&udp_socket_base);
                         let b: tokio::task::JoinHandle<Result<()>> = spawn(async move {
                             let mut buf = [0u8; 65536];
                             loop {
                                 let interrupt_receiver = &mut reader_interrupt_receiver;
+                                let interrupt_receiver2 = &mut reader_interrupt_receiver2;
                                 let res: Result<(usize, SocketAddr)> = select! {
                                     _= interrupt_receiver=>{
                                         Err(Error::new(ErrorKind::Interrupted, "interrupted"))?
                                     },
+                                    _= interrupt_receiver2=>{
+                                        Err(Error::new(ErrorKind::Interrupted, "interrupted2"))?
+                                    },
                                     n=udp_socket.recv_from(&mut buf) => {
                                        Ok(n?)
                                     }
-
                                 };
                                 if res.is_err() {
+                                    println!("udp loop b udp server recv error {:?}", res.err());
                                     break;
                                 }
-                                let start: usize = 0;
                                 let (n, src_addr) = res?;
+                                println!("udp server read src_addr {:?} {} {:?}", src_addr, n, &buf[..n]);
                                 let udp_packet = UDPPacket::parse(&buf[..n], src_addr)?;
+                                if (&udp_packet).data.is_empty() {
+                                    println!("udp drop");
+                                    continue;
+                                }
+                                println!("udp server get udp_packet {:?}", &udp_packet);
+                                let res = udp_tunnel.write(udp_packet).await;
+                                if res.is_err() {
+                                    println!("udp loop b udp tunnel write error {:?}", res.err());
+                                    break;
+                                }
                             }
+                            println!("udp loop b done");
+                            let res = writer_interrupter.send(());
+                            if res.is_err() {
+                                println!("udp loop b interrupter error {:?}", res.err());
+                            }
+                            Ok(())
+                        });
+                        let udp_tunnel = Arc::clone(&udp_tunnel_base);
+                        let udp_socket = Arc::clone(&udp_socket_base);
+                        let c: tokio::task::JoinHandle<Result<()>> = spawn(async move {
+                            loop {
+                                let interrupt_receiver = &mut writer_interrupt_receiver;
+                                let res: Result<UDPPacket> = select! {
+                                    _= interrupt_receiver=>{
+                                        Err(Error::new(ErrorKind::Interrupted, "interrupted"))?
+                                    },
+                                    n=udp_tunnel.read() => {
+                                       Ok(n?)
+                                    }
+                                };
+                                if res.is_err() {
+                                    println!("udp loop c tunnel read error {:?}", res.err());
+                                    break;
+                                }
+                                let udp_packet = res?;
+                                let (payloads, src_addr_str, _) = udp_packet.bytes();
+                                println!("udp tunnel udp_packet read src {} {:?} \n{:?}", &src_addr_str, udp_packet, &payloads);
+                                let mut br = false;
+                                for payload in payloads {
+                                    let res = udp_socket.send_to(payload.as_slice(), src_addr_str.clone()).await;
+                                    if res.is_err() {
+                                        println!("udp loop c udp server send error {:?}", res.err());
+                                        br = true;
+                                        break;
+                                    }
+                                }
+                                if br {
+                                    break;
+                                }
+                            }
+                            println!("udp loop c done");
+                            let _ = reader_interrupter2.send(());
                             Ok(())
                         });
                         let _ = a.await;
                         let _ = b.await;
-                        println!("udp done");
+                        let _ = c.await;
+                        println!("udp loop done");
                         return Ok(());
                     }
                     println!("Handshake successful {:?}", addr_ref);
@@ -196,5 +257,4 @@ async fn test_socks5() -> Result<()> {
             Ok::<(), Error>(())
         });
     }
-    Ok(())
 }

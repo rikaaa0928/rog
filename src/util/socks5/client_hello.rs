@@ -3,6 +3,7 @@ use std::pin::Pin;
 use crate::def::{RunReadHalf};
 use crate::stream::tcp::{TcpReadHalf};
 
+#[allow(dead_code)]
 pub struct ClientHello {
     pub version: u8,
     pub method_num: u8,

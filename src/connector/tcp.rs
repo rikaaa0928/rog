@@ -1,12 +1,12 @@
 use std::io::{Error, Result};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+// use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpStream, UdpSocket};
 use std::pin::Pin;
 use std::future::Future;
-use std::net::SocketAddr;
+// use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::def::{RunConnector, RunReadHalf, RunStream, RunUdpConnector, RunUdpStream, RunWriteHalf};
+use crate::def::{RunConnector, RunReadHalf, RunStream, RunUdpConnector, RunWriteHalf};
 use crate::stream::tcp::TcpRunStream;
 use crate::stream::udp::UdpRunStream;
 
@@ -21,9 +21,10 @@ impl TcpRunConnector {
 impl RunUdpConnector for TcpRunConnector {
     type UdpStream = UdpRunStream;
     type UdpFuture = Pin<Box<dyn Future<Output=Result<Option<Self::UdpStream>>> + Send>>;
-    fn udp_tunnel(&self, addr: SocketAddr) -> Self::UdpFuture {
+    fn udp_tunnel(&self, src_addr: String) -> Self::UdpFuture {
         Box::pin(async move {
-            Ok(None)
+            let inner = UdpSocket::bind("0.0.0.0:0").await?;
+            Ok(Some(UdpRunStream::new(inner, src_addr)))
         })
     }
 }
@@ -32,11 +33,11 @@ impl RunUdpConnector for Arc<Mutex<TcpRunConnector>> {
     type UdpStream = UdpRunStream;
     type UdpFuture = Pin<Box<dyn Future<Output=Result<Option<Self::UdpStream>>> + Send>>;
 
-    fn udp_tunnel(&self, listen_addr: SocketAddr) -> Self::UdpFuture {
+    fn udp_tunnel(&self, src_addr: String) -> Self::UdpFuture {
         let connector = self.clone();
         Box::pin(async move {
             let connector = connector.lock().await;
-            connector.udp_tunnel(listen_addr).await
+            connector.udp_tunnel(src_addr).await
         })
     }
 }
@@ -88,7 +89,7 @@ mod test {
                             return Ok(());
                         }
                         let n = x.unwrap();
-                        socket.write_all(&buf[..n]).await;
+                        let _ = socket.write_all(&buf[..n]).await;
                         return Ok::<(), Error>(());
                     });
                 }

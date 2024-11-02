@@ -1,10 +1,10 @@
 use std::future::Future;
-use std::net::SocketAddr;
 use std::pin::Pin;
 use crate::def::RunReadHalf;
 use crate::stream::tcp::TcpReadHalf;
 use crate::util::socks5::{CMD_CONNECT, CMD_UDP};
 
+#[allow(dead_code)]
 pub struct Request {
     pub version: u8,
     pub cmd: u8,
@@ -37,7 +37,7 @@ impl Request {
             if a_len < 0 {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid addr type"));
             }
-            let mut dst_addr = if a_len != 0 {
+            let dst_addr = if a_len != 0 {
                 let mut t_dst_addr = vec![0u8; a_len as usize];
                 let _ = stream.read_exact(&mut t_dst_addr).await?;
                 t_dst_addr

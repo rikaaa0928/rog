@@ -44,7 +44,7 @@ pub trait RunConnector {
 pub trait RunUdpConnector {
     type UdpStream: RunUdpStream;
     type UdpFuture: Future<Output=Result<Option<Self::UdpStream>>> + Send;
-    fn udp_tunnel(&self, addr: SocketAddr) -> Self::UdpFuture;
+    fn udp_tunnel(&self, src_addr: String) -> Self::UdpFuture;
 }
 
 pub trait RunAcceptor {
@@ -80,7 +80,7 @@ pub struct UDPMeta {
     pub dst_addr: String,
     pub dst_port: u16,
     pub src_addr: String,
-    pub srv_port: u16,
+    pub src_port: u16,
 }
 
 #[derive(Debug)]
@@ -90,13 +90,38 @@ pub struct UDPPacket {
 }
 
 impl UDPPacket {
+    pub fn bytes(&self) -> (Vec<Vec<u8>>, String, String) {
+        let port = self.meta.src_port.to_be_bytes();
+        let head = [0u8, 0, 0, 1, 0, 0, 0, 0, port[0], port[1]];
+        let mut payload = head.to_vec();
+        payload.extend(self.data.iter());
+        (Vec::from([payload]),
+         format!("{}:{}", if self.meta.src_addr == "0.0.0.0" {
+             "127.0.0.1"
+         } else {
+             self.meta.src_addr.as_str()
+         }, self.meta.src_port),
+         format!("{}:{}", self.meta.dst_addr, self.meta.dst_port))
+    }
     pub fn parse(buf: &[u8], src_addr: SocketAddr) -> Result<Self> {
         if buf.len() < 5 {
             return Err(Error::new(ErrorKind::InvalidData, "udp parse packet too short"));
         }
+        let frag = buf[2].clone();
+        if frag != 0 {
+            return Ok(UDPPacket {
+                meta: UDPMeta {
+                    dst_addr: "".to_string(),
+                    dst_port: 0,
+                    src_addr: "".to_string(),
+                    src_port: 0,
+                },
+                data: vec![],
+            });
+        }
         let a_typ = buf[3].clone();
-        let mut a_len: isize = if a_typ == 1 { 4 } else if a_typ == 4 { 16 } else if a_typ == 3 { buf[4].into() } else { -1 };
-        let start: usize = if a_typ == 3 { 4 } else { 5 };
+        let a_len: isize = if a_typ == 1 { 4 } else if a_typ == 4 { 16 } else if a_typ == 3 { buf[4].into() } else { -1 };
+        let start: usize = if a_typ == 3 { 5 } else { 4 };
         if a_len < 0 {
             return Err(Error::new(ErrorKind::InvalidData, "udp parse invalid addr type"));
         }
@@ -154,7 +179,7 @@ impl UDPPacket {
                 dst_addr: addr,
                 dst_port: port,
                 src_addr: src_addr.ip().to_string(),
-                srv_port: src_addr.port(),
+                src_port: src_addr.port(),
             },
             data,
         })
@@ -164,8 +189,8 @@ impl UDPPacket {
 // 定义流的 trait，用于分割读写
 pub trait RunUdpStream {
     // 返回 Future 的读取方法
-    fn read(&mut self) -> Pin<Box<dyn Future<Output=std::io::Result<UDPPacket>> + Send>>;
+    fn read(&self) -> Pin<Box<dyn Future<Output=Result<UDPPacket>> + Send>>;
 
     // 返回 Future 的写入方法
-    fn write(&mut self, packet: UDPPacket) -> Pin<Box<dyn Future<Output=Result<()>> + Send>>;
+    fn write(&self, packet: UDPPacket) -> Pin<Box<dyn Future<Output=Result<()>> + Send>>;
 }

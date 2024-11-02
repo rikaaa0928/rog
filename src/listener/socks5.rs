@@ -1,18 +1,14 @@
 use std::future::Future;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{SocketAddr};
 use std::pin::Pin;
-use std::sync::Arc;
-use log::debug;
-use tokio::spawn;
-use tokio::sync::oneshot;
-use crate::def::{RunAcceptor, RunListener, RunReadHalf, RunUdpConnector};
-use crate::listener::tcp::{TcpRunAcceptor, TcpRunListener};
+use crate::def::{RunAcceptor};
+use crate::listener::tcp::{TcpRunAcceptor};
 use crate::stream::tcp::{TcpReadHalf, TcpRunStream, TcpWriteHalf};
 use crate::util::RunAddr;
 use crate::def::RunWriteHalf;
 use crate::util;
-use crate::util::socks5::{CMD_UDP, UDP_ERROR_STR};
 
+#[allow(dead_code)]
 pub struct SocksRunAcceptor {
     inner: TcpRunAcceptor,
     user: Option<String>,
