@@ -63,7 +63,7 @@ async fn test_socks5() -> Result<()> {
                             Ok(())
                         });
 
-                        let udp_tunnel = connector.udp_tunnel(addr.endpoint()).await?;
+                        let udp_tunnel = connector.lock().await.udp_tunnel(addr.endpoint()).await?;
                         if udp_tunnel.is_none() {
                             println!("udp tunnel none");
                             return Ok(());

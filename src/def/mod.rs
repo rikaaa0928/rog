@@ -22,25 +22,14 @@ pub trait RunStream: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait RunConnector: Send + Sync {
-    // type Stream: RunStream;
 
     async fn connect(&self, addr: String) -> Result<Box<dyn RunStream>>;
 
     async fn udp_tunnel(&self, src_addr: String) -> Result<Option<Box<dyn RunUdpStream>>>;
 }
 
-// #[async_trait::async_trait]
-// pub trait RunUdpConnector: Send + Sync {
-//     // type UdpStream: RunUdpStream;
-// 
-//     async fn udp_tunnel(&self, src_addr: String) -> Result<Option<Box<dyn RunUdpStream>>>;
-// }
-
 #[async_trait::async_trait]
 pub trait RunAcceptor: Send + Sync {
-    // type Stream: RunStream;
-    // type Reader: RunReadHalf;
-    // type Writer: RunWriteHalf;
 
     async fn accept(&self) -> Result<(Box<dyn RunStream>, SocketAddr)>;
 
@@ -57,7 +46,6 @@ pub trait RunAcceptor: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait RunListener: Send + Sync {
-    // type Acceptor: RunAcceptor;
 
     async fn listen(addr: &str) -> Result<Box<dyn RunAcceptor>>;
 }

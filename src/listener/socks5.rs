@@ -1,9 +1,5 @@
-use std::future::Future;
 use std::net::{SocketAddr};
-use std::pin::Pin;
 use crate::def::{RunAcceptor, RunListener, RunReadHalf, RunStream};
-use crate::listener::tcp::{TcpRunAcceptor};
-use crate::stream::tcp::{TcpReadHalf, TcpRunStream, TcpWriteHalf};
 use crate::util::RunAddr;
 use crate::def::RunWriteHalf;
 use crate::util;
@@ -26,12 +22,6 @@ impl SocksRunAcceptor {
 }
 #[async_trait::async_trait]
 impl RunAcceptor for SocksRunAcceptor {
-    // type Stream = TcpRunStream;
-    // type Reader = TcpReadHalf;
-    // type Writer = TcpWriteHalf;
-    // type StreamFuture<'a> = Pin<Box<dyn Future<Output=std::io::Result<(Self::Stream, SocketAddr)>> + Send + 'a>>;
-    // type HandshakeFuture<'a> = Pin<Box<dyn Future<Output=std::io::Result<RunAddr>> + Send + 'a>>;
-    // type PostHandshakeFuture<'a> = Pin<Box<dyn Future<Output=std::io::Result<()>> + Send + 'a>>;
 
     async fn accept(&self) -> std::io::Result<(Box<dyn RunStream>, SocketAddr)> {
        let res= self.inner.accept().await;
