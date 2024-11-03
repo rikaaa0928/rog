@@ -40,7 +40,7 @@ impl RunAcceptor for TcpRunAcceptor {
         })
     }
 
-    fn post_handshake<'a>(&'a self, _: &'a mut Self::Reader, _: &'a mut Self::Writer, _: bool) -> Self::PostHandshakeFuture<'_> {
+    fn post_handshake<'a>(&'a self, _: &'a mut Self::Reader, _: &'a mut Self::Writer, _: bool, _: u16) -> Self::PostHandshakeFuture<'_> {
         Box::pin(async move {
             Ok(())
         })

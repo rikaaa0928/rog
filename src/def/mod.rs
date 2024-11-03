@@ -1,3 +1,5 @@
+pub mod config;
+
 use std::io::{Error, ErrorKind, Result};
 use std::future::Future;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -66,13 +68,21 @@ pub trait RunAcceptor {
 
     fn handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer) -> Self::HandshakeFuture<'_>;
 
-    fn post_handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer, error: bool) -> Self::PostHandshakeFuture<'_>;
+    fn post_handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer, error: bool, port: u16) -> Self::PostHandshakeFuture<'_>;
 }
 
 pub trait RunListener {
     type Acceptor: RunAcceptor;
     type AcceptorFuture: Future<Output=Result<Self::Acceptor>> + Send;
     fn listen(addr: String) -> Self::AcceptorFuture;
+}
+
+pub trait RunUdpStream {
+    // 返回 Future 的读取方法
+    fn read(&self) -> Pin<Box<dyn Future<Output=Result<UDPPacket>> + Send>>;
+
+    // 返回 Future 的写入方法
+    fn write(&self, packet: UDPPacket) -> Pin<Box<dyn Future<Output=Result<()>> + Send>>;
 }
 
 #[derive(Debug)]
@@ -186,11 +196,3 @@ impl UDPPacket {
     }
 }
 
-// 定义流的 trait，用于分割读写
-pub trait RunUdpStream {
-    // 返回 Future 的读取方法
-    fn read(&self) -> Pin<Box<dyn Future<Output=Result<UDPPacket>> + Send>>;
-
-    // 返回 Future 的写入方法
-    fn write(&self, packet: UDPPacket) -> Pin<Box<dyn Future<Output=Result<()>> + Send>>;
-}

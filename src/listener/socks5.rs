@@ -45,21 +45,13 @@ impl RunAcceptor for SocksRunAcceptor {
             let hello_back = util::socks5::server_hello::ServerHello::new(hello.version.clone(), util::socks5::NO_AUTH);
             w.write(&hello_back.to_bytes()).await?;
             let req = &util::socks5::request::Request::parse(r).await?;
-            // if req.cmd == CMD_UDP {
-            //     let addr: Result<SocketAddr, std::io::Error> = RunAddr::try_from(req)?.try_into();
-            //     if addr.is_err() {
-            //         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "udp addr parse error"));
-            //     }
-            //     debug!("udp request src {:?}",addr);
-            //     return Err(std::io::Error::new(std::io::ErrorKind::Other, UDP_ERROR_STR.clone()));
-            // }
             req.try_into()
         })
     }
 
-    fn post_handshake<'a>(&'a self, _: &'a mut Self::Reader, w: &'a mut TcpWriteHalf, error: bool) -> Self::PostHandshakeFuture<'_> {
+    fn post_handshake<'a>(&'a self, _: &'a mut Self::Reader, w: &'a mut TcpWriteHalf, error: bool, port: u16) -> Self::PostHandshakeFuture<'_> {
         Box::pin(async move {
-            let confirm = util::socks5::confirm::Confirm::new(error, 0);
+            let confirm = util::socks5::confirm::Confirm::new(error, port);
             w.write(&confirm.to_bytes()).await?;
             Ok(())
         })
