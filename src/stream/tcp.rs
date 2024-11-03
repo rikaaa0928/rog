@@ -1,5 +1,3 @@
-use std::future::Future;
-use std::pin::Pin;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
