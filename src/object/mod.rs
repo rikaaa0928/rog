@@ -29,7 +29,7 @@ impl Object {
         loop {
             let (s, a) = acc.accept().await?;
             let acc = Arc::clone(&acc);
-            let router = router.clone();
+            let router = Arc::clone(&router);
             let config = config.clone();
             spawn(async move {
                 let (mut r, mut w) = s.split();
@@ -54,9 +54,6 @@ impl Object {
                             let udp_socket_base = udp_socket_base_res?;
                             let udp_port = udp_socket_base.local_addr()?.port();
                             acc.post_handshake(r.as_mut(), w.as_mut(), false, udp_port).await?;
-                            // let confirm = util::socks5::confirm::Confirm::new(false, udp_port);
-                            // println!("post handshake {:?}", &confirm.to_bytes());
-                            // w.write(&confirm.to_bytes()).await?;
                             let udp_socket_base = Arc::new(udp_socket_base);
                             println!("provide {} for {:?}", &udp_port, addr_ref);
 
@@ -66,10 +63,16 @@ impl Object {
                             let a: tokio::task::JoinHandle<Result<()>> = spawn(async move {
                                 let mut buf = [0u8; 1];
                                 loop {
-                                    let res = r.read(&mut buf).await;
-                                    if res.is_err() {
-                                        println!("udp tcp read error {:?}", res.err());
-                                        break;
+                                    match r.read_exact(&mut buf).await {
+                                        Ok(0) => {
+                                            println!("udp tcp read 0，remote closed");
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            println!("udp tcp read error {:?}", e);
+                                            break;
+                                        }
+                                        Ok(n) => {}
                                     }
                                 }
                                 let _ = reader_interrupter.send(());
@@ -182,17 +185,22 @@ impl Object {
                             let mut buf = [0u8; 65536];
                             loop {
                                 let reader_interrupt_receiver = &mut reader_interrupt_receiver;
-                                let n_res = select! {
+                                match select! {
                                 tn=r.read(&mut buf) => tn,
                                _=reader_interrupt_receiver=>Err(Error::new(ErrorKind::Other, "Interrupted")),
-                            };
-                                if n_res.is_err() {
-                                    break;
-                                }
-                                let n = n_res.unwrap();
-                                let res = tcp_w.write(&buf[..n]).await;
-                                if res.is_err() {
-                                    break;
+                            } {
+                                    Err(e) => {
+                                        break;
+                                    }
+                                    Ok(0) => {
+                                        break;
+                                    }
+                                    Ok(n) => {
+                                        let res = tcp_w.write(&buf[..n]).await;
+                                        if res.is_err() {
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                             let _ = writer_interrupter.send(());
