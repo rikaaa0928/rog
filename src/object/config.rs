@@ -1,15 +1,16 @@
-use std::collections::HashSet;
-use crate::def;
+use std::collections::{HashMap, HashSet};
+use serde::Deserialize;
 use crate::def::config;
 
+#[derive(Deserialize, Debug, Clone)]
 pub struct ObjectConfig {
     pub listener: config::Listener,
-    pub router: Option<config::Router>,
-    pub connector: Vec<config::Connector>,
+    pub router: config::Router,
+    pub connector: HashMap<String, config::Connector>,
 }
 
 impl ObjectConfig {
-    fn build(name: &str, cfg: &config::Config) -> Self {
+    pub fn build(name: &str, cfg: &config::Config) -> Self {
         let mut this_cfg: Option<config::Listener> = None;
         for conf in &cfg.listener {
             if name == conf.name {
@@ -29,18 +30,21 @@ impl ObjectConfig {
                 this_router = Some(conf.clone());
             }
         }
-        let mut connector = Vec::new();
+        if this_router.is_none() {
+            this_router = Some(config::Router { name: "default".to_string(), default: "default".to_string() })
+        }
+        let mut connector = HashMap::new();
         for c_name in c_names {
             for conn in &cfg.connector {
                 if c_name == conn.name {
-                    connector.push(conn.clone());
+                    connector.insert(conn.name.to_string(), conn.clone());
                 }
             }
         }
 
         Self {
             listener,
-            router: this_router,
+            router: this_router.unwrap(),
             connector,
         }
     }

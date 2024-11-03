@@ -4,7 +4,7 @@ use std::pin::Pin;
 // use std::sync::Arc;
 use tokio::net::TcpListener;
 // use tokio::sync::Mutex;
-use crate::def::{RunAcceptor, RunListener};
+use crate::def::{RunAcceptor, RunListener, RunReadHalf, RunStream, RunWriteHalf};
 use crate::stream::tcp::{TcpReadHalf, TcpRunStream, TcpWriteHalf};
 use crate::util::RunAddr;
 
@@ -14,49 +14,39 @@ pub struct TcpRunAcceptor {
 
 pub struct TcpRunListener {}
 
+#[async_trait::async_trait]
 impl RunAcceptor for TcpRunAcceptor {
-    type Stream = TcpRunStream;
-    type Reader = TcpReadHalf;
-    type Writer = TcpWriteHalf;
-    type StreamFuture<'a> = Pin<Box<dyn Future<Output=std::io::Result<(Self::Stream, SocketAddr)>> + Send + 'a>>;
-    type HandshakeFuture<'a> = Pin<Box<dyn Future<Output=std::io::Result<RunAddr>> + Send + 'a>>;
-    type PostHandshakeFuture<'a> = Pin<Box<dyn Future<Output=std::io::Result<()>> + Send + 'a>>;
+    async fn accept(&self) -> std::io::Result<(Box<dyn RunStream>, SocketAddr)> {
+        let (socket, addr) = self.inner.accept().await?;
+        Ok((Box::new(TcpRunStream::new(socket)), addr))
+    }
 
-    fn accept(&self) -> Self::StreamFuture<'_> {
-        Box::pin(async move {
-            let (socket, addr) = self.inner.accept().await?;
-            Ok((TcpRunStream::new(socket), addr))
+    async fn handshake(&self, r: &mut dyn RunReadHalf, w: &mut dyn RunWriteHalf) -> std::io::Result<RunAddr> {
+        Ok(RunAddr {
+            addr: "".to_string(),
+            port: 0,
+            a_type: 0,
+            udp: false,
         })
     }
 
-    fn handshake<'a>(&'a self, _: &'a mut Self::Reader, _: &'a mut Self::Writer) -> Self::HandshakeFuture<'_> {
-        Box::pin(async move {
-            Ok(RunAddr {
-                addr: "".to_string(),
-                port: 0,
-                a_type: 0,
-                udp: false,
-            })
-        })
-    }
-
-    fn post_handshake<'a>(&'a self, _: &'a mut Self::Reader, _: &'a mut Self::Writer, _: bool, _: u16) -> Self::PostHandshakeFuture<'_> {
-        Box::pin(async move {
-            Ok(())
-        })
+    async fn post_handshake(
+        &self,
+        r: &mut dyn RunReadHalf,
+        w: &mut dyn RunWriteHalf,
+        error: bool,
+        port: u16,
+    ) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
+#[async_trait::async_trait]
 impl RunListener for TcpRunListener {
-    type Acceptor = TcpRunAcceptor;
-    type AcceptorFuture = Pin<Box<dyn Future<Output=std::io::Result<Self::Acceptor>> + Send>>;
-
-    fn listen(addr: String) -> Self::AcceptorFuture {
-        Box::pin(async move {
-            let listener = TcpListener::bind(addr).await?;
-            Ok(TcpRunAcceptor {
-                inner: listener
-            })
-        })
+    async fn listen(addr: &str) -> std::io::Result<Box<dyn RunAcceptor>> {
+        let listener = TcpListener::bind(addr).await?;
+        Ok(Box::new(TcpRunAcceptor {
+            inner: listener
+        }))
     }
 }

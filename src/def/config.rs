@@ -9,7 +9,7 @@ pub struct Config {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Connector {
-    pub endpoint: String,
+    pub endpoint: Option<String>,
     pub name: String,
     pub user: Option<String>,
     pub pw: Option<String>,

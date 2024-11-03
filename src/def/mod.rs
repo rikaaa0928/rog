@@ -3,86 +3,73 @@ pub mod config;
 use std::io::{Error, ErrorKind, Result};
 use std::future::Future;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::pin::Pin;
 use crate::util::RunAddr;
 
-// 定义读取半边的 trait
-pub trait RunReadHalf {
-    // 使用关联类型来定义返回值，因为 async trait 还不稳定
-    type ReadFuture<'a>: Future<Output=Result<usize>> + Send + 'a
-    where
-        Self: 'a;
-
-    // 返回 Future 的读取方法
-    fn read<'a>(&'a mut self, buf: &'a mut [u8]) -> Self::ReadFuture<'a>;
-
-    fn read_exact<'a>(&'a mut self, buf: &'a mut [u8]) -> Self::ReadFuture<'a>;
+#[async_trait::async_trait]
+pub trait RunReadHalf: Send + Sync {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
+    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize>;
 }
 
-// 定义写入半边的 trait
-pub trait RunWriteHalf {
-    type WriteFuture<'a>: Future<Output=Result<()>> + Send + 'a
-    where
-        Self: 'a;
-
-    // 返回 Future 的写入方法
-    fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::WriteFuture<'a>;
+#[async_trait::async_trait]
+pub trait RunWriteHalf: Send + Sync {
+    async fn write(&mut self, buf: &[u8]) -> Result<()>;
 }
 
-// 定义流的 trait，用于分割读写
-pub trait RunStream {
-    type ReadHalf: RunReadHalf;
-    type WriteHalf: RunWriteHalf;
-
-    fn split(self) -> (Self::ReadHalf, Self::WriteHalf);
+pub trait RunStream: Send + Sync {
+    fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>);
 }
 
-pub trait RunConnector {
-    type Stream: RunStream;
-    type StreamFuture: Future<Output=Result<Self::Stream>> + Send;
-    fn connect(&self, addr: String) -> Self::StreamFuture;
+#[async_trait::async_trait]
+pub trait RunConnector: Send + Sync {
+    // type Stream: RunStream;
+
+    async fn connect(&self, addr: String) -> Result<Box<dyn RunStream>>;
+
+    async fn udp_tunnel(&self, src_addr: String) -> Result<Option<Box<dyn RunUdpStream>>>;
 }
 
-pub trait RunUdpConnector {
-    type UdpStream: RunUdpStream;
-    type UdpFuture: Future<Output=Result<Option<Self::UdpStream>>> + Send;
-    fn udp_tunnel(&self, src_addr: String) -> Self::UdpFuture;
+// #[async_trait::async_trait]
+// pub trait RunUdpConnector: Send + Sync {
+//     // type UdpStream: RunUdpStream;
+// 
+//     async fn udp_tunnel(&self, src_addr: String) -> Result<Option<Box<dyn RunUdpStream>>>;
+// }
+
+#[async_trait::async_trait]
+pub trait RunAcceptor: Send + Sync {
+    // type Stream: RunStream;
+    // type Reader: RunReadHalf;
+    // type Writer: RunWriteHalf;
+
+    async fn accept(&self) -> Result<(Box<dyn RunStream>, SocketAddr)>;
+
+    async fn handshake(&self, r: &mut dyn RunReadHalf, w: &mut dyn RunWriteHalf) -> Result<RunAddr>;
+
+    async fn post_handshake(
+        &self,
+        r: &mut dyn RunReadHalf,
+        w: &mut dyn RunWriteHalf,
+        error: bool,
+        port: u16,
+    ) -> Result<()>;
 }
 
-pub trait RunAcceptor {
-    type Stream: RunStream;
-    type Reader: RunReadHalf;
-    type Writer: RunWriteHalf;
-    type StreamFuture<'a>: Future<Output=Result<(Self::Stream, SocketAddr)>> + Send + 'a
-    where
-        Self: 'a;
-    type HandshakeFuture<'a>: Future<Output=Result<RunAddr>> + Send + 'a
-    where
-        Self: 'a;
+#[async_trait::async_trait]
+pub trait RunListener: Send + Sync {
+    // type Acceptor: RunAcceptor;
 
-    type PostHandshakeFuture<'a>: Future<Output=Result<()>> + Send + 'a
-    where
-        Self: 'a;
-
-    fn accept(&self) -> Self::StreamFuture<'_>;
-
-    fn handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer) -> Self::HandshakeFuture<'_>;
-
-    fn post_handshake<'a>(&'a self, r: &'a mut Self::Reader, w: &'a mut Self::Writer, error: bool, port: u16) -> Self::PostHandshakeFuture<'_>;
+    async fn listen(addr: &str) -> Result<Box<dyn RunAcceptor>>;
+}
+#[async_trait::async_trait]
+pub trait Router: Send + Sync {
+    async fn route(&self, addr: &RunAddr) -> Result<String>;
 }
 
-pub trait RunListener {
-    type Acceptor: RunAcceptor;
-    type AcceptorFuture: Future<Output=Result<Self::Acceptor>> + Send;
-    fn listen(addr: String) -> Self::AcceptorFuture;
-}
-
-pub trait RunUdpStream {
-    // 返回 Future 的读取方法
-    fn read(&self) -> Pin<Box<dyn Future<Output=Result<UDPPacket>> + Send>>;
-
-    // 返回 Future 的写入方法
-    fn write(&self, packet: UDPPacket) -> Pin<Box<dyn Future<Output=Result<()>> + Send>>;
+#[async_trait::async_trait]
+pub trait RunUdpStream: Send + Sync {
+    async fn read(&self) -> Result<UDPPacket>;
+    async fn write(&self, packet: UDPPacket) -> Result<()>;
 }
 
 #[derive(Debug)]

@@ -1,66 +1,18 @@
 use std::io::{Error, ErrorKind, Result};
 use std::net::{SocketAddr};
 use std::sync::{Arc};
-use std::time::Duration;
 use tokio::{select, spawn};
 use tokio::net::UdpSocket;
 use tokio::sync::{oneshot, Mutex};
-use tokio::time::sleep;
 use crate::connector::tcp::TcpRunConnector;
-use crate::def::{RunAcceptor, RunConnector, RunListener, RunReadHalf, RunStream, RunUdpConnector, RunUdpStream, RunWriteHalf, UDPPacket};
+use crate::def::{RunAcceptor, RunConnector, RunListener, RunReadHalf, RunStream, RunUdpStream, RunWriteHalf, UDPPacket};
 use crate::listener::socks5::SocksRunAcceptor;
 use crate::listener::tcp::TcpRunListener;
 
 #[cfg(test)]
 #[tokio::test]
-async fn test_tcp() -> Result<()> {
-    spawn(async {
-        let listener = TcpRunListener::listen("127.0.0.1:12345".to_string()).await?;
-        println!("server listen");
-        let (stream, addr) = listener.accept().await?;
-        println!("Accepted connection from {}", addr);
-        let _ = spawn(async move {
-            let (mut r, mut w) = stream.split();
-            listener.handshake(&mut r, &mut w).await?;
-            listener.post_handshake(&mut r, &mut w, false, 0 as u16).await?;
-            let a = spawn(async move {
-                let mut buf = vec![0u8; 10];
-                let n = r.read(&mut buf).await?;
-                println!("Read {} bytes: {:?}", n, &&buf[..n]);
-                Ok::<(), Error>(())
-            });
-            let b = spawn(async move {
-                let _ = w.write("abcd".to_string().as_bytes()).await?;
-                Ok::<(), Error>(())
-            });
-            let _ = a.await?;
-            let _ = b.await?;
-            Ok::<(), Error>(())
-        });
-        sleep(Duration::from_secs(1)).await;
-        Ok::<(), Error>(())
-    });
-    sleep(Duration::from_secs(1)).await;
-    let stream = TcpRunConnector::new().connect("127.0.0.1:12345".to_string()).await?;
-    let (mut r, mut w) = stream.split();
-    let a = spawn(async move {
-        let mut buf = vec![0u8; 10];
-        let n = r.read(&mut buf).await?;
-        println!("Read {} bytes: {:?}", n, &&buf[..n]);
-        Ok::<(), Error>(())
-    });
-    let b = spawn(async move {
-        let _ = w.write("abcd".to_string().as_bytes()).await?;
-        Ok::<(), Error>(())
-    });
-    let _ = a.await?;
-    let _ = b.await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_socks5() -> Result<()> {
-    let listener = TcpRunListener::listen("127.0.0.1:12345".to_string()).await?;
+    let listener = TcpRunListener::listen("127.0.0.1:12345").await?;
     let socks5 = Arc::new(SocksRunAcceptor::new(listener, None, None));
     let connector = Arc::new(Mutex::new(TcpRunConnector::new()));
     loop {
@@ -71,7 +23,7 @@ async fn test_socks5() -> Result<()> {
         let job = spawn(async move {
             let (mut r, mut w) = s.split();
             // let udp_tunnel=Arc::new(&connector).lock().await.udp_tunnel();
-            let addr_res = socks5.handshake(&mut r, &mut w).await;
+            let addr_res = socks5.handshake(r.as_mut(), w.as_mut()).await;
             match addr_res {
                 Err(e) => {
                     println!("Handshake error: {}", e);
@@ -82,12 +34,12 @@ async fn test_socks5() -> Result<()> {
                         println!("udp? {:?}", addr_ref);
                         let udp_socket_base_res = UdpSocket::bind("127.0.0.1:0").await;
                         if udp_socket_base_res.is_err() {
-                            socks5.post_handshake(&mut r, &mut w, true, 0).await?;
+                            socks5.post_handshake(r.as_mut(), w.as_mut(), true, 0).await?;
                             return Err(udp_socket_base_res.err().unwrap());
                         }
                         let udp_socket_base = udp_socket_base_res?;
                         let udp_port = udp_socket_base.local_addr()?.port();
-                        socks5.post_handshake(&mut r, &mut w, false, udp_port).await?;
+                        socks5.post_handshake(r.as_mut(), w.as_mut(), false, udp_port).await?;
                         // let confirm = util::socks5::confirm::Confirm::new(false, udp_port);
                         // println!("post handshake {:?}", &confirm.to_bytes());
                         // w.write(&confirm.to_bytes()).await?;
@@ -207,7 +159,7 @@ async fn test_socks5() -> Result<()> {
                         error = true;
                     }
                     let client_stream = client_stream_res?;
-                    socks5.post_handshake(&mut r, &mut w, error, 0).await?;
+                    socks5.post_handshake(r.as_mut(), w.as_mut(), error, 0).await?;
                     let (mut tcp_r, mut tcp_w) = client_stream.split();
                     let (reader_interrupter, mut reader_interrupt_receiver) = oneshot::channel();
                     let (writer_interrupter, mut writer_interrupt_receiver) = oneshot::channel();

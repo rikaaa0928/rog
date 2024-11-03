@@ -11,7 +11,7 @@ pub struct ClientHello {
 }
 
 impl ClientHello {
-    pub fn parse<'a>(stream: &'a mut TcpReadHalf) -> Pin<Box<dyn Future<Output=std::io::Result<Self>> + Send + 'a>> {
+    pub fn parse<'a>(stream: &'a mut dyn RunReadHalf) -> Pin<Box<dyn Future<Output=std::io::Result<Self>> + Send + 'a>> {
         Box::pin(async move {
             let mut buf = vec![0u8; 1];
             let _ = stream.read_exact(&mut buf).await?;

@@ -3,6 +3,7 @@ use std::pin::Pin;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
+use std::io::Result;
 
 pub struct TcpReadHalf {
     reader: tokio::net::tcp::OwnedReadHalf,
@@ -19,30 +20,22 @@ pub struct TcpRunStream {
 }
 
 // 为 TcpReadHalf 实现 MyReadHalf trait
+#[async_trait::async_trait]
 impl RunReadHalf for TcpReadHalf {
-    type ReadFuture<'a> = Pin<Box<dyn Future<Output=std::io::Result<usize>> + Send + 'a>>;
-
-    fn read<'a>(&'a mut self, buf: &'a mut [u8]) -> Self::ReadFuture<'a> {
-        Box::pin(async move {
-            self.reader.read(buf).await
-        })
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        self.reader.read(buf).await
     }
 
-    fn read_exact<'a>(&'a mut self, buf: &'a mut [u8]) -> Self::ReadFuture<'a> {
-        Box::pin(async move {
-            self.reader.read_exact(buf).await
-        })
+    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize> {
+        self.reader.read_exact(buf).await
     }
 }
 
 // 为 TcpWriteHalf 实现 MyWriteHalf trait
+#[async_trait::async_trait]
 impl RunWriteHalf for TcpWriteHalf {
-    type WriteFuture<'a> = Pin<Box<dyn Future<Output=std::io::Result<()>> + Send + 'a>>;
-
-    fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::WriteFuture<'a> {
-        Box::pin(async move {
-            self.writer.write_all(buf).await
-        })
+    async fn write(&mut self, buf: &[u8]) -> Result<()> {
+        self.writer.write_all(buf).await
     }
 }
 
@@ -55,14 +48,11 @@ impl TcpRunStream {
 
 // 为 MyTcpStream 实现 MyStream trait
 impl RunStream for TcpRunStream {
-    type ReadHalf = TcpReadHalf;
-    type WriteHalf = TcpWriteHalf;
-
-    fn split(self) -> (Self::ReadHalf, Self::WriteHalf) {
+    fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>) {
         let (reader, writer) = self.inner.into_split();
         (
-            TcpReadHalf { reader },
-            TcpWriteHalf { writer },
+            Box::new(TcpReadHalf { reader }),
+            Box::new(TcpWriteHalf { writer }),
         )
     }
 }
