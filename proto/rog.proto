@@ -1,5 +1,5 @@
 syntax = "proto3";
-package dad.xiaomi.uog;
+package moe.rikaaa0928.rog;
 
 message StreamReq {
   string auth = 1;
@@ -18,7 +18,7 @@ message UdpReq {
   optional string dstAddr = 3;
   optional uint32 dstPort = 4;
   optional string srcAddr = 5;
-  optional uint32 srctPort = 6;
+  optional uint32 srcPort = 6;
 }
 
 message UdpRes {
@@ -26,7 +26,7 @@ message UdpRes {
   optional string dstAddr = 2;
   optional uint32 dstPort = 3;
   optional string srcAddr = 4;
-  optional uint32 srctPort = 5;
+  optional uint32 srcPort = 5;
 }
 
 service RogService {

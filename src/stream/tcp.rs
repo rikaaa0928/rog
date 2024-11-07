@@ -2,6 +2,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
 use std::io::Result;
+use crate::util::RunAddr;
 
 pub struct TcpReadHalf {
     reader: tokio::net::tcp::OwnedReadHalf,
@@ -26,6 +27,10 @@ impl RunReadHalf for TcpReadHalf {
 
     async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize> {
         self.reader.read_exact(buf).await
+    }
+
+    async fn handshake(&self) -> Result<Option<(RunAddr, String)>> {
+        Ok(None)
     }
 }
 

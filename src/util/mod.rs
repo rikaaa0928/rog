@@ -5,11 +5,11 @@ use crate::util::socks5::CMD_UDP;
 
 pub(crate) mod socks5;
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct RunAddr {
     pub addr: String,
     pub port: u16,
-    pub a_type: u8,
+    // pub a_type: u8,
     pub udp: bool,
 }
 
@@ -68,59 +68,59 @@ impl TryFrom<&Request> for RunAddr {
         Ok(Self {
             addr,
             port,
-            a_type: value.a_typ,
+            // a_type: value.a_typ,
             udp: value.cmd == CMD_UDP,
         })
     }
 }
 
 
-impl TryInto<SocketAddr> for RunAddr {
-    type Error = std::io::Error;
-
-    fn try_into(self) -> Result<SocketAddr, Self::Error> {
-        match self.a_type {
-            // IPv4
-            1 => {
-                // 尝试将字符串解析为 IPv4 地址
-                match self.addr.parse() {
-                    Ok(ip) => Ok(SocketAddr::new(ip, self.port)),
-                    Err(_) => Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Invalid IPv4 address",
-                    ))
-                }
-            }
-            // Domain
-            3 => {
-                // 对于域名，我们需要进行DNS解析
-                let addr_port = format!("{}:{}", self.addr, self.port);
-                match addr_port.to_socket_addrs() {
-                    Ok(mut addrs) => addrs.next().ok_or_else(|| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            "Could not resolve domain name",
-                        )
-                    }),
-                    Err(e) => Err(e)
-                }
-            }
-            // IPv6
-            4 => {
-                // 尝试将字符串解析为 IPv6 地址
-                match self.addr.parse() {
-                    Ok(ip) => Ok(SocketAddr::new(ip, self.port)),
-                    Err(_) => Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Invalid IPv6 address",
-                    ))
-                }
-            }
-            // 未知类型
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Unknown address type",
-            ))
-        }
-    }
-}
+// impl TryInto<SocketAddr> for RunAddr {
+//     type Error = std::io::Error;
+// 
+//     fn try_into(self) -> Result<SocketAddr, Self::Error> {
+//         match self.a_type {
+//             // IPv4
+//             1 => {
+//                 // 尝试将字符串解析为 IPv4 地址
+//                 match self.addr.parse() {
+//                     Ok(ip) => Ok(SocketAddr::new(ip, self.port)),
+//                     Err(_) => Err(std::io::Error::new(
+//                         std::io::ErrorKind::InvalidInput,
+//                         "Invalid IPv4 address",
+//                     ))
+//                 }
+//             }
+//             // Domain
+//             3 => {
+//                 // 对于域名，我们需要进行DNS解析
+//                 let addr_port = format!("{}:{}", self.addr, self.port);
+//                 match addr_port.to_socket_addrs() {
+//                     Ok(mut addrs) => addrs.next().ok_or_else(|| {
+//                         std::io::Error::new(
+//                             std::io::ErrorKind::NotFound,
+//                             "Could not resolve domain name",
+//                         )
+//                     }),
+//                     Err(e) => Err(e)
+//                 }
+//             }
+//             // IPv6
+//             4 => {
+//                 // 尝试将字符串解析为 IPv6 地址
+//                 match self.addr.parse() {
+//                     Ok(ip) => Ok(SocketAddr::new(ip, self.port)),
+//                     Err(_) => Err(std::io::Error::new(
+//                         std::io::ErrorKind::InvalidInput,
+//                         "Invalid IPv6 address",
+//                     ))
+//                 }
+//             }
+//             // 未知类型
+//             _ => Err(std::io::Error::new(
+//                 std::io::ErrorKind::InvalidInput,
+//                 "Unknown address type",
+//             ))
+//         }
+//     }
+// }

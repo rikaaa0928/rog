@@ -21,7 +21,7 @@ impl RunAcceptor for TcpRunAcceptor {
         Ok(RunAddr {
             addr: "".to_string(),
             port: 0,
-            a_type: 0,
+            // a_type: 0,
             udp: false,
         })
     }
@@ -39,7 +39,7 @@ impl RunAcceptor for TcpRunAcceptor {
 
 #[async_trait::async_trait]
 impl RunListener for TcpRunListener {
-    async fn listen(addr: &str) -> std::io::Result<Box<dyn RunAcceptor>> {
+    async fn listen(&self, addr: &str) -> std::io::Result<Box<dyn RunAcceptor>> {
         let listener = TcpListener::bind(addr).await?;
         Ok(Box::new(TcpRunAcceptor {
             inner: listener

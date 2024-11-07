@@ -12,7 +12,7 @@ use crate::listener::tcp::TcpRunListener;
 #[cfg(test)]
 #[tokio::test]
 async fn test_socks5() -> Result<()> {
-    let listener = TcpRunListener::listen("127.0.0.1:12345").await?;
+    let listener = TcpRunListener {}.listen("127.0.0.1:12345").await?;
     let socks5 = Arc::new(SocksRunAcceptor::new(listener, None, None));
     let connector = Arc::new(Mutex::new(TcpRunConnector::new()));
     loop {

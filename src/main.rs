@@ -22,7 +22,7 @@ async fn main() -> std::io::Result<()> {
     }
     env_logger::init();
 
-    let contents = fs::read_to_string("./demo/config.toml").await?;
+    let contents = fs::read_to_string(env::var("ROG_CONFIG").unwrap()).await?;
 
     // 解析 TOML
     let cfg_res = toml::from_str::<Config>(&contents);
@@ -39,7 +39,7 @@ async fn main() -> std::io::Result<()> {
             obj.start().await
         }));
     }
-    let (a, b, c) = select_all(fs).await;
+    let (a, _, _) = select_all(fs).await;
     error!("error: {:?}", a);
     Ok(())
 }

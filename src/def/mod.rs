@@ -6,23 +6,23 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use crate::util::RunAddr;
 
 #[async_trait::async_trait]
-pub trait RunReadHalf: Send + Sync {
+pub trait RunReadHalf: Send {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
     async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize>;
+    async fn handshake(&self) -> Result<Option<(RunAddr, String)>>;
 }
 
 #[async_trait::async_trait]
-pub trait RunWriteHalf: Send + Sync {
+pub trait RunWriteHalf: Send {
     async fn write(&mut self, buf: &[u8]) -> Result<()>;
 }
 
-pub trait RunStream: Send + Sync {
+pub trait RunStream: Send {
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>);
 }
 
 #[async_trait::async_trait]
-pub trait RunConnector: Send + Sync {
-
+pub trait RunConnector: Send {
     async fn connect(&self, addr: String) -> Result<Box<dyn RunStream>>;
 
     async fn udp_tunnel(&self, src_addr: String) -> Result<Option<Box<dyn RunUdpStream>>>;
@@ -30,7 +30,6 @@ pub trait RunConnector: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait RunAcceptor: Send + Sync {
-
     async fn accept(&self) -> Result<(Box<dyn RunStream>, SocketAddr)>;
 
     async fn handshake(&self, r: &mut dyn RunReadHalf, w: &mut dyn RunWriteHalf) -> Result<RunAddr>;
@@ -45,12 +44,11 @@ pub trait RunAcceptor: Send + Sync {
 }
 
 #[async_trait::async_trait]
-pub trait RunListener: Send + Sync {
-
-    async fn listen(addr: &str) -> Result<Box<dyn RunAcceptor>>;
+pub trait RunListener: Send {
+    async fn listen(&self, addr: &str) -> Result<Box<dyn RunAcceptor>>;
 }
 #[async_trait::async_trait]
-pub trait Router: Send + Sync {
+pub trait Router: Send {
     async fn route(&self, addr: &RunAddr) -> Result<String>;
 }
 

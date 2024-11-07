@@ -27,7 +27,7 @@ impl Object {
         let acc = Arc::new(acc);
         let router = Arc::new(DefaultRouter::new(&config.router));
         loop {
-            let (s, a) = acc.accept().await?;
+            let (s, _) = acc.accept().await?;
             let acc = Arc::clone(&acc);
             let router = Arc::clone(&router);
             let config = config.clone();
@@ -217,6 +217,9 @@ impl Object {
                                     break;
                                 }
                                 let n = n_res.unwrap();
+                                if n == 0 {
+                                    break;
+                                }
                                 let res = w.write(&buf[..n]).await;
                                 if res.is_err() {
                                     break;
