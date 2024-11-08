@@ -1,9 +1,7 @@
-use std::cell::RefCell;
 use std::io;
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::rc::Rc;
 use std::sync::Arc;
 use futures::{Stream, StreamExt};
 use log::debug;
