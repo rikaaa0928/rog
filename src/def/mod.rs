@@ -73,7 +73,7 @@ pub struct UDPPacket {
 }
 
 impl UDPPacket {
-    pub fn bytes(&self) -> (Vec<Vec<u8>>, String, String) {
+    pub fn reply_bytes(&self) -> (Vec<Vec<u8>>, String, String) {
         let port = self.meta.src_port.to_be_bytes();
         let head = [0u8, 0, 0, 1, 0, 0, 0, 0, port[0], port[1]];
         let mut payload = head.to_vec();

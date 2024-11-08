@@ -23,7 +23,7 @@ impl Object {
 
     pub async fn start(&self) -> io::Result<()> {
         let config = self.config.clone();
-        let acc = listener::create(&config.listener).await?;
+        let acc = listener::create(&config).await?;
         let acc = Arc::new(acc);
         let router = Arc::new(DefaultRouter::new(&config.router));
         loop {
@@ -149,7 +149,7 @@ impl Object {
                                         break;
                                     }
                                     let udp_packet = res?;
-                                    let (payloads, src_addr_str, _) = udp_packet.bytes();
+                                    let (payloads, src_addr_str, _) = udp_packet.reply_bytes();
                                     println!("udp tunnel udp_packet read src {} {:?} \n{:?}", &src_addr_str, udp_packet, &payloads);
                                     for payload in payloads {
                                         let res = udp_socket.send_to(payload.as_slice(), src_addr_str.clone()).await;

@@ -1,7 +1,9 @@
+use serde::Deserialize;
 use crate::def;
 use crate::def::config;
 use crate::util::RunAddr;
 
+#[derive(Deserialize, Debug, Clone)]
 pub struct DefaultRouter {
     inner: config::Router,
 }

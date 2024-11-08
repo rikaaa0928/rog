@@ -4,10 +4,11 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tonic::codegen::tokio_stream;
 use tonic::{Request, Response, Streaming};
-use crate::stream::grpc_client::pb::{StreamReq, StreamRes};
+use crate::stream::grpc_client::pb::{StreamReq, StreamRes, UdpReq};
 use crate::stream::grpc_client::pb::rog_service_client::RogServiceClient;
 use crate::def::{config, RunConnector, RunStream, RunUdpStream};
 use crate::stream::grpc_client::GrpcClientRunStream;
+use crate::stream::grpc_udp_client::GrpcUdpClientRunStream;
 // pub mod pb {
 //     tonic::include_proto!("moe.rikaaa0928.rog");
 // }
@@ -56,7 +57,15 @@ impl RunConnector for GrpcRunConnector {
     }
 
     async fn udp_tunnel(&self, src_addr: String) -> io::Result<Option<Box<dyn RunUdpStream>>> {
-        Err(io::Error::new(ErrorKind::Other, "grpc stream error"))
+        let (tx, rx) = mpsc::channel::<UdpReq>(1024);
+        let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let rx = Request::new(rx);
+        let res = self.client.lock().await.udp(rx).await;
+        if res.is_err() {
+            return Err(io::Error::new(ErrorKind::Other, "grpc stream error"));
+        }
+        let resp = res.unwrap().into_inner();
+        Ok(Some(Box::new(GrpcUdpClientRunStream::new(Arc::new(Mutex::new(resp)), tx,src_addr,self.cfg.pw.as_ref().unwrap().clone()))))
     }
 }
 
