@@ -5,7 +5,7 @@ pre-build = [
     "PB_REL=\"https://github.com/protocolbuffers/protobuf/releases\";curl -LO $PB_REL/download/v28.2/protoc-28.2-linux-x86_64.zip",
     "unzip protoc-28.2-linux-x86_64.zip -d $HOME/.local",
     "export PATH=\"$PATH:$HOME/.local/bin\";chmod +x $HOME/.local/bin/protoc",
-    "protoc --version",
+    "protoc --version;export PROTOC=$HOME/.local/bin/protoc",
 ]
 
 [target.aarch64-unknown-linux-musl]
@@ -15,5 +15,5 @@ pre-build = [
     "PB_REL=\"https://github.com/protocolbuffers/protobuf/releases\";curl -LO $PB_REL/download/v28.2/protoc-28.2-linux-x86_64.zip",
     "unzip protoc-28.2-linux-x86_64.zip -d $HOME/.local",
     "export PATH=\"$PATH:$HOME/.local/bin\";chmod +x $HOME/.local/bin/protoc",
-    "protoc --version",
+    "protoc --version;export PROTOC=$HOME/.local/bin/protoc",
 ]
