@@ -7,7 +7,7 @@ use std::io;
 use std::io::{Error, ErrorKind, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use tokio::net::UdpSocket;
 use tokio::sync::{oneshot, Mutex};
 use tokio::{select, spawn};
@@ -244,7 +244,7 @@ impl Object {
                             oneshot::channel();
                         let (writer_interrupter, mut writer_interrupt_receiver) =
                             oneshot::channel();
-                        debug!("start loop");
+                        info!("start loop");
                         let x = spawn(async move {
                             let mut buf = [0u8; 65536];
                             loop {
@@ -293,7 +293,7 @@ impl Object {
                         });
                         let _ = x.await;
                         let _ = y.await;
-                        debug!("end loop");
+                        info!("end loop");
                     }
                 }
                 Ok::<(), Error>(())

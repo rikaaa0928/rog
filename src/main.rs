@@ -4,6 +4,7 @@ use crate::object::Object;
 use futures::future::select_all;
 use log::error;
 use std::env;
+use std::time::Duration;
 use tokio::{fs, select, spawn};
 
 mod connector;
@@ -25,6 +26,14 @@ async fn main() -> std::io::Result<()> {
         env::set_var("ROG_CONFIG", "/etc/rog/config.toml");
     }
 
+    console_subscriber::ConsoleLayer::builder()
+        // set how long the console will retain data from completed tasks
+        .retention(Duration::from_secs(60))
+        // set the address the server is bound to
+        .server_addr(([127, 0, 0, 1], 5555))
+        // ... other configurations ...
+        .init();
+    
     let contents = fs::read_to_string(env::var("ROG_CONFIG").unwrap()).await?;
 
     // 解析 TOML
