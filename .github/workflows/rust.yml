@@ -59,13 +59,13 @@ jobs:
         with:
           use-cross: true
           command: build
-          args: --verbose --release --target ${{ matrix.target }}  --bin uog
+          args: --verbose --release --target ${{ matrix.target }}  --bin rog
 
       - name: Build archive
         shell: bash
         run: |
           # Replace with the name of your binary
-          binary_name="uog"
+          binary_name="rog"
 
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
           mkdir "$dirname"
