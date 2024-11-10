@@ -13,7 +13,7 @@ pre-build = [
     "apt-get update",
     "apt-get install -y unzip",
     "PB_REL=\"https://github.com/protocolbuffers/protobuf/releases\";curl -LO $PB_REL/download/v28.2/protoc-28.2-linux-aarch_64.zip",
-    "unzip protoc-28.2-linux-x86_64.zip -d $HOME/.local",
+    "unzip protoc-28.2-linux-aarch_64.zip -d $HOME/.local",
     "export PATH=\"$PATH:$HOME/.local/bin\"",
     "protoc --version",
 ]
