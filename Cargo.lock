@@ -902,6 +902,7 @@ dependencies = [
  "env_logger",
  "futures",
  "log",
+ "prost",
  "serde",
  "tokio",
  "toml",
