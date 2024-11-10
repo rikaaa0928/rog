@@ -1,14 +1,14 @@
+use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
+use crate::stream::grpc_client::pb::{StreamReq, StreamRes};
+use crate::util::RunAddr;
+use futures::StreamExt;
 use std::error::Error;
 use std::io::ErrorKind;
 use std::sync::Arc;
-use futures::StreamExt;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 use tonic::{Status, Streaming};
-use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
-use crate::stream::grpc_client::pb::{StreamReq, StreamRes};
-use crate::util::RunAddr;
 
 pub mod pb {
     tonic::include_proto!("moe.rikaaa0928.rog");
@@ -41,9 +41,7 @@ impl RunReadHalf for GrpcServerReadHalf {
                 buf[..n].copy_from_slice(data.payload.as_ref().unwrap());
                 Ok(n)
             }
-            Err(e) => {
-                Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string()))
-            }
+            Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }
     }
 
@@ -52,9 +50,9 @@ impl RunReadHalf for GrpcServerReadHalf {
     }
 
     async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
-        let auth = self.reader.lock().await.next().await.unwrap();
+        let auth = self.reader.lock().await.next().await;
         match auth {
-            Ok(a) => {
+            Some(Ok(a)) => {
                 let pw = a.auth;
                 let ra = RunAddr {
                     addr: a.dst_addr.unwrap(),
@@ -64,9 +62,8 @@ impl RunReadHalf for GrpcServerReadHalf {
                 };
                 Ok(Some((ra, pw)))
             }
-            Err(err) => {
-                Err(std::io::Error::new(ErrorKind::Interrupted, err.to_string()))
-            }
+            Some(Err(err)) => Err(std::io::Error::new(ErrorKind::Interrupted, err.to_string())),
+            None => Err(std::io::Error::new(ErrorKind::Interrupted, "interrupted")),
         }
     }
 }
@@ -77,30 +74,31 @@ impl RunWriteHalf for GrpcServerWriteHalf {
         let mut res = StreamRes::default();
         res.payload = buf.to_vec();
         match self.writer.send(Ok(res)).await {
-            Ok(_) => {
-                Ok(())
-            }
-            Err(e) => {
-                Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string()))
-            }
+            Ok(_) => Ok(()),
+            Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }
     }
 }
 
 impl GrpcServerRunStream {
-    pub fn new(reader: Arc<Mutex<Streaming<StreamReq>>>, writer: Sender<Result<StreamRes, Status>>) -> Self {
-        Self {
-            reader,
-            writer,
-        }
+    pub fn new(
+        reader: Arc<Mutex<Streaming<StreamReq>>>,
+        writer: Sender<Result<StreamRes, Status>>,
+    ) -> Self {
+        Self { reader, writer }
     }
 }
 
 #[async_trait::async_trait]
 impl RunStream for GrpcServerRunStream {
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>) {
-        (Box::new(GrpcServerReadHalf { reader: Arc::clone(&self.reader) }), Box::new(GrpcServerWriteHalf {
-            writer: self.writer,
-        }))
+        (
+            Box::new(GrpcServerReadHalf {
+                reader: Arc::clone(&self.reader),
+            }),
+            Box::new(GrpcServerWriteHalf {
+                writer: self.writer,
+            }),
+        )
     }
 }
