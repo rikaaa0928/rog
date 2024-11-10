@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use log::debug;
 use tokio::net::{UdpSocket};
 use crate::def::{RunUdpStream, UDPMeta, UDPPacket};
 
@@ -26,7 +27,7 @@ impl RunUdpStream for UdpRunStream {
 
         let mut buf = [0u8; 65536];
         let (n, dst) = inner.recv_from(&mut buf).await?;
-        println!("udp read from {:?} bytes: {:?}", &src, &buf[..n]);
+        debug!("udp read from {:?} bytes: {:?}", &src, &buf[..n]);
         Ok(UDPPacket {
             meta: UDPMeta {
                 dst_addr: dst.ip().to_string(),
@@ -44,7 +45,7 @@ impl RunUdpStream for UdpRunStream {
         let dst_port = packet.meta.dst_port;
         let data = packet.data.clone();
         let addr_str = format!("{}:{}", dst_addr, dst_port);
-        println!("udp send {:?} to {:?}", &data.as_slice(), &addr_str);
+        debug!("udp send {:?} to {:?}", &data.as_slice(), &addr_str);
         inner.send_to(data.as_slice(), addr_str).await?;
         Ok(())
     }

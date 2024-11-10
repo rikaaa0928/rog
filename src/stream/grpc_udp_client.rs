@@ -44,6 +44,7 @@ impl RunUdpStream for GrpcUdpClientRunStream {
                     },
                     data: res.payload,
                 };
+                debug!("grpc read UDP packet {:?}", &udp);
                 Ok(udp)
             }
             None => {
@@ -61,7 +62,7 @@ impl RunUdpStream for GrpcUdpClientRunStream {
             src_addr: Some(packet.meta.src_addr.clone()),
             src_port: Some(packet.meta.src_port.clone() as u32),
         };
-        debug!("Sending UDP request {:?}", &req);
+        debug!("grpc Sending UDP request {:?}", &req);
         match self.writer.send(req).await {
             Ok(_) => Ok(()),
             Err(e) => {

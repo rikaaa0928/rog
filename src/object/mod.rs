@@ -7,6 +7,7 @@ use std::io;
 use std::io::{Error, ErrorKind, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use log::{debug, error, warn};
 use tokio::net::UdpSocket;
 use tokio::sync::{oneshot, Mutex};
 use tokio::{select, spawn};
@@ -38,7 +39,7 @@ impl Object {
                 let addr_res = acc.handshake(r.as_mut(), w.as_mut()).await;
                 match addr_res {
                     Err(e) => {
-                        println!("Handshake error: {}", e);
+                        error!("Handshake error: {}", e);
                     }
                     Ok(addr) => {
                         let addr_ref = &addr;
@@ -46,7 +47,7 @@ impl Object {
                         let conn_conf = config.connector.get(client_name.as_str()).unwrap();
                         let connector = Arc::new(Mutex::new(connector::create(conn_conf).await?));
                         if addr_ref.udp {
-                            println!("udp? {:?}", addr_ref);
+                            debug!("udp? {:?}", addr_ref);
                             let udp_socket_base_res = UdpSocket::bind("127.0.0.1:0").await;
                             if udp_socket_base_res.is_err() {
                                 acc.post_handshake(r.as_mut(), w.as_mut(), true, 0).await?;
@@ -57,7 +58,7 @@ impl Object {
                             acc.post_handshake(r.as_mut(), w.as_mut(), false, udp_port)
                                 .await?;
                             let udp_socket_base = Arc::new(udp_socket_base);
-                            println!("provide {} for {:?}", &udp_port, addr_ref);
+                            debug!("provide {} for {:?}", &udp_port, addr_ref);
 
                             let (reader_interrupter, mut reader_interrupt_receiver) =
                                 oneshot::channel();
@@ -70,18 +71,18 @@ impl Object {
                                 loop {
                                     match r.read_exact(&mut buf).await {
                                         Ok(0) => {
-                                            println!("udp tcp read 0，remote closed");
+                                            warn!("udp tcp read 0，remote closed");
                                             break;
                                         }
                                         Err(e) => {
-                                            println!("udp tcp read error {:?}", e);
+                                            debug!("udp tcp read error {:?}", e);
                                             break;
                                         }
                                         Ok(n) => {}
                                     }
                                 }
                                 let _ = reader_interrupter.send(());
-                                println!("udp tcp done");
+                                debug!("udp tcp done");
                                 Ok(())
                             });
 
@@ -94,7 +95,7 @@ impl Object {
                             //loop
                             let (udp_tunnel_sender, mut udp_tunnel_receiver) = oneshot::channel();
                             let mut udp_tunnel_sender = Some(udp_tunnel_sender);
-                            println!("udp loop start");
+                            debug!("udp loop start");
                             // let udp_tunnel_base: Arc<Mutex<Option<Box<dyn RunUdpStream>>>> = Arc::new(Mutex::new(None));
                             let udp_socket = Arc::clone(&udp_socket_base);
                             // let udp_tunnel_r = Arc::clone(&udp_tunnel_base);
@@ -117,14 +118,14 @@ impl Object {
                                         }
                                     };
                                     if res.is_err() {
-                                        println!(
+                                        debug!(
                                             "udp loop b udp server recv error {:?}",
                                             res.err()
                                         );
                                         break;
                                     }
                                     let (n, src_addr) = res?;
-                                    println!(
+                                    debug!(
                                         "udp server read src_addr {:?} {} {:?}",
                                         src_addr,
                                         n,
@@ -132,7 +133,7 @@ impl Object {
                                     );
                                     let udp_packet = UDPPacket::parse(&buf[..n], src_addr)?;
                                     if (&udp_packet).data.is_empty() {
-                                        println!("udp drop");
+                                        warn!("udp drop");
                                         continue;
                                     }
                                     if udp_tunnel.is_none() {
@@ -160,21 +161,21 @@ impl Object {
                                         udp_tunnel.replace(Arc::clone(&t));
                                     }
 
-                                    println!("udp server get udp_packet {:?}", &udp_packet);
+                                    debug!("udp server get udp_packet {:?}", &udp_packet);
                                     let udp_tunnel = udp_tunnel.as_mut().unwrap();
                                     let res = udp_tunnel.write(udp_packet).await;
                                     if res.is_err() {
-                                        println!(
+                                        warn!(
                                             "udp loop b udp tunnel write error {:?}",
                                             res.err()
                                         );
                                         break;
                                     }
                                 }
-                                println!("udp loop b done");
+                                debug!("udp loop b done");
                                 let res = writer_interrupter.send(());
                                 if res.is_err() {
-                                    println!("udp loop b interrupter error {:?}", res.err());
+                                    debug!("udp loop b interrupter error {:?}", res.err());
                                 }
                                 Ok(())
                             });
@@ -194,12 +195,12 @@ impl Object {
                                         }
                                     };
                                     if res.is_err() {
-                                        println!("udp loop c tunnel read error {:?}", res.err());
+                                        debug!("udp loop c tunnel read error {:?}", res.err());
                                         break;
                                     }
                                     let udp_packet = res?;
                                     let (payloads, src_addr_str, _) = udp_packet.reply_bytes();
-                                    println!(
+                                    debug!(
                                         "udp tunnel udp_packet read src {} {:?} \n{:?}",
                                         &src_addr_str, udp_packet, &payloads
                                     );
@@ -208,7 +209,7 @@ impl Object {
                                             .send_to(payload.as_slice(), src_addr_str.clone())
                                             .await;
                                         if res.is_err() {
-                                            println!(
+                                            warn!(
                                                 "udp loop c udp server send error {:?}",
                                                 res.err()
                                             );
@@ -216,17 +217,17 @@ impl Object {
                                         }
                                     }
                                 }
-                                println!("udp loop c done");
+                                debug!("udp loop c done");
                                 let _ = reader_interrupter2.send(());
                                 Ok(())
                             });
                             let _ = a.await;
                             let _ = b.await;
                             let _ = c.await;
-                            println!("udp loop done");
+                            debug!("udp loop done");
                             return Ok(());
                         }
-                        println!("Handshake successful {:?}", addr_ref);
+                        debug!("Handshake successful {:?}", addr_ref);
                         let client_stream_res = Arc::clone(&connector)
                             .lock()
                             .await
@@ -243,7 +244,7 @@ impl Object {
                             oneshot::channel();
                         let (writer_interrupter, mut writer_interrupt_receiver) =
                             oneshot::channel();
-                        println!("start loop");
+                        debug!("start loop");
                         let x = spawn(async move {
                             let mut buf = [0u8; 65536];
                             loop {
@@ -292,7 +293,7 @@ impl Object {
                         });
                         let _ = x.await;
                         let _ = y.await;
-                        println!("end loop");
+                        debug!("end loop");
                     }
                 }
                 Ok::<(), Error>(())
