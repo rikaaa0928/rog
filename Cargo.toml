@@ -16,6 +16,7 @@ tonic = { version = "0.12.3", features = ["tls", "tls-native-roots"] }
 async-trait = "0.1.83"
 futures = "0.3.31"
 prost = "0.13.3"
+url = "2.5.3"
 
 [build-dependencies]
 tonic-build = "0.12.3"

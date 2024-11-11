@@ -11,6 +11,7 @@ pub struct RunAddr {
     pub port: u16,
     // pub a_type: u8,
     pub udp: bool,
+    pub cache: Option<Vec<u8>>,
 }
 
 impl RunAddr {
@@ -70,6 +71,7 @@ impl TryFrom<&Request> for RunAddr {
             port,
             // a_type: value.a_typ,
             udp: value.cmd == CMD_UDP,
+            cache: None,
         })
     }
 }

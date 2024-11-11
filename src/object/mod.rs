@@ -3,11 +3,11 @@ use crate::object::config::ObjectConfig;
 use crate::router::DefaultRouter;
 use crate::util::RunAddr;
 use crate::{connector, listener};
+use log::{debug, error, warn};
 use std::io;
 use std::io::{Error, ErrorKind, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use log::{debug, error, warn};
 use tokio::net::UdpSocket;
 use tokio::sync::{oneshot, Mutex};
 use tokio::{select, spawn};
@@ -118,10 +118,7 @@ impl Object {
                                         }
                                     };
                                     if res.is_err() {
-                                        debug!(
-                                            "udp loop b udp server recv error {:?}",
-                                            res.err()
-                                        );
+                                        debug!("udp loop b udp server recv error {:?}", res.err());
                                         break;
                                     }
                                     let (n, src_addr) = res?;
@@ -142,6 +139,7 @@ impl Object {
                                                 addr: (&udp_packet).meta.dst_addr.clone(),
                                                 port: (&udp_packet).meta.dst_port,
                                                 udp: false,
+                                                cache: None,
                                             })
                                             .await?;
                                         let conn_conf =
@@ -165,10 +163,7 @@ impl Object {
                                     let udp_tunnel = udp_tunnel.as_mut().unwrap();
                                     let res = udp_tunnel.write(udp_packet).await;
                                     if res.is_err() {
-                                        warn!(
-                                            "udp loop b udp tunnel write error {:?}",
-                                            res.err()
-                                        );
+                                        warn!("udp loop b udp tunnel write error {:?}", res.err());
                                         break;
                                     }
                                 }
@@ -244,6 +239,12 @@ impl Object {
                             oneshot::channel();
                         let (writer_interrupter, mut writer_interrupt_receiver) =
                             oneshot::channel();
+                        if addr_ref.cache.is_some() {
+                            tcp_w
+                                .write(addr_ref.cache.as_ref().unwrap().as_slice())
+                                .await?;
+                        }
+
                         debug!("start loop");
                         let x = spawn(async move {
                             let mut buf = [0u8; 2048];

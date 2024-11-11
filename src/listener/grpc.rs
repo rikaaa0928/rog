@@ -91,6 +91,7 @@ impl RogService for GrpcServer {
                                 addr: udp_req.dst_addr.as_ref().unwrap().clone(),
                                 port: udp_req.dst_port.as_ref().unwrap().clone() as u16,
                                 udp: true,
+                                cache: None,
                             };
                             let client_name = router.route(&dst_addr).await?;
                             let conn_conf = cfg.connector.get(client_name.as_str()).unwrap();
