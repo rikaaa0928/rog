@@ -1,7 +1,7 @@
 use crate::def::{Router, RunConnector, RunUdpStream, UDPPacket};
 use crate::object::config::ObjectConfig;
 use crate::router::DefaultRouter;
-use crate::util::RunAddr;
+use crate::util::{split_vec_into_chunks, RunAddr};
 use crate::{connector, listener};
 use log::{debug, error, warn};
 use std::io;
@@ -240,9 +240,11 @@ impl Object {
                         let (writer_interrupter, mut writer_interrupt_receiver) =
                             oneshot::channel();
                         if addr_ref.cache.is_some() {
-                            tcp_w
-                                .write(addr_ref.cache.as_ref().unwrap().as_slice())
-                                .await?;
+                            let data_trunks =
+                                split_vec_into_chunks(addr_ref.cache.clone().unwrap(), 2000);
+                            for data in data_trunks {
+                                tcp_w.write(data.as_slice()).await?;
+                            }
                         }
 
                         debug!("start loop");
