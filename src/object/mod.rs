@@ -246,7 +246,7 @@ impl Object {
                             oneshot::channel();
                         debug!("start loop");
                         let x = spawn(async move {
-                            let mut buf = [0u8; 65536];
+                            let mut buf = [0u8; 2048];
                             loop {
                                 let reader_interrupt_receiver = &mut reader_interrupt_receiver;
                                 match select! {
@@ -270,7 +270,7 @@ impl Object {
                             let _ = writer_interrupter.send(());
                         });
                         let y = spawn(async move {
-                            let mut buf = [0u8; 65536];
+                            let mut buf = [0u8; 2048];
                             loop {
                                 let writer_interrupt_receiver = &mut writer_interrupt_receiver;
                                 let n_res = select! {
