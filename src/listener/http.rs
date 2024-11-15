@@ -28,7 +28,7 @@ impl RunAcceptor for HttpRunAcceptor {
         r: &mut dyn RunReadHalf,
         w: &mut dyn RunWriteHalf,
     ) -> std::io::Result<RunAddr> {
-        let mut buf = [0u8; 65536];
+        let mut buf = [0u8; 2048];
         let n = r.read(&mut buf).await?;
         let data = buf[0..n].to_vec();
         let mut cache = Some(data.clone());

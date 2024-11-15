@@ -240,11 +240,7 @@ impl Object {
                         let (writer_interrupter, mut writer_interrupt_receiver) =
                             oneshot::channel();
                         if addr_ref.cache.is_some() {
-                            let data_trunks =
-                                split_vec_into_chunks(addr_ref.cache.clone().unwrap(), 2000);
-                            for data in data_trunks {
-                                tcp_w.write(data.as_slice()).await?;
-                            }
+                            tcp_w.write(addr_ref.cache.clone().unwrap().as_slice()).await?;
                         }
 
                         debug!("start loop");
