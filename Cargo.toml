@@ -17,9 +17,9 @@ async-trait = "0.1.83"
 futures = "0.3.31"
 prost = "0.13.3"
 url = "2.5.3"
-reqwest = { version = "0.12.11", features = ["rustls-tls", "rustls-tls-native-roots"] }
+reqwest = { version = "0.12.12", features = ["native-tls-vendored"] }
 ipnet = "2.10.1"
-regex = "1.11.0"
+regex = "1.11.1"
 
 [build-dependencies]
 tonic-build = "0.12.3"
