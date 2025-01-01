@@ -1,7 +1,7 @@
 [target.x86_64-unknown-linux-musl]
 pre-build = [
     "apt-get update",
-    "apt-get install -y unzip pkg-config libssl-dev",
+    "apt-get install -y unzip",
     "PB_REL=\"https://github.com/protocolbuffers/protobuf/releases\";curl -LO $PB_REL/download/v28.2/protoc-28.2-linux-x86_64.zip",
     "unzip protoc-28.2-linux-x86_64.zip -d /opt/.local",
     "export PATH=\"$PATH:/opt/.local/bin\";chmod +x /opt/.local/bin/protoc",
@@ -12,9 +12,8 @@ passthrough = ["PROTOC=/opt/.local/bin/protoc"]
 
 [target.aarch64-unknown-linux-musl]
 pre-build = [
-    "dpkg --add-architecture armhf",
     "apt-get update",
-    "apt-get install -y unzip clang pkg-config libssl-dev libssl-dev:armhf",
+    "apt-get install -y unzip clang",
     "PB_REL=\"https://github.com/protocolbuffers/protobuf/releases\";curl -LO $PB_REL/download/v28.2/protoc-28.2-linux-x86_64.zip",
     "unzip protoc-28.2-linux-x86_64.zip -d /opt/.local",
     "export PATH=\"$PATH:/opt/.local/bin\";chmod +x /opt/.local/bin/protoc",
@@ -26,7 +25,7 @@ passthrough = ["PROTOC=/opt/.local/bin/protoc"]
 [target.x86_64-unknown-linux-gnu]
 pre-build = [
     "apt-get update",
-    "apt-get install -y unzip clang pkg-config libssl-dev",
+    "apt-get install -y unzip clang",
     "PB_REL=\"https://github.com/protocolbuffers/protobuf/releases\";curl -LO $PB_REL/download/v28.2/protoc-28.2-linux-x86_64.zip",
     "unzip protoc-28.2-linux-x86_64.zip -d /opt/.local",
     "export PATH=\"$PATH:/opt/.local/bin\";chmod +x /opt/.local/bin/protoc",
@@ -39,7 +38,7 @@ passthrough = ["PROTOC=/opt/.local/bin/protoc"]
 pre-build = [
     "dpkg --add-architecture armhf",
     "apt-get update",
-    "apt-get install -y unzip clang pkg-config libssl-dev libssl-dev:armhf",
+    "apt-get install -y unzip clang",
     "PB_REL=\"https://github.com/protocolbuffers/protobuf/releases\";curl -LO $PB_REL/download/v28.2/protoc-28.2-linux-x86_64.zip",
     "unzip protoc-28.2-linux-x86_64.zip -d /opt/.local",
     "export PATH=\"$PATH:/opt/.local/bin\";chmod +x /opt/.local/bin/protoc",
