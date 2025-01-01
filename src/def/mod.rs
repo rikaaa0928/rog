@@ -1,9 +1,9 @@
 pub mod config;
 
-use std::io::{Error, ErrorKind, Result};
-use std::future::Future;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use crate::util::RunAddr;
+use std::future::Future;
+use std::io::{Error, ErrorKind, Result};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 #[async_trait::async_trait]
 pub trait RunReadHalf: Send {
@@ -32,7 +32,8 @@ pub trait RunConnector: Send {
 pub trait RunAcceptor: Send + Sync {
     async fn accept(&self) -> Result<(Box<dyn RunStream>, SocketAddr)>;
 
-    async fn handshake(&self, r: &mut dyn RunReadHalf, w: &mut dyn RunWriteHalf) -> Result<RunAddr>;
+    async fn handshake(&self, r: &mut dyn RunReadHalf, w: &mut dyn RunWriteHalf)
+        -> Result<RunAddr>;
 
     async fn post_handshake(
         &self,
@@ -48,8 +49,8 @@ pub trait RunListener: Send {
     async fn listen(&self, addr: &str) -> Result<Box<dyn RunAcceptor>>;
 }
 #[async_trait::async_trait]
-pub trait Router: Send {
-    async fn route(&self, addr: &RunAddr) -> Result<String>;
+pub trait RouterSet: Send + Sync {
+    async fn route(&self, name: &str, addr: &RunAddr) -> String;
 }
 
 #[async_trait::async_trait]
@@ -78,17 +79,26 @@ impl UDPPacket {
         let head = [0u8, 0, 0, 1, 0, 0, 0, 0, port[0], port[1]];
         let mut payload = head.to_vec();
         payload.extend(self.data.iter());
-        (Vec::from([payload]),
-         format!("{}:{}", if self.meta.src_addr == "0.0.0.0" {
-             "127.0.0.1"
-         } else {
-             self.meta.src_addr.as_str()
-         }, self.meta.src_port),
-         format!("{}:{}", self.meta.dst_addr, self.meta.dst_port))
+        (
+            Vec::from([payload]),
+            format!(
+                "{}:{}",
+                if self.meta.src_addr == "0.0.0.0" {
+                    "127.0.0.1"
+                } else {
+                    self.meta.src_addr.as_str()
+                },
+                self.meta.src_port
+            ),
+            format!("{}:{}", self.meta.dst_addr, self.meta.dst_port),
+        )
     }
     pub fn parse(buf: &[u8], src_addr: SocketAddr) -> Result<Self> {
         if buf.len() < 5 {
-            return Err(Error::new(ErrorKind::InvalidData, "udp parse packet too short"));
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "udp parse packet too short",
+            ));
         }
         let frag = buf[2].clone();
         if frag != 0 {
@@ -103,13 +113,27 @@ impl UDPPacket {
             });
         }
         let a_typ = buf[3].clone();
-        let a_len: isize = if a_typ == 1 { 4 } else if a_typ == 4 { 16 } else if a_typ == 3 { buf[4].into() } else { -1 };
+        let a_len: isize = if a_typ == 1 {
+            4
+        } else if a_typ == 4 {
+            16
+        } else if a_typ == 3 {
+            buf[4].into()
+        } else {
+            -1
+        };
         let start: usize = if a_typ == 3 { 5 } else { 4 };
         if a_len < 0 {
-            return Err(Error::new(ErrorKind::InvalidData, "udp parse invalid addr type"));
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "udp parse invalid addr type",
+            ));
         }
         if start as isize + a_len + 2 >= buf.len() as isize {
-            return Err(Error::new(ErrorKind::InvalidData, "udp parse packet too short2"));
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "udp parse packet too short2",
+            ));
         }
         let a_len = a_len as usize;
         let dst_addr = buf[start..start + a_len].to_vec();
@@ -122,21 +146,14 @@ impl UDPPacket {
                 if dst_addr.len() != 4 {
                     return Err(Error::new(ErrorKind::Other, "Not a ipv4"));
                 }
-                let ip = Ipv4Addr::new(
-                    dst_addr[0],
-                    dst_addr[1],
-                    dst_addr[2],
-                    dst_addr[3],
-                );
+                let ip = Ipv4Addr::new(dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
                 Ok(ip.to_string())
             }
             // Domain name
-            3 => {
-                match std::str::from_utf8(&dst_addr) {
-                    Ok(domain) => Ok(domain.to_string()),
-                    Err(_) => Err(Error::new(ErrorKind::Other, "Not a domain"))
-                }
-            }
+            3 => match std::str::from_utf8(&dst_addr) {
+                Ok(domain) => Ok(domain.to_string()),
+                Err(_) => Err(Error::new(ErrorKind::Other, "Not a domain")),
+            },
             // IPv6
             4 => {
                 if dst_addr.len() != 16 {
@@ -154,7 +171,10 @@ impl UDPPacket {
                 );
                 Ok(ip.to_string())
             }
-            _ => Err(std::io::Error::new(std::io::ErrorKind::Other, "a_type not found"))
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "a_type not found",
+            )),
         }?;
 
         Ok(UDPPacket {
@@ -168,4 +188,3 @@ impl UDPPacket {
         })
     }
 }
-

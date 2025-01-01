@@ -1,4 +1,4 @@
-use crate::def::{Router, RunConnector, RunUdpStream, UDPPacket};
+use crate::def::{RouterSet, RunConnector, RunUdpStream, UDPPacket};
 use crate::object::config::ObjectConfig;
 use crate::router::DefaultRouter;
 use crate::util::{split_vec_into_chunks, RunAddr};
@@ -16,18 +16,21 @@ pub mod config;
 
 pub struct Object {
     config: ObjectConfig,
+    router: Arc<dyn RouterSet>,
 }
 
 impl Object {
-    pub fn new(config: ObjectConfig) -> Self {
-        Self { config }
+    pub fn new(config: ObjectConfig, router: Arc<dyn RouterSet>) -> Self {
+        Self { config,router }
     }
 
     pub async fn start(&self) -> io::Result<()> {
         let config = self.config.clone();
-        let acc = listener::create(&config).await?;
+        // let config = &config;
+        let router = self.router.clone();
+        let acc = listener::create(&config, router.clone()).await?;
         let acc = Arc::new(acc);
-        let router = Arc::new(DefaultRouter::new(&config.router));
+
         loop {
             let (s, _) = acc.accept().await?;
             let acc = Arc::clone(&acc);
@@ -43,7 +46,8 @@ impl Object {
                     }
                     Ok(addr) => {
                         let addr_ref = &addr;
-                        let client_name = router.route(addr_ref).await?;
+                        let client_name =
+                            router.route(config.listener.name.as_str(), addr_ref).await;
                         let conn_conf = config.connector.get(client_name.as_str()).unwrap();
                         let connector = Arc::new(Mutex::new(connector::create(conn_conf).await?));
                         if addr_ref.udp {
@@ -135,13 +139,16 @@ impl Object {
                                     }
                                     if udp_tunnel.is_none() {
                                         let client_name = router
-                                            .route(&RunAddr {
-                                                addr: (&udp_packet).meta.dst_addr.clone(),
-                                                port: (&udp_packet).meta.dst_port,
-                                                udp: false,
-                                                cache: None,
-                                            })
-                                            .await?;
+                                            .route(
+                                                config.listener.name.as_str(),
+                                                &RunAddr {
+                                                    addr: (&udp_packet).meta.dst_addr.clone(),
+                                                    port: (&udp_packet).meta.dst_port,
+                                                    udp: false,
+                                                    cache: None,
+                                                },
+                                            )
+                                            .await;
                                         let conn_conf =
                                             config.connector.get(client_name.as_str()).unwrap();
                                         let ctor = connector::create(conn_conf).await?;
@@ -240,7 +247,9 @@ impl Object {
                         let (writer_interrupter, mut writer_interrupt_receiver) =
                             oneshot::channel();
                         if addr_ref.cache.is_some() {
-                            tcp_w.write(addr_ref.cache.clone().unwrap().as_slice()).await?;
+                            tcp_w
+                                .write(addr_ref.cache.clone().unwrap().as_slice())
+                                .await?;
                         }
 
                         debug!("start loop");

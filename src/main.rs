@@ -4,7 +4,8 @@ use crate::object::Object;
 use futures::future::select_all;
 use log::error;
 use std::env;
-use tokio::{fs, select, spawn};
+use std::sync::Arc;
+use tokio::{fs, spawn};
 
 mod connector;
 mod def;
@@ -32,16 +33,19 @@ async fn main() -> std::io::Result<()> {
     if cfg_res.is_err() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
-            "invalid config file",
+            String::from("invalid config file: ") + cfg_res.err().unwrap().message(),
         ));
     }
     let cfg = cfg_res.unwrap();
+    let router = router::DefaultRouter::new(cfg.router.as_slice(), cfg.data.as_slice()).await;
+    let router = Arc::new(router);
     let mut fs = Vec::new();
     for l in cfg.clone().listener {
         let cfg = cfg.clone();
+        let router = router.clone();
         fs.push(spawn(async move {
-            let obj_conf = ObjectConfig::build(l.name.as_str(), &(cfg.clone()));
-            let obj = Object::new(obj_conf);
+            let obj_conf = ObjectConfig::build(l.name.as_str(), &cfg);
+            let obj = Object::new(obj_conf, router.clone());
             obj.start().await
         }));
     }

@@ -4,6 +4,7 @@ use serde::Deserialize;
 pub struct Config {
     pub listener: Vec<Listener>,
     pub router: Vec<Router>,
+    pub data: Vec<RouteData>,
     pub connector: Vec<Connector>,
 }
 
@@ -20,6 +21,7 @@ pub struct Connector {
 pub struct Router {
     pub name: String,
     pub default: String,
+    pub route_rules: Vec<RouteRule>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -30,4 +32,20 @@ pub struct Listener {
     pub pw: Option<String>,
     pub proto: String,
     pub router: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct RouteRule {
+    pub name: String,
+    pub select: String,
+    pub exclude: Vec<String>,
+    pub domain_to_ip: Option<bool>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct RouteData {
+    pub name: String,
+    pub url: Option<String>,
+    pub format: String,
+    pub data: Option<String>,
 }
