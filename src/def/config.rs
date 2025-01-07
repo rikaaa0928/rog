@@ -40,6 +40,7 @@ pub struct RouteRule {
     pub select: String,
     pub exclude: Vec<String>,
     pub domain_to_ip: Option<bool>,
+    pub dns: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

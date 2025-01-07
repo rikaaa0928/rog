@@ -1,5 +1,5 @@
 use std::net::{SocketAddr};
-use crate::def::{RunAcceptor, RunListener, RunReadHalf, RunStream};
+use crate::def::{RunAcceptor, RunReadHalf, RunStream};
 use crate::util::RunAddr;
 use crate::def::RunWriteHalf;
 use crate::util;

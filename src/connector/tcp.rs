@@ -1,6 +1,6 @@
-use std::io::{Error, Result};
+use std::io::{Result};
 use tokio::net::{TcpStream, UdpSocket};
-use crate::def::{RunConnector, RunReadHalf, RunStream, RunUdpStream, RunWriteHalf};
+use crate::def::{RunConnector, RunStream, RunUdpStream};
 use crate::stream::tcp::TcpRunStream;
 use crate::stream::udp::UdpRunStream;
 

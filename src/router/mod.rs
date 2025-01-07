@@ -1,7 +1,9 @@
 mod consts;
 mod data;
 mod router;
-mod util;
+mod matcher;
+pub(crate) mod resolver;
+mod test;
 
 use crate::def;
 use crate::def::config::{RouteData, Router};
@@ -11,18 +13,20 @@ use crate::util::RunAddr;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+use crate::router::matcher::Matcher;
+use crate::router::resolver::Resolver;
 
-#[derive(Debug, Clone)]
+// #[derive(Clone)]
 pub struct DefaultRouter {
     router_map: HashMap<String, DefaultBaseRouter>,
-    data_map: Arc<HashMap<String, InnerRouteData>>,
+    data_map: Arc<HashMap<String, Box<dyn Matcher>>>,
 }
 
 #[async_trait::async_trait]
 impl def::RouterSet for DefaultRouter {
     async fn route(&self, name: &str, addr: &RunAddr) -> String {
         if let Some(router) = self.router_map.get(name) {
-            let res = router.route(addr);
+            let res = router.route(addr).await;
             log::info!("Route {} {} -> {}", name, addr.addr, res);
             res
         } else {
@@ -32,19 +36,20 @@ impl def::RouterSet for DefaultRouter {
 }
 
 impl DefaultRouter {
-    pub async fn new(cfg: &[Router], data_cfg: &[RouteData]) -> Self {
+    pub async fn new(cfg: &[Router], data_cfg: &[RouteData], resolver: Arc<Resolver>) -> Self {
         let data_map = Arc::new(load_route_data(data_cfg).await);
         let mut router_set = DefaultRouter {
             router_map: HashMap::new(),
             data_map: data_map.clone(),
         };
         for r in cfg {
-            let router = DefaultBaseRouter {
-                name: r.name.clone(),
-                default_tag: r.default.clone(),
-                rules: r.route_rules.clone(),
-                data_map: data_map.clone(),
-            };
+            let router = DefaultBaseRouter::new(
+                r.name.clone(),
+                r.default.clone(),
+                r.route_rules.clone(),
+                data_map.clone(),
+                resolver.clone(),
+            );
             router_set.router_map.insert(r.name.clone(), router);
         }
         router_set

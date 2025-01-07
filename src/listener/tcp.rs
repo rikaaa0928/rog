@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use crate::def::{RunAcceptor, RunListener, RunReadHalf, RunStream, RunWriteHalf};
-use crate::stream::tcp::{TcpReadHalf, TcpRunStream, TcpWriteHalf};
+use crate::stream::tcp::{TcpRunStream};
 use crate::util::RunAddr;
 
 pub struct TcpRunAcceptor {

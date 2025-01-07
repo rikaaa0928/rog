@@ -7,7 +7,7 @@ pub fn match_ip_or_cidr(host: &str, rule: &str) -> bool {
                 return network.contains(&ip);
             }
         }
-    } else if let Ok(ip) = rule.parse::<std::net::IpAddr>() {
+    } else if let Ok(_ip) = rule.parse::<std::net::IpAddr>() {
         return host == rule;
     }
     false

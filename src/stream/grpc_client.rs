@@ -47,7 +47,7 @@ impl RunReadHalf for GrpcClientReadHalf {
         }
     }
 
-    async fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    async fn read_exact(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
         Ok(0)
     }
 

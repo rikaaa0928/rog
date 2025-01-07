@@ -58,10 +58,10 @@ impl RunAcceptor for HttpRunAcceptor {
 
     async fn post_handshake(
         &self,
-        r: &mut dyn RunReadHalf,
-        w: &mut dyn RunWriteHalf,
-        error: bool,
-        port: u16,
+        _r: &mut dyn RunReadHalf,
+        _w: &mut dyn RunWriteHalf,
+        _error: bool,
+        _port: u16,
     ) -> std::io::Result<()> {
         Ok(())
     }

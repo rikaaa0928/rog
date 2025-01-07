@@ -5,24 +5,25 @@ use std::str::FromStr;
 
 use crate::def::config;
 use crate::router::consts::FORMAT_LAN;
+use crate::router::matcher::{get_matcher_factory_fn, Matcher};
 use reqwest::Url;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct InnerRouteData {
     pub name: String,
-    pub data: String,
+    pub data: Vec<u8>,
     pub lines: Vec<String>,
     pub format: String,
 }
 
-pub async fn load_route_data(data_cfg: &[config::RouteData]) -> HashMap<String, InnerRouteData> {
-    let mut data_map = HashMap::new();
+pub async fn load_route_data(data_cfg: &[config::RouteData]) -> HashMap<String, Box<dyn Matcher>> {
+    let mut data_map: HashMap<String, Box<dyn Matcher>> = HashMap::new();
     for rd_cfg in data_cfg {
         let rd_cfg = &rd_cfg;
         let mut rd = InnerRouteData {
             name: rd_cfg.name.clone(),
-            data: String::new(),
+            data: Vec::new(),
             lines: Vec::new(),
             format: rd_cfg.format.clone(),
         };
@@ -32,6 +33,7 @@ pub async fn load_route_data(data_cfg: &[config::RouteData]) -> HashMap<String, 
                 "10.0.0.0/8".to_string(),
                 "172.16.0.0/12".to_string(),
                 "192.168.0.0/16".to_string(),
+                "127.0.0.0/8".to_string(),
             ];
         } else if rd_cfg.url.is_some() {
             if let Err(e) =
@@ -50,14 +52,17 @@ pub async fn load_route_data(data_cfg: &[config::RouteData]) -> HashMap<String, 
                 .data
                 .as_ref()
                 .unwrap()
-                .split("\n").filter(|s|!s.trim().is_empty())
+                .split("\n")
+                .filter(|s| !s.trim().is_empty())
                 .map(|s| s.to_string())
                 .collect();
         } else {
             log::warn!("No data source provided for route data '{}'", rd_cfg.name);
             continue;
         }
-        data_map.insert(rd_cfg.name.clone(), rd);
+        if let Some(factory) = get_matcher_factory_fn(&rd.format) {
+            data_map.insert(rd_cfg.name.clone(), factory(rd.lines, rd.data));
+        }
     }
     data_map
 }

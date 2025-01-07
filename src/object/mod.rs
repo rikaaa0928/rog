@@ -1,7 +1,7 @@
 use crate::def::{RouterSet, RunConnector, RunUdpStream, UDPPacket};
 use crate::object::config::ObjectConfig;
 use crate::router::DefaultRouter;
-use crate::util::{split_vec_into_chunks, RunAddr};
+use crate::util::RunAddr;
 use crate::{connector, listener};
 use log::{debug, error, warn};
 use std::io;
@@ -97,7 +97,7 @@ impl Object {
                             // }
                             // let udp_tunnel_base = Arc::new(udp_tunnel.unwrap());
                             //loop
-                            let (udp_tunnel_sender, mut udp_tunnel_receiver) = oneshot::channel();
+                            let (udp_tunnel_sender, udp_tunnel_receiver) = oneshot::channel();
                             let mut udp_tunnel_sender = Some(udp_tunnel_sender);
                             debug!("udp loop start");
                             // let udp_tunnel_base: Arc<Mutex<Option<Box<dyn RunUdpStream>>>> = Arc::new(Mutex::new(None));

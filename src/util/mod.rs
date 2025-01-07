@@ -76,11 +76,11 @@ impl TryFrom<&Request> for RunAddr {
     }
 }
 
-pub fn split_vec_into_chunks(data: Vec<u8>, chunk_size: usize) -> Vec<Vec<u8>> {
-    data.chunks(chunk_size)
-        .map(|chunk| chunk.to_vec())
-        .collect()
-}
+// pub fn split_vec_into_chunks(data: Vec<u8>, chunk_size: usize) -> Vec<Vec<u8>> {
+//     data.chunks(chunk_size)
+//         .map(|chunk| chunk.to_vec())
+//         .collect()
+// }
 
 // impl TryInto<SocketAddr> for RunAddr {
 //     type Error = std::io::Error;
