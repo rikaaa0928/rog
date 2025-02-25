@@ -39,7 +39,7 @@ async fn main() -> std::io::Result<()> {
     let cfg = cfg_res.unwrap();
     let resolver = router::resolver::Resolver::new();
     let router =
-        router::DefaultRouter::new(cfg.router.as_slice(), cfg.data.as_slice(), resolver).await;
+        router::DefaultRouter::new(cfg.router.as_slice(), cfg.data.as_ref().unwrap_or(&vec![]).as_slice(), resolver).await;
     let router = Arc::new(router);
     let mut fs = Vec::new();
     for l in cfg.clone().listener {

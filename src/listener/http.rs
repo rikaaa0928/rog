@@ -1,6 +1,7 @@
+use std::io::ErrorKind;
 use crate::def::{RunAcceptor, RunReadHalf, RunStream, RunWriteHalf};
 use crate::util::RunAddr;
-use log::info;
+use log::{debug};
 use std::net::SocketAddr;
 use url::Url;
 
@@ -36,6 +37,9 @@ impl RunAcceptor for HttpRunAcceptor {
         let lines = str.split("\r\n").collect::<Vec<&str>>();
         let f_line = lines[0];
         let parts = f_line.split(" ").collect::<Vec<&str>>();
+        if parts.len() < 2 {
+            return Err(std::io::Error::new(ErrorKind::InvalidData, "invalid parts ".to_owned() +f_line ));
+        }
         let mut dst = parts[1].to_string();
         if !dst.contains("://") {
             dst = format!("http://{}", dst)
@@ -45,7 +49,7 @@ impl RunAcceptor for HttpRunAcceptor {
             cache = None;
             w.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 .await?;
-            info!("http HTTP/1.1 200 Connection Established\r\n\r\n");
+            debug!("http HTTP/1.1 200 Connection Established\r\n\r\n");
         }
 
         Ok(RunAddr {

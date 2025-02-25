@@ -46,7 +46,7 @@ impl DefaultRouter {
             let router = DefaultBaseRouter::new(
                 r.name.clone(),
                 r.default.clone(),
-                r.route_rules.clone(),
+                r.route_rules.clone().unwrap_or(vec![]),
                 data_map.clone(),
                 resolver.clone(),
             );

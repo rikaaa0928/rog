@@ -4,7 +4,7 @@ use serde::Deserialize;
 pub struct Config {
     pub listener: Vec<Listener>,
     pub router: Vec<Router>,
-    pub data: Vec<RouteData>,
+    pub data: Option<Vec<RouteData>>,
     pub connector: Vec<Connector>,
 }
 
@@ -21,7 +21,7 @@ pub struct Connector {
 pub struct Router {
     pub name: String,
     pub default: String,
-    pub route_rules: Vec<RouteRule>,
+    pub route_rules: Option<Vec<RouteRule>>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
