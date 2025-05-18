@@ -7,8 +7,8 @@ use log::{debug, error};
 use std::io;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio::spawn;
+use tokio::sync::Mutex;
 
 pub mod config;
 pub mod tcp;
@@ -45,18 +45,28 @@ impl Object {
                     }
                     Ok(addr) => {
                         let addr_ref = &addr;
-                        let client_name = router
-                            .route(
-                                config.listener.name.as_str(),
-                                config.listener.router.as_str(),
-                                addr_ref,
-                            )
-                            .await;
-                        let conn_conf = config.connector.get(client_name.as_str()).unwrap();
-                        let connector_obj = Arc::new(Mutex::new(connector::create(conn_conf).await?));
+
                         if addr_ref.udp {
-                            udp::handle_udp_connection(r, w, Arc::clone(&acc), config.clone(), router.clone(), addr).await?;
+                            udp::handle_udp_connection(
+                                r,
+                                w,
+                                Arc::clone(&acc),
+                                config.clone(),
+                                router.clone(),
+                                addr,
+                            )
+                            .await?;
                         } else {
+                            let client_name = router
+                                .route(
+                                    config.listener.name.as_str(),
+                                    config.listener.router.as_str(),
+                                    addr_ref,
+                                )
+                                .await;
+                            let conn_conf = config.connector.get(client_name.as_str()).unwrap();
+                            let connector_obj =
+                                Arc::new(Mutex::new(connector::create(conn_conf).await?));
                             debug!("Handshake successful {:?}", addr_ref);
                             let client_stream_res = Arc::clone(&connector_obj)
                                 .lock()
