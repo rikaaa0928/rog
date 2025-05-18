@@ -102,7 +102,6 @@ impl Resolver {
             tls_dns_name: None,
             http_endpoint: None,
             trust_negative_responses: false,
-            tls_config: None,
             bind_addr: None,
         });
         let async_resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default());

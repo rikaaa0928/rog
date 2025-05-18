@@ -1,0 +1,66 @@
+# 完整的项目配置样例
+
+# 监听器配置
+[[listener]]
+name = "socks5_inbound"
+endpoint = "127.0.0.1:1080"
+proto = "socks5"
+router = "main_router" # 引用下面定义的路由器
+
+# 连接器配置
+[[connector]]
+name = "direct"
+proto = "tcp"
+# endpoint = "example.com:80" # 可选，如果需要固定连接到某个端点
+
+[[connector]]
+name = "proxy_outbound"
+proto = "socks5"
+endpoint = "127.0.0.1:1081" # 代理服务器地址
+
+# 路由数据配置
+# 这些数据可以在路由规则中被引用
+[[data]]
+name = "lan_ips"
+format = "cidr"
+# 可以选择从 url 加载数据，例如：
+# url = "file:///path/to/your/ip_list.txt"
+# url = "http://example.com/ip_list.txt"
+# 也可以直接内嵌数据，每行一个条目
+data = """
+10.0.0.0/8
+172.16.0.0/12
+192.168.0.0/16
+127.0.0.0/8
+"""
+
+[[data]]
+name = "blocked_sites"
+format = "regex"
+data = """
+.*\\.facebook\\.com
+.*\\.twitter\\.com
+"""
+
+# 路由器配置
+[[router]]
+name = "main_router" # 路由器名称，在 listener 中引用
+default = "proxy_outbound" # 默认使用的连接器标签
+
+# 路由规则，按顺序匹配
+[[router.route_rules]]
+# 规则名称，对应上面 data 中的 name
+name = "lan_ips"
+# 匹配成功后选择的连接器标签
+select = "direct"
+# 可选：排除规则，例如不匹配某个IP或域名
+# exclude = ["192.168.1.1"]
+# 可选：是否将域名解析为IP进行匹配
+# domain_to_ip = true
+# 可选：指定使用的DNS服务器
+# dns = "8.8.8.8:53"
+
+[[router.route_rules]]
+name = "blocked_sites"
+select = "block" # 假设有一个名为 "block" 的连接器或特殊处理方式
+domain_to_ip = true # 对于域名规则，通常需要解析IP进行匹配

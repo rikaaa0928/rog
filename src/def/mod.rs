@@ -50,7 +50,7 @@ pub trait RunListener: Send {
 }
 #[async_trait::async_trait]
 pub trait RouterSet: Send + Sync {
-    async fn route(&self, name: &str, addr: &RunAddr) -> String;
+    async fn route(&self, l_name: &str, r_name: &str, addr: &RunAddr) -> String;
 }
 
 #[async_trait::async_trait]

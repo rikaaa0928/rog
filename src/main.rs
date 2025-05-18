@@ -38,15 +38,19 @@ async fn main() -> std::io::Result<()> {
     }
     let cfg = cfg_res.unwrap();
     let resolver = router::resolver::Resolver::new();
-    let router =
-        router::DefaultRouter::new(cfg.router.as_slice(), cfg.data.as_ref().unwrap_or(&vec![]).as_slice(), resolver).await;
+    let router = router::DefaultRouter::new(
+        cfg.router.as_slice(),
+        cfg.data.as_ref().unwrap_or(&vec![]).as_slice(),
+        resolver,
+    )
+    .await;
     let router = Arc::new(router);
     let mut fs = Vec::new();
     for l in cfg.clone().listener {
         let cfg = cfg.clone();
         let router = router.clone();
         fs.push(spawn(async move {
-            let obj_conf = ObjectConfig::build(l.name.as_str(), &cfg);
+            let obj_conf = Arc::new(ObjectConfig::build(l.name.as_str(), &cfg));
             let obj = Object::new(obj_conf, router.clone());
             obj.start().await
         }));

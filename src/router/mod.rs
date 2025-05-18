@@ -1,20 +1,20 @@
 mod consts;
 mod data;
-mod router;
 mod matcher;
 pub(crate) mod resolver;
+mod router;
 mod test;
 
 use crate::def;
 use crate::def::config::{RouteData, Router};
 use crate::router::data::{load_route_data, InnerRouteData};
+use crate::router::matcher::Matcher;
+use crate::router::resolver::Resolver;
 use crate::router::router::DefaultBaseRouter;
 use crate::util::RunAddr;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::router::matcher::Matcher;
-use crate::router::resolver::Resolver;
 
 // #[derive(Clone)]
 pub struct DefaultRouter {
@@ -24,12 +24,19 @@ pub struct DefaultRouter {
 
 #[async_trait::async_trait]
 impl def::RouterSet for DefaultRouter {
-    async fn route(&self, name: &str, addr: &RunAddr) -> String {
-        if let Some(router) = self.router_map.get(name) {
+    async fn route(&self, l_name: &str, r_name: &str, addr: &RunAddr) -> String {
+        if let Some(router) = self.router_map.get(r_name) {
             let res = router.route(addr).await;
-            log::info!("Route {} {} -> {}", name, addr.addr, res);
+            log::info!("Route {} {} {} -> {}", l_name, r_name, addr.addr, res);
             res
         } else {
+            log::info!(
+                "Route {} {} {} -> {}",
+                l_name,
+                r_name,
+                addr.addr,
+                "default by default"
+            );
             "default".to_string()
         }
     }

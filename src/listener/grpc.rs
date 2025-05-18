@@ -69,6 +69,7 @@ impl RogService for GrpcServer {
         let router = self.router.clone();
         let cfg = self.cfg.clone();
         let name = cfg.listener.name.clone();
+        let r_name = cfg.listener.router.clone();
         let _: tokio::task::JoinHandle<io::Result<()>> = spawn(async move {
             let (reader_interrupter, reader_interrupt_receiver) = oneshot::channel();
             let (writer_interrupter, mut writer_interrupt_receiver) = oneshot::channel();
@@ -101,7 +102,9 @@ impl RogService for GrpcServer {
                                 udp: true,
                                 cache: None,
                             };
-                            let client_name = router.route(name.clone().as_str(), &dst_addr).await;
+                            let client_name = router
+                                .route(name.as_str(), r_name.as_str(), &dst_addr)
+                                .await;
                             let conn_conf = cfg.connector.get(client_name.as_str()).unwrap();
                             let connector = connector::create(conn_conf).await?;
                             let udp_t = connector

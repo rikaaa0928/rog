@@ -13,20 +13,20 @@ use tokio::sync::{oneshot, Mutex};
 use tokio::{select, spawn};
 
 pub mod config;
+pub mod tcp;
 
 pub struct Object {
-    config: ObjectConfig,
+    config: Arc<ObjectConfig>,
     router: Arc<dyn RouterSet>,
 }
 
 impl Object {
-    pub fn new(config: ObjectConfig, router: Arc<dyn RouterSet>) -> Self {
-        Self { config,router }
+    pub fn new(config: Arc<ObjectConfig>, router: Arc<dyn RouterSet>) -> Self {
+        Self { config, router }
     }
 
     pub async fn start(&self) -> io::Result<()> {
         let config = self.config.clone();
-        // let config = &config;
         let router = self.router.clone();
         let acc = listener::create(&config, router.clone()).await?;
         let acc = Arc::new(acc);
@@ -46,8 +46,13 @@ impl Object {
                     }
                     Ok(addr) => {
                         let addr_ref = &addr;
-                        let client_name =
-                            router.route(config.listener.name.as_str(), addr_ref).await;
+                        let client_name = router
+                            .route(
+                                config.listener.name.as_str(),
+                                config.listener.router.as_str(),
+                                addr_ref,
+                            )
+                            .await;
                         let conn_conf = config.connector.get(client_name.as_str()).unwrap();
                         let connector = Arc::new(Mutex::new(connector::create(conn_conf).await?));
                         if addr_ref.udp {
@@ -141,6 +146,7 @@ impl Object {
                                         let client_name = router
                                             .route(
                                                 config.listener.name.as_str(),
+                                                config.listener.router.as_str(),
                                                 &RunAddr {
                                                     addr: (&udp_packet).meta.dst_addr.clone(),
                                                     port: (&udp_packet).meta.dst_port,
@@ -241,67 +247,7 @@ impl Object {
                         }
                         let client_stream = client_stream_res?;
                         acc.post_handshake(r.as_mut(), w.as_mut(), error, 0).await?;
-                        let (mut tcp_r, mut tcp_w) = client_stream.split();
-                        let (reader_interrupter, mut reader_interrupt_receiver) =
-                            oneshot::channel();
-                        let (writer_interrupter, mut writer_interrupt_receiver) =
-                            oneshot::channel();
-                        if addr_ref.cache.is_some() {
-                            tcp_w
-                                .write(addr_ref.cache.clone().unwrap().as_slice())
-                                .await?;
-                        }
-
-                        debug!("start loop");
-                        let x = spawn(async move {
-                            let mut buf = [0u8; 2048];
-                            loop {
-                                let reader_interrupt_receiver = &mut reader_interrupt_receiver;
-                                match select! {
-                                    tn=r.read(&mut buf) => tn,
-                                   _=reader_interrupt_receiver=>Err(Error::new(ErrorKind::Other, "Interrupted")),
-                                } {
-                                    Err(e) => {
-                                        break;
-                                    }
-                                    Ok(0) => {
-                                        break;
-                                    }
-                                    Ok(n) => {
-                                        let res = tcp_w.write(&buf[..n]).await;
-                                        if res.is_err() {
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            let _ = writer_interrupter.send(());
-                        });
-                        let y = spawn(async move {
-                            let mut buf = [0u8; 2048];
-                            loop {
-                                let writer_interrupt_receiver = &mut writer_interrupt_receiver;
-                                let n_res = select! {
-                                    tn=tcp_r.read(&mut buf) => tn,
-                                   _=writer_interrupt_receiver=>Err(Error::new(ErrorKind::Other, "Interrupted")),
-                                };
-                                if n_res.is_err() {
-                                    break;
-                                }
-                                let n = n_res.unwrap();
-                                if n == 0 {
-                                    break;
-                                }
-                                let res = w.write(&buf[..n]).await;
-                                if res.is_err() {
-                                    break;
-                                }
-                            }
-                            let _ = reader_interrupter.send(());
-                        });
-                        let _ = x.await;
-                        let _ = y.await;
-                        debug!("end loop");
+                        tcp::handle_tcp_connection(r, w, addr, client_stream).await?;
                     }
                 }
                 Ok::<(), Error>(())
