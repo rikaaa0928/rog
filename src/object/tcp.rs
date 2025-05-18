@@ -6,7 +6,7 @@ use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, Notify};
 use tokio::select;
 
 pub async fn handle_tcp_connection(
@@ -18,10 +18,7 @@ pub async fn handle_tcp_connection(
 {
     debug!("Post Handshake successful {:?}", addr);
     let (mut tcp_r, mut tcp_w) = client_stream.split();
-    let (reader_interrupter, mut reader_interrupt_receiver) =
-        oneshot::channel();
-    let (writer_interrupter, mut writer_interrupt_receiver) =
-        oneshot::channel();
+    let shutdown_signal = Arc::new(Notify::new());
     if addr.cache.is_some() {
         tcp_w
             .write(addr.cache.clone().unwrap().as_slice())
@@ -29,54 +26,66 @@ pub async fn handle_tcp_connection(
     }
 
     debug!("start loop");
+    let shutdown_signal_reader_task = shutdown_signal.clone();
     let x = tokio::spawn(async move {
         let mut buf = [0u8; 2048];
         loop {
-            let reader_interrupt_receiver = &mut reader_interrupt_receiver;
             match select! {
-                tn=r.read(&mut buf) => tn,
-               _=reader_interrupt_receiver=>Err(Error::new(ErrorKind::Other, "Interrupted")),
+                tn = r.read(&mut buf) => tn,
+                _ = shutdown_signal_reader_task.notified() => Err(Error::new(ErrorKind::Other, "Interrupted by other task")),
             } {
                 Err(e) => {
+                    debug!("Reader task (r -> tcp_w) error: {:?}", e);
                     break;
                 }
                 Ok(0) => {
+                    debug!("Reader task (r -> tcp_w): r.read() returned 0 (EOF)");
                     break;
                 }
                 Ok(n) => {
-                    let res = tcp_w.write(&buf[..n]).await;
-                    if res.is_err() {
+                    if let Err(e) = tcp_w.write(&buf[..n]).await {
+                        debug!("Reader task (r -> tcp_w): tcp_w.write() error: {:?}", e);
                         break;
                     }
                 }
             }
         }
-        let _ = writer_interrupter.send(());
+        debug!("Reader task (r -> tcp_w) finished, notifying.");
+        shutdown_signal_reader_task.notify_waiters();
     });
+    let shutdown_signal_writer_task = shutdown_signal.clone();
     let y = tokio::spawn(async move {
         let mut buf = [0u8; 2048];
         loop {
-            let writer_interrupt_receiver = &mut writer_interrupt_receiver;
-            let n_res = select! {
-                tn=tcp_r.read(&mut buf) => tn,
-               _=writer_interrupt_receiver=>Err(Error::new(ErrorKind::Other, "Interrupted")),
-            };
-            if n_res.is_err() {
-                break;
-            }
-            let n = n_res.unwrap();
-            if n == 0 {
-                break;
-            }
-            let res = w.write(&buf[..n]).await;
-            if res.is_err() {
-                break;
+            match select! {
+                tn = tcp_r.read(&mut buf) => tn,
+                _ = shutdown_signal_writer_task.notified() => Err(Error::new(ErrorKind::Other, "Interrupted by other task")),
+            } {
+                Err(e) => {
+                    debug!("Writer task (tcp_r -> w) error: {:?}", e);
+                    break;
+                }
+                Ok(0) => {
+                    debug!("Writer task (tcp_r -> w): tcp_r.read() returned 0 (EOF)");
+                    break;
+                }
+                Ok(n) => {
+                    if let Err(e) = w.write(&buf[..n]).await {
+                        debug!("Writer task (tcp_r -> w): w.write() error: {:?}", e);
+                        break;
+                    }
+                }
             }
         }
-        let _ = reader_interrupter.send(());
+        debug!("Writer task (tcp_r -> w) finished, notifying.");
+        shutdown_signal_writer_task.notify_waiters();
     });
-    let _ = x.await;
-    let _ = y.await;
+    if let Err(e) = x.await {
+        debug!("Reader task (r -> tcp_w) panicked or was cancelled: {:?}", e);
+    }
+    if let Err(e) = y.await {
+        debug!("Writer task (tcp_r -> w) panicked or was cancelled: {:?}", e);
+    }
     debug!("end loop");
     Ok(())
 }
