@@ -9,7 +9,7 @@ use std::io::{Error, ErrorKind, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex, Notify};
 use tokio::{select, spawn};
 
 pub async fn handle_udp_connection(
@@ -34,28 +34,36 @@ pub async fn handle_udp_connection(
     let udp_socket_base = Arc::new(udp_socket_base);
     debug!("provide {} for {:?}", &udp_port, &addr);
 
-    let (reader_interrupter, mut reader_interrupt_receiver) =
-        oneshot::channel();
-    let (reader_interrupter2, mut reader_interrupt_receiver2) =
-        oneshot::channel();
-    let (writer_interrupter, mut writer_interrupt_receiver) =
-        oneshot::channel();
+    let shutdown_notifier = Arc::new(Notify::new());
+
+    let shutdown_notifier_for_a = shutdown_notifier.clone();
     let a: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         let mut buf = [0u8; 1];
         loop {
-            match r.read_exact(&mut buf).await {
-                Ok(0) => {
-                    warn!("udp tcp read 0，remote closed");
+            select! {
+                biased;
+                _ = shutdown_notifier_for_a.notified() => {
+                    debug!("UDP TCP read loop (a) interrupted by shutdown signal.");
                     break;
                 }
-                Err(e) => {
-                    debug!("udp tcp read error {:?}", e);
-                    break;
+                read_res = r.read_exact(&mut buf) => {
+                    match read_res {
+                        Err(e) => {
+                            debug!("UDP TCP read error: {:?}", e);
+                            break;
+                        }
+                        Ok(0) => {
+                            warn!("udp tcp read 0, remote closed");
+                            break;
+                        }
+                        Ok(_) => {
+                            // Continue reading to detect closure/errors
+                        }
+                    }
                 }
-                Ok(_) => {} // Ok(n)
             }
         }
-        let _ = reader_interrupter.send(());
+        shutdown_notifier_for_a.notify_waiters();
         debug!("udp tcp done");
         Ok(())
     });
@@ -67,22 +75,20 @@ pub async fn handle_udp_connection(
     let config_clone_for_b = Arc::clone(&config);
     let router_clone_for_b = Arc::clone(&router);
     // let connector_clone_for_b = Arc::clone(&connector);
+    let shutdown_notifier_for_b = shutdown_notifier.clone();
 
     let b: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         let mut buf = [0u8; 65536];
         let mut udp_tunnel: Option<Arc<Box<dyn RunUdpStream>>> = None;
         loop {
-            let interrupt_receiver = &mut reader_interrupt_receiver;
-            let interrupt_receiver2 = &mut reader_interrupt_receiver2;
             let res: Result<(usize, SocketAddr)> = select! {
-                _= interrupt_receiver=>{
-                    Err(Error::new(ErrorKind::Interrupted, "interrupted"))
+                biased;
+                _ = shutdown_notifier_for_b.notified() => {
+                    debug!("UDP loop b interrupted by shutdown signal.");
+                    Err(Error::new(ErrorKind::Interrupted, "shutdown signaled"))
                 },
-                _= interrupt_receiver2=>{
-                    Err(Error::new(ErrorKind::Interrupted, "interrupted2"))
-                },
-                n=udp_socket.recv_from(&mut buf) => {
-                   Ok(n?)
+                recv_res = udp_socket.recv_from(&mut buf) => {
+                   Ok(recv_res?)
                 }
             };
             if res.is_err() {
@@ -139,30 +145,29 @@ pub async fn handle_udp_connection(
                 break;
             }
         }
+        shutdown_notifier_for_b.notify_waiters();
         debug!("udp loop b done");
-        let res = writer_interrupter.send(());
-        if res.is_err() {
-            debug!("udp loop b interrupter error {:?}", res.err());
-        }
         Ok(())
     });
     let udp_socket_c = Arc::clone(&udp_socket_base);
+    let shutdown_notifier_for_c = shutdown_notifier.clone();
     let c: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         let udp_tunnel_res = udp_tunnel_receiver.await;
         if udp_tunnel_res.is_err(){
             debug!("udp_tunnel_receiver error {:?}", udp_tunnel_res.err());
-            let _ = reader_interrupter2.send(());
+            shutdown_notifier_for_c.notify_waiters();
             return Ok(());
         }
         let udp_tunnel = udp_tunnel_res.unwrap();
         'c_job: loop {
-            let interrupt_receiver = &mut writer_interrupt_receiver;
             let res: Result<UDPPacket> = select! {
-                _= interrupt_receiver=>{
-                    Err(Error::new(ErrorKind::Interrupted, "interrupted"))
+                biased;
+                _ = shutdown_notifier_for_c.notified() => {
+                    debug!("UDP loop c interrupted by shutdown signal.");
+                    Err(Error::new(ErrorKind::Interrupted, "shutdown signaled"))
                 },
-                n=udp_tunnel.read() => {
-                   Ok(n?)
+                read_res = udp_tunnel.read() => {
+                   Ok(read_res?)
                 }
             };
             if res.is_err() {
@@ -188,8 +193,8 @@ pub async fn handle_udp_connection(
                 }
             }
         }
+        shutdown_notifier_for_c.notify_waiters();
         debug!("udp loop c done");
-        let _ = reader_interrupter2.send(());
         Ok(())
     });
     let _ = a.await;
