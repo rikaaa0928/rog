@@ -49,7 +49,7 @@ impl RogService for GrpcServer {
         &self,
         request: Request<Streaming<StreamReq>>,
     ) -> Result<Response<Self::streamStream>, Status> {
-        let (tx, rx) = mpsc::channel(1024);
+        let (tx, rx) = mpsc::channel(8);
         let request = request.into_inner();
         let stream = GrpcServerRunStream::new(Arc::new(Mutex::new(request)), tx);
         match self.sender.send(stream).await {
@@ -65,7 +65,7 @@ impl RogService for GrpcServer {
         &self,
         request: Request<Streaming<UdpReq>>,
     ) -> Result<Response<Self::udpStream>, Status> {
-        let (tx, rx) = mpsc::channel::<Result<UdpRes, Status>>(1024);
+        let (tx, rx) = mpsc::channel::<Result<UdpRes, Status>>(8);
         let router = self.router.clone();
         let cfg = self.cfg.clone();
         let name = cfg.listener.name.clone();
