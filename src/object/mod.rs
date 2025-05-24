@@ -28,17 +28,17 @@ impl Object {
         let config = self.config.clone();
         let router = self.router.clone();
         let acc = listener::create(&config, router.clone()).await?;
-        let acc = Arc::new(acc);
+        let main_acceptor = Arc::new(acc);
 
         loop {
-            let (s, _) = acc.accept().await?;
-            let acc = Arc::clone(&acc);
+            let (tcp_stream, _) = main_acceptor.accept().await?;
+            let main_acceptor = Arc::clone(&main_acceptor);
             let router = Arc::clone(&router);
             let config = config.clone();
             spawn(async move {
-                let (mut r, mut w) = s.split();
+                let (mut r, mut w) = tcp_stream.split();
                 // let udp_tunnel=Arc::new(&connector).lock().await.udp_tunnel();
-                let addr_res = acc.handshake(r.as_mut(), w.as_mut()).await;
+                let addr_res = main_acceptor.handshake(r.as_mut(), w.as_mut()).await;
                 match addr_res {
                     Err(e) => {
                         error!("Handshake error: {}", e);
@@ -50,7 +50,7 @@ impl Object {
                             udp::handle_udp_connection(
                                 r,
                                 w,
-                                Arc::clone(&acc),
+                                Arc::clone(&main_acceptor),
                                 config.clone(),
                                 router.clone(),
                                 addr,
@@ -78,7 +78,7 @@ impl Object {
                                 error = true;
                             }
                             let client_stream = client_stream_res?;
-                            acc.post_handshake(r.as_mut(), w.as_mut(), error, 0).await?;
+                            main_acceptor.post_handshake(r.as_mut(), w.as_mut(), error, 0).await?;
                             tcp::handle_tcp_connection(r, w, addr, client_stream).await?;
                         }
                     }

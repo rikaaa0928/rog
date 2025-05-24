@@ -35,7 +35,7 @@ impl GrpcRunConnector {
 impl RunConnector for GrpcRunConnector {
     async fn connect(&self, addr: String) -> io::Result<Box<dyn RunStream>> {
         let (host, port) = parse_address(addr.as_str())?;
-        let (tx, rx) = mpsc::channel::<StreamReq>(1024);
+        let (tx, rx) = mpsc::channel::<StreamReq>(8);
         let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
         let rx = Request::new(rx);
         let res = self.client.lock().await.stream(rx).await;
@@ -57,7 +57,7 @@ impl RunConnector for GrpcRunConnector {
     }
 
     async fn udp_tunnel(&self, src_addr: String) -> io::Result<Option<Box<dyn RunUdpStream>>> {
-        let (tx, rx) = mpsc::channel::<UdpReq>(1024);
+        let (tx, rx) = mpsc::channel::<UdpReq>(8);
         let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
         let rx = Request::new(rx);
         let res = self.client.lock().await.udp(rx).await;

@@ -217,7 +217,7 @@ pub struct GrpcRunListener {
 #[async_trait::async_trait]
 impl RunListener for GrpcListener {
     async fn listen(&self, addr: &str) -> std::io::Result<Box<dyn RunAcceptor>> {
-        let (tx, rx) = mpsc::channel(1024);
+        let (tx, rx) = mpsc::channel(8);
         // let router = DefaultRouter::new(&self.cfg.router);
         let rog = GrpcServer {
             sender: tx,
