@@ -22,15 +22,7 @@ pub trait RunStream: Send {
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>);
 }
 
-#[async_trait::async_trait]
-pub trait RunUdpReader: Send {
-    async fn read(&mut self) -> Result<UDPPacket>;
-}
 
-#[async_trait::async_trait]
-pub trait RunUdpWriter: Send {
-    async fn write(&self, packet: UDPPacket) -> Result<()>;
-}
 
 pub enum RunAccStream {
     TCPStream(Box<dyn RunStream>),
@@ -41,7 +33,7 @@ pub enum RunAccStream {
 pub trait RunConnector: Send {
     async fn connect(&self, addr: String) -> Result<Box<dyn RunStream>>;
 
-    async fn udp_tunnel(&self, src_addr: String) -> Result<Option<Box<dyn RunUdpStream>>>;
+    async fn udp_tunnel(&self, src_addr: String) -> Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>>;
 }
 
 #[async_trait::async_trait]
@@ -71,9 +63,19 @@ pub trait RouterSet: Send + Sync {
     async fn route(&self, l_name: &str, r_name: &str, addr: &RunAddr) -> String;
 }
 
+// #[async_trait::async_trait]
+// pub trait RunUdpStream: Send + Sync {
+//     async fn read(&self) -> Result<UDPPacket>;
+//     async fn write(&self, packet: UDPPacket) -> Result<()>;
+// }
+
 #[async_trait::async_trait]
-pub trait RunUdpStream: Send + Sync {
-    async fn read(&self) -> Result<UDPPacket>;
+pub trait RunUdpReader: Send {
+    async fn read(&mut self) -> Result<UDPPacket>;
+}
+
+#[async_trait::async_trait]
+pub trait RunUdpWriter: Send {
     async fn write(&self, packet: UDPPacket) -> Result<()>;
 }
 

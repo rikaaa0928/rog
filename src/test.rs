@@ -5,7 +5,7 @@ use tokio::{select, spawn};
 use tokio::net::UdpSocket;
 use tokio::sync::{oneshot, Mutex};
 use crate::connector::tcp::TcpRunConnector;
-use crate::def::{RunAccStream, RunAcceptor, RunConnector, RunListener, RunReadHalf, RunStream, RunUdpStream, RunWriteHalf, UDPPacket};
+use crate::def::{RunAccStream, RunAcceptor, RunConnector, RunListener, RunReadHalf, RunStream, RunWriteHalf, UDPPacket};
 use crate::listener::socks5::SocksRunAcceptor;
 use crate::listener::tcp::TcpRunListener;
 
@@ -70,10 +70,10 @@ async fn test_socks5() -> Result<()> {
                                     println!("udp tunnel none");
                                     return Ok(());
                                 }
-                                let udp_tunnel_base = Arc::new(udp_tunnel.unwrap());
+                                let (mut udp_tunnel_reader,udp_tunnel_writer) = udp_tunnel.unwrap();
                                 //loop
                                 println!("udp loop start");
-                                let udp_tunnel = Arc::clone(&udp_tunnel_base);
+                                // let udp_tunnel = Arc::clone(&udp_tunnel_base);
                                 let udp_socket = Arc::clone(&udp_socket_base);
                                 let b: tokio::task::JoinHandle<Result<()>> = spawn(async move {
                                     let mut buf = [0u8; 65536];
@@ -103,7 +103,7 @@ async fn test_socks5() -> Result<()> {
                                             continue;
                                         }
                                         println!("udp server get udp_packet {:?}", &udp_packet);
-                                        let res = udp_tunnel.write(udp_packet).await;
+                                        let res = udp_tunnel_writer.write(udp_packet).await;
                                         if res.is_err() {
                                             println!("udp loop b udp tunnel write error {:?}", res.err());
                                             break;
@@ -116,7 +116,7 @@ async fn test_socks5() -> Result<()> {
                                     }
                                     Ok(())
                                 });
-                                let udp_tunnel = Arc::clone(&udp_tunnel_base);
+                                // let udp_tunnel = Arc::clone(&udp_tunnel_base);
                                 let udp_socket = Arc::clone(&udp_socket_base);
                                 let c: tokio::task::JoinHandle<Result<()>> = spawn(async move {
                                     'c_job: loop {
@@ -125,7 +125,7 @@ async fn test_socks5() -> Result<()> {
                                     _= interrupt_receiver=>{
                                         Err(Error::new(ErrorKind::Interrupted, "interrupted"))
                                     },
-                                    n=udp_tunnel.read() => {
+                                    n=udp_tunnel_reader.read() => {
                                        Ok(n?)
                                     }
                                 };

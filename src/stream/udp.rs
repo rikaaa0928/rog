@@ -1,4 +1,4 @@
-use crate::def::{RunUdpStream, UDPMeta, UDPPacket};
+use crate::def::{RunUdpReader, RunUdpWriter, UDPMeta, UDPPacket};
 use crate::stream::grpc_client::pb::{UdpReq, UdpRes};
 use log::debug;
 use std::net::SocketAddr;
@@ -12,9 +12,9 @@ pub struct UdpRunStream {
 }
 // 为 MyUdpStream 实现构造方法
 impl UdpRunStream {
-    pub fn new(stream: UdpSocket, src_addr: String) -> Self {
+    pub fn new(stream: Arc<UdpSocket>, src_addr: String) -> Self {
         Self {
-            inner: Arc::new(stream),
+            inner: stream,
             src_addr,
         }
     }
@@ -22,8 +22,8 @@ impl UdpRunStream {
 
 // 为 MyUdpStream 实现 MyStream trait
 #[async_trait::async_trait]
-impl RunUdpStream for UdpRunStream {
-    async fn read(&self) -> std::io::Result<UDPPacket> {
+impl RunUdpReader for UdpRunStream {
+    async fn read(&mut self) -> std::io::Result<UDPPacket> {
         let src_addr = self.src_addr.clone();
         let src: SocketAddr = src_addr.parse().unwrap();
         let inner = self.inner.clone();
@@ -41,6 +41,10 @@ impl RunUdpStream for UdpRunStream {
             data: buf[..n].to_vec(),
         })
     }
+}
+
+#[async_trait::async_trait]
+impl RunUdpWriter for UdpRunStream {
 
     async fn write(&self, packet: UDPPacket) -> std::io::Result<()> {
         let inner = self.inner.clone();

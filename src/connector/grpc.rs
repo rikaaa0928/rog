@@ -1,8 +1,8 @@
-use crate::def::{config, RunConnector, RunStream, RunUdpStream};
+use crate::def::{config, RunConnector, RunStream, RunUdpReader, RunUdpWriter};
 use crate::stream::grpc_client::pb::rog_service_client::RogServiceClient;
 use crate::stream::grpc_client::pb::{StreamReq, UdpReq};
 use crate::stream::grpc_client::GrpcClientRunStream;
-use crate::stream::grpc_udp_client::GrpcUdpClientRunStream;
+use crate::stream::grpc_udp_client::{GrpcUdpClientRunReader, GrpcUdpClientRunWriter};
 use std::io;
 use std::io::ErrorKind;
 use std::sync::Arc;
@@ -59,7 +59,7 @@ impl RunConnector for GrpcRunConnector {
         )))
     }
 
-    async fn udp_tunnel(&self, src_addr: String) -> io::Result<Option<Box<dyn RunUdpStream>>> {
+    async fn udp_tunnel(&self, src_addr: String) -> io::Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>> {
         let (tx, rx) = mpsc::channel::<UdpReq>(8);
         let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
         let rx = Request::new(rx);
@@ -68,12 +68,15 @@ impl RunConnector for GrpcRunConnector {
             return Err(io::Error::new(ErrorKind::Other, "grpc stream error"));
         }
         let resp = res.unwrap().into_inner();
-        Ok(Some(Box::new(GrpcUdpClientRunStream::new(
-            Arc::new(Mutex::new(resp)),
+        Ok(Some((Box::new(GrpcUdpClientRunReader::new(
+            resp,
+            src_addr.clone(),
+            self.cfg.pw.as_ref().unwrap().clone(),
+        )),Box::new(GrpcUdpClientRunWriter::new(
             tx,
             src_addr,
             self.cfg.pw.as_ref().unwrap().clone(),
-        ))))
+        )))))
     }
 }
 

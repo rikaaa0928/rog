@@ -1,8 +1,9 @@
-use std::io::{Result};
-use tokio::net::{TcpStream, UdpSocket};
-use crate::def::{RunConnector, RunStream, RunUdpStream};
+use crate::def::{RunConnector, RunStream, RunUdpReader, RunUdpWriter};
 use crate::stream::tcp::TcpRunStream;
 use crate::stream::udp::UdpRunStream;
+use std::io::Result;
+use std::sync::Arc;
+use tokio::net::{TcpStream, UdpSocket};
 
 pub struct TcpRunConnector {}
 
@@ -19,8 +20,14 @@ impl RunConnector for TcpRunConnector {
         Ok(Box::new(TcpRunStream::new(tcp_stream)))
     }
 
-    async fn udp_tunnel(&self, src_addr: String) -> Result<Option<Box<dyn RunUdpStream>>> {
-        let inner = UdpSocket::bind("0.0.0.0:0").await?;
-        Ok(Some(Box::new(UdpRunStream::new(inner, src_addr))))
+    async fn udp_tunnel(
+        &self,
+        src_addr: String,
+    ) -> Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>> {
+        let inner = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
+        Ok(Some((
+            Box::new(UdpRunStream::new(inner.clone(), src_addr.clone())),
+            Box::new(UdpRunStream::new(inner, src_addr)),
+        )))
     }
 }

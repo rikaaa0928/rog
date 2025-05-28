@@ -1,5 +1,5 @@
 use crate::def::{
-    RouterSet, RunAcceptor, RunConnector, RunReadHalf, RunUdpReader, RunUdpStream, RunUdpWriter,
+    RouterSet, RunAcceptor, RunConnector, RunReadHalf, RunUdpReader, RunUdpWriter,
     RunWriteHalf, UDPPacket,
 };
 use crate::object::config::ObjectConfig;
@@ -39,23 +39,22 @@ pub async fn handle_rwa_udp(
         .await;
     let conn_conf = config.connector.get(client_name.as_str()).unwrap();
     let ctor = connector::create(conn_conf).await?;
-    let udp_tunnel = Arc::new(
+    let (mut udp_reader,udp_writer) = 
         ctor.udp_tunnel(format!(
             "{}:{}",
             (&first_packet).meta.src_addr,
             (&first_packet).meta.src_port,
         ))
         .await?
-        .unwrap(),
-    );
-    udp_tunnel.write(first_packet).await?;
+        .unwrap();
+    udp_writer.write(first_packet).await?;
 
     let shutdown_notifier = Arc::new(Notify::new());
 
     debug!("raw udp loop start");
 
     let shutdown_notifier_for_b = shutdown_notifier.clone();
-    let udp_tunnal_b=Arc::clone(&udp_tunnel);
+    // let udp_tunnal_b=Arc::clone(&udp_tunnel);
     let b: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         loop {
             let res: Result<UDPPacket> = select! {
@@ -87,7 +86,7 @@ pub async fn handle_rwa_udp(
             }
 
             debug!("raw udp server get udp_packet {:?}", &udp_packet);
-            let udp_tunnel_ref = udp_tunnal_b.as_ref();
+            let udp_tunnel_ref = udp_writer.as_ref();
             let res = udp_tunnel_ref.write(udp_packet).await;
             if res.is_err() {
                 warn!("raw udp loop b udp tunnel write error {:?}", res.err());
@@ -99,7 +98,7 @@ pub async fn handle_rwa_udp(
         Ok(())
     });
     let shutdown_notifier_for_c = shutdown_notifier.clone();
-    let udp_tunnal_c=Arc::clone(&udp_tunnel);
+    // let udp_tunnal_c=Arc::clone(&udp_tunnel);
     let c: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         'c_job: loop {
             let res: Result<UDPPacket> = select! {
@@ -108,7 +107,7 @@ pub async fn handle_rwa_udp(
                     debug!("raw UDP loop c interrupted by shutdown signal.");
                     Err(Error::new(ErrorKind::Interrupted, "shutdown signaled"))
                 },
-                read_res = udp_tunnal_c.read() => {
+                read_res = udp_reader.read() => {
                    Ok(read_res?)
                 }
             };
