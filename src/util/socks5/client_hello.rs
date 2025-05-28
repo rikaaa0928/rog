@@ -1,7 +1,6 @@
+use crate::def::RunReadHalf;
 use std::future::Future;
 use std::pin::Pin;
-use crate::def::{RunReadHalf};
-use crate::stream::tcp::{TcpReadHalf};
 
 #[allow(dead_code)]
 pub struct ClientHello {

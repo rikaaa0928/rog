@@ -84,7 +84,7 @@ impl TryFrom<&Request> for RunAddr {
 
 // impl TryInto<SocketAddr> for RunAddr {
 //     type Error = std::io::Error;
-// 
+//
 //     fn try_into(self) -> Result<SocketAddr, Self::Error> {
 //         match self.a_type {
 //             // IPv4

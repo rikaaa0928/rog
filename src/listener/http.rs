@@ -1,8 +1,10 @@
-use std::io::ErrorKind;
-use crate::def::{RunAcceptor, RunReadHalf, RunStream, RunWriteHalf};
+use std::io::{Error, ErrorKind};
+use crate::def::{RunAccStream, RunAcceptor, RunReadHalf, RunStream, RunUdpReader, RunUdpWriter, RunWriteHalf};
 use crate::util::RunAddr;
 use log::{debug};
 use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::Notify;
 use url::Url;
 
 #[allow(dead_code)]
@@ -19,7 +21,7 @@ impl HttpRunAcceptor {
 }
 #[async_trait::async_trait]
 impl RunAcceptor for HttpRunAcceptor {
-    async fn accept(&self) -> std::io::Result<(Box<dyn RunStream>, SocketAddr)> {
+    async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
         let res = self.inner.accept().await;
         res
     }

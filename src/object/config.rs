@@ -1,7 +1,6 @@
-use crate::def::{config, RouterSet};
+use crate::def::config;
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::HashMap;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct ObjectConfig {

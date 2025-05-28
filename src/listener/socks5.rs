@@ -1,8 +1,8 @@
-use std::net::{SocketAddr};
-use crate::def::{RunAcceptor, RunReadHalf, RunStream};
-use crate::util::RunAddr;
 use crate::def::RunWriteHalf;
+use crate::def::{RunAccStream, RunAcceptor, RunReadHalf};
 use crate::util;
+use crate::util::RunAddr;
+use std::net::SocketAddr;
 
 #[allow(dead_code)]
 pub struct SocksRunAcceptor {
@@ -23,7 +23,7 @@ impl SocksRunAcceptor {
 #[async_trait::async_trait]
 impl RunAcceptor for SocksRunAcceptor {
 
-    async fn accept(&self) -> std::io::Result<(Box<dyn RunStream>, SocketAddr)> {
+    async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
        let res= self.inner.accept().await;
         res
     }

@@ -4,6 +4,7 @@ use crate::util::RunAddr;
 use std::future::Future;
 use std::io::{Error, ErrorKind, Result};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use tokio::net::ToSocketAddrs;
 
 #[async_trait::async_trait]
 pub trait RunReadHalf: Send {
@@ -22,6 +23,21 @@ pub trait RunStream: Send {
 }
 
 #[async_trait::async_trait]
+pub trait RunUdpReader: Send {
+    async fn read(&mut self) -> Result<UDPPacket>;
+}
+
+#[async_trait::async_trait]
+pub trait RunUdpWriter: Send {
+    async fn write(&self, packet: UDPPacket) -> Result<()>;
+}
+
+pub enum RunAccStream {
+    TCPStream(Box<dyn RunStream>),
+    UDPSocket((Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)),
+}
+
+#[async_trait::async_trait]
 pub trait RunConnector: Send {
     async fn connect(&self, addr: String) -> Result<Box<dyn RunStream>>;
 
@@ -30,11 +46,13 @@ pub trait RunConnector: Send {
 
 #[async_trait::async_trait]
 pub trait RunAcceptor: Send + Sync {
-    async fn accept(&self) -> Result<(Box<dyn RunStream>, SocketAddr)>;
+    async fn accept(&self) -> Result<(RunAccStream, SocketAddr)>;
 
+    // stream handshake
     async fn handshake(&self, r: &mut dyn RunReadHalf, w: &mut dyn RunWriteHalf)
         -> Result<RunAddr>;
 
+    // stream post handshake
     async fn post_handshake(
         &self,
         r: &mut dyn RunReadHalf,

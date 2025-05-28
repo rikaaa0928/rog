@@ -1,8 +1,7 @@
+use crate::def::RunReadHalf;
+use crate::util::socks5::{CMD_CONNECT, CMD_UDP};
 use std::future::Future;
 use std::pin::Pin;
-use crate::def::RunReadHalf;
-use crate::stream::tcp::TcpReadHalf;
-use crate::util::socks5::{CMD_CONNECT, CMD_UDP};
 
 #[allow(dead_code)]
 pub struct Request {

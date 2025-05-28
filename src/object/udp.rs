@@ -1,9 +1,11 @@
-use crate::def::{RouterSet, RunConnector, RunUdpStream, UDPPacket, RunReadHalf, RunWriteHalf, RunAcceptor};
+use crate::def::{
+    RouterSet, RunAcceptor, RunConnector, RunReadHalf, RunUdpStream, RunWriteHalf, UDPPacket,
+};
 use crate::object::config::ObjectConfig;
 use crate::router::DefaultRouter;
 use crate::util::RunAddr;
 use crate::{connector, listener};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use std::io;
 use std::io::{Error, ErrorKind, Result};
 use std::net::SocketAddr;
@@ -21,7 +23,7 @@ pub async fn handle_udp_connection(
     addr: RunAddr,
     // connector: Arc<Mutex<Box<dyn RunConnector>>>,
 ) -> Result<()> {
-    debug!("udp? {:?}", addr);
+    info!("udp? {:?}", addr);
     let udp_socket_base_res = UdpSocket::bind("127.0.0.1:0").await;
     if udp_socket_base_res.is_err() {
         acc.post_handshake(r.as_mut(), w.as_mut(), true, 0).await?;
@@ -32,7 +34,7 @@ pub async fn handle_udp_connection(
     acc.post_handshake(r.as_mut(), w.as_mut(), false, udp_port)
         .await?;
     let udp_socket_base = Arc::new(udp_socket_base);
-    debug!("provide {} for {:?}", &udp_port, &addr);
+    info!("provide {} for {:?}", &udp_port, &addr);
 
     let shutdown_notifier = Arc::new(Notify::new());
 
@@ -97,7 +99,7 @@ pub async fn handle_udp_connection(
             }
             let (n, src_addr) = res?;
             debug!(
-                "udp server read src_addr {:?} {} {:?}",
+                "udp b server read src_addr {:?} {} {:?}",
                 src_addr,
                 n,
                 &buf[..n]
@@ -120,20 +122,21 @@ pub async fn handle_udp_connection(
                         },
                     )
                     .await;
-                let conn_conf =
-                    config_clone_for_b.connector.get(client_name.as_str()).unwrap();
+                let conn_conf = config_clone_for_b
+                    .connector
+                    .get(client_name.as_str())
+                    .unwrap();
                 let ctor = connector::create(conn_conf).await?;
                 let t = Arc::new(
                     ctor.udp_tunnel(format!(
                         "{}:{}",
-                        (&udp_packet).meta.dst_addr,
-                        (&udp_packet).meta.dst_port,
+                        (&udp_packet).meta.src_addr,
+                        (&udp_packet).meta.src_port,
                     ))
                     .await?
                     .unwrap(),
                 );
-                let _ =
-                    udp_tunnel_sender.take().unwrap().send(Arc::clone(&t));
+                let _ = udp_tunnel_sender.take().unwrap().send(Arc::clone(&t));
                 udp_tunnel.replace(Arc::clone(&t));
             }
 
@@ -153,8 +156,8 @@ pub async fn handle_udp_connection(
     let shutdown_notifier_for_c = shutdown_notifier.clone();
     let c: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         let udp_tunnel_res = udp_tunnel_receiver.await;
-        if udp_tunnel_res.is_err(){
-            debug!("udp_tunnel_receiver error {:?}", udp_tunnel_res.err());
+        if udp_tunnel_res.is_err() {
+            debug!("udp_tunnel_receiver c error {:?}", udp_tunnel_res.err());
             shutdown_notifier_for_c.notify_waiters();
             return Ok(());
         }
@@ -175,15 +178,17 @@ pub async fn handle_udp_connection(
                 break;
             }
             let udp_packet = res?;
-            let (payloads, src_addr_str, _) = udp_packet.reply_bytes();
+            let (payloads, src_addr_str, dst_addr) = udp_packet.reply_bytes();
             debug!(
-                "udp tunnel udp_packet read src {} {:?} \n{:?}",
-                &src_addr_str, udp_packet, &payloads
+                "udp c tunnel udp_packet read src {} {} {:?} \n{:?}",
+                &src_addr_str,&dst_addr, udp_packet, &payloads
             );
+            let mut i=0;
             for payload in payloads {
                 let res = udp_socket_c
                     .send_to(payload.as_slice(), src_addr_str.clone())
                     .await;
+                i+=1;
                 if res.is_err() {
                     warn!(
                         "udp loop c udp server send error {:?}",
