@@ -1,10 +1,8 @@
-use std::io::{Error, ErrorKind};
-use crate::def::{RunAccStream, RunAcceptor, RunReadHalf, RunStream, RunUdpReader, RunUdpWriter, RunWriteHalf};
+use std::io::ErrorKind;
+use crate::def::{RunAccStream, RunAcceptor, RunReadHalf, RunWriteHalf};
 use crate::util::RunAddr;
 use log::{debug};
 use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::sync::Notify;
 use url::Url;
 
 #[allow(dead_code)]

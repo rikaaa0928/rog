@@ -1,10 +1,8 @@
 pub mod config;
 
 use crate::util::RunAddr;
-use std::future::Future;
 use std::io::{Error, ErrorKind, Result};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use tokio::net::ToSocketAddrs;
 
 #[async_trait::async_trait]
 pub trait RunReadHalf: Send {

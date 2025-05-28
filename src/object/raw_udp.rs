@@ -1,23 +1,16 @@
-use crate::def::{
-    RouterSet, RunAcceptor, RunConnector, RunReadHalf, RunUdpReader, RunUdpWriter,
-    RunWriteHalf, UDPPacket,
-};
+use crate::connector;
+use crate::def::{RouterSet, RunUdpReader, RunUdpWriter, UDPPacket};
 use crate::object::config::ObjectConfig;
-use crate::router::DefaultRouter;
 use crate::util::RunAddr;
-use crate::{connector, listener};
 use log::{debug, warn};
-use std::io;
 use std::io::{Error, ErrorKind, Result};
-use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::UdpSocket;
-use tokio::sync::{oneshot, Mutex, Notify};
+use tokio::sync::Notify;
 use tokio::{select, spawn};
 
 pub async fn handle_rwa_udp(
     mut r: Box<dyn RunUdpReader>,
-    mut w: Box<dyn RunUdpWriter>,
+    w: Box<dyn RunUdpWriter>,
     config: Arc<ObjectConfig>,
     router: Arc<dyn RouterSet>,
     // addr: RunAddr,
@@ -39,8 +32,8 @@ pub async fn handle_rwa_udp(
         .await;
     let conn_conf = config.connector.get(client_name.as_str()).unwrap();
     let ctor = connector::create(conn_conf).await?;
-    let (mut udp_reader,udp_writer) = 
-        ctor.udp_tunnel(format!(
+    let (mut udp_reader, udp_writer) = ctor
+        .udp_tunnel(format!(
             "{}:{}",
             (&first_packet).meta.src_addr,
             (&first_packet).meta.src_port,
@@ -100,7 +93,7 @@ pub async fn handle_rwa_udp(
     let shutdown_notifier_for_c = shutdown_notifier.clone();
     // let udp_tunnal_c=Arc::clone(&udp_tunnel);
     let c: tokio::task::JoinHandle<Result<()>> = spawn(async move {
-        'c_job: loop {
+        loop {
             let res: Result<UDPPacket> = select! {
                 biased;
                 _ = shutdown_notifier_for_c.notified() => {
@@ -118,7 +111,8 @@ pub async fn handle_rwa_udp(
             let udp_packet = res?;
             debug!(
                 "raw udp tunnel udp_packet read src {:?} {:?}",
-                (&udp_packet).meta.src_addr,(&udp_packet).meta.src_port,
+                (&udp_packet).meta.src_addr,
+                (&udp_packet).meta.src_port,
             );
             w.write(udp_packet).await?;
         }

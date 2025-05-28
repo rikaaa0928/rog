@@ -1,13 +1,11 @@
 use hickory_resolver::config::{
-    NameServerConfig, NameServerConfigGroup, ResolverConfig, ResolverOpts,
+    NameServerConfig, ResolverConfig, ResolverOpts,
 };
 use hickory_resolver::proto::xfer::Protocol;
 use hickory_resolver::{AsyncResolver, TokioAsyncResolver};
-use log::error;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::str::FromStr;
-use std::sync::{Arc, Mutex, RwLock};
+use std::net::IpAddr;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 const CACHE_EXPIRATION: Duration = Duration::from_secs(3 * 60); // 3 minutes

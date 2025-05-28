@@ -75,7 +75,7 @@ impl TryInto<UDPPacket> for UdpReq {
 }
 
 impl UdpReq {
-    fn from_packet(packet: UDPPacket, auth: String) -> UdpReq {
+    pub(crate) fn from_packet(packet: UDPPacket, auth: String) -> UdpReq {
         UdpReq {
             auth,
             payload: Some(packet.data),

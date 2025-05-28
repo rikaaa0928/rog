@@ -25,8 +25,8 @@ impl RunAcceptor for TcpRunAcceptor {
 
     async fn handshake(
         &self,
-        r: &mut dyn RunReadHalf,
-        w: &mut dyn RunWriteHalf,
+        _: &mut dyn RunReadHalf, 
+        _: &mut dyn RunWriteHalf,
     ) -> std::io::Result<RunAddr> {
         Ok(RunAddr {
             addr: "".to_string(),
@@ -39,10 +39,10 @@ impl RunAcceptor for TcpRunAcceptor {
 
     async fn post_handshake(
         &self,
-        r: &mut dyn RunReadHalf,
-        w: &mut dyn RunWriteHalf,
-        error: bool,
-        port: u16,
+        _: &mut dyn RunReadHalf,
+        _: &mut dyn RunWriteHalf,
+        _: bool,
+        _: u16,
     ) -> std::io::Result<()> {
         Ok(())
     }

@@ -1,11 +1,9 @@
 use crate::def::{RouterSet, RunAccStream, RunConnector};
 use crate::object::config::ObjectConfig;
-use crate::router::DefaultRouter;
-use crate::util::RunAddr;
 use crate::{connector, listener};
 use log::{debug, error};
 use std::io;
-use std::io::{Error, ErrorKind, Result};
+use std::io::Error;
 use std::sync::Arc;
 use tokio::spawn;
 use tokio::sync::Mutex;

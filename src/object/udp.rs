@@ -1,15 +1,13 @@
 use crate::def::{RouterSet, RunAcceptor, RunConnector, RunReadHalf, RunWriteHalf, UDPPacket};
 use crate::object::config::ObjectConfig;
-use crate::router::DefaultRouter;
 use crate::util::RunAddr;
-use crate::{connector, listener};
+use crate::connector;
 use log::{debug, info, warn};
-use std::io;
 use std::io::{Error, ErrorKind, Result};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::sync::{oneshot, Mutex, Notify};
+use tokio::sync::Notify;
 use tokio::{select, spawn};
 
 pub async fn handle_udp_connection(
@@ -234,12 +232,11 @@ pub async fn handle_udp_connection(
                 "udp c tunnel udp_packet read src {} {} {:?} \n{:?}",
                 &src_addr_str, &dst_addr, udp_packet, &payloads
             );
-            let mut i = 0;
+
             for payload in payloads {
                 let res = udp_socket_writer
                     .send_to(payload.as_slice(), src_addr_str.clone())
                     .await;
-                i += 1;
                 if res.is_err() {
                     warn!("udp loop c udp server send error {:?}", res.err());
                     break 'c_job;

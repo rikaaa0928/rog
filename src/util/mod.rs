@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use crate::util::socks5::request::Request;
 use std::str;
 use crate::util::socks5::CMD_UDP;

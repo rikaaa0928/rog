@@ -5,7 +5,7 @@ use crate::stream::grpc_client::pb::{StreamReq, StreamRes, UdpReq, UdpRes};
 use crate::stream::grpc_server::GrpcServerRunStream;
 use crate::stream::grpc_udp_server::{GrpcUdpServerReadHalf, GrpcUdpServerWriteHalf};
 use crate::util::RunAddr;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -290,10 +290,10 @@ impl RunAcceptor for GrpcRunListener {
 
     async fn post_handshake(
         &self,
-        r: &mut dyn RunReadHalf,
-        w: &mut dyn RunWriteHalf,
-        error: bool,
-        port: u16,
+        _: &mut dyn RunReadHalf,
+        _: &mut dyn RunWriteHalf,
+        _: bool,
+        _: u16,
     ) -> std::io::Result<()> {
         Ok(())
     }

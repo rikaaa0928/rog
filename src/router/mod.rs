@@ -7,12 +7,11 @@ mod test;
 
 use crate::def;
 use crate::def::config::{RouteData, Router};
-use crate::router::data::{load_route_data, InnerRouteData};
+use crate::router::data::load_route_data;
 use crate::router::matcher::Matcher;
 use crate::router::resolver::Resolver;
 use crate::router::router::DefaultBaseRouter;
 use crate::util::RunAddr;
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 

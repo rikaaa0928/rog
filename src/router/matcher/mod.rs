@@ -1,5 +1,4 @@
 mod cidr;
-mod def;
 mod regex;
 mod test;
 pub mod util;

@@ -1,12 +1,10 @@
-use crate::def::{RouterSet, RunConnector, RunReadHalf, RunStream, RunWriteHalf};
-use crate::object::config::ObjectConfig;
+use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
 use crate::util::RunAddr;
 use log::debug;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::sync::{Mutex, Notify};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Notify;
 use tokio::select;
 
 pub async fn handle_tcp_connection(
