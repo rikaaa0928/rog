@@ -287,14 +287,4 @@ impl RunAcceptor for GrpcRunListener {
             None => Err(Error::new(ErrorKind::Other, "handshake failed")),
         }
     }
-
-    async fn post_handshake(
-        &self,
-        _: &mut dyn RunReadHalf,
-        _: &mut dyn RunWriteHalf,
-        _: bool,
-        _: u16,
-    ) -> std::io::Result<()> {
-        Ok(())
-    }
 }

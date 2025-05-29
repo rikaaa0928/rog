@@ -45,11 +45,13 @@ pub trait RunAcceptor: Send + Sync {
     // stream post handshake
     async fn post_handshake(
         &self,
-        r: &mut dyn RunReadHalf,
-        w: &mut dyn RunWriteHalf,
-        error: bool,
-        port: u16,
-    ) -> Result<()>;
+        _: &mut dyn RunReadHalf,
+        _: &mut dyn RunWriteHalf,
+        _: bool,
+        _: u16,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]

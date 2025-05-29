@@ -1,4 +1,4 @@
-use crate::def::{RouterSet, RunAccStream, RunConnector};
+use crate::def::{RouterSet, RunAccStream};
 use crate::object::config::ObjectConfig;
 use crate::{connector, listener};
 use log::{debug, error};

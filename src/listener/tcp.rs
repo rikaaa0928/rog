@@ -36,16 +36,6 @@ impl RunAcceptor for TcpRunAcceptor {
             cache: None,
         })
     }
-
-    async fn post_handshake(
-        &self,
-        _: &mut dyn RunReadHalf,
-        _: &mut dyn RunWriteHalf,
-        _: bool,
-        _: u16,
-    ) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 #[async_trait::async_trait]

@@ -3,7 +3,6 @@ use crate::util::RunAddr;
 use log::debug;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Notify;
 use tokio::select;
 

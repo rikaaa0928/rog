@@ -59,14 +59,4 @@ impl RunAcceptor for HttpRunAcceptor {
             cache,
         })
     }
-
-    async fn post_handshake(
-        &self,
-        _r: &mut dyn RunReadHalf,
-        _w: &mut dyn RunWriteHalf,
-        _error: bool,
-        _port: u16,
-    ) -> std::io::Result<()> {
-        Ok(())
-    }
 }
