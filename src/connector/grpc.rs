@@ -1,6 +1,6 @@
 use crate::def::{config, RunConnector, RunStream, RunUdpReader, RunUdpWriter};
-use crate::stream::grpc_client::pb::rog_service_client::RogServiceClient;
-use crate::stream::grpc_client::pb::{StreamReq, UdpReq};
+use crate::proto::v1::pb::rog_service_client::RogServiceClient;
+use crate::proto::v1::pb::{StreamReq, UdpReq};
 use crate::stream::grpc_client::GrpcClientRunStream;
 use crate::stream::grpc_udp_client::{GrpcUdpClientRunReader, GrpcUdpClientRunWriter};
 use std::io;

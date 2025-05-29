@@ -1,7 +1,7 @@
 use crate::def::{
     RunUdpReader, RunUdpWriter, UDPPacket,
 };
-use crate::stream::grpc_client::pb::{UdpReq, UdpRes};
+use crate::proto::v1::pb::{UdpReq, UdpRes};
 use futures::StreamExt;
 use std::io::ErrorKind;
 use tokio::sync::mpsc::Sender;

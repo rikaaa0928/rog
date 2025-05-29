@@ -1,5 +1,4 @@
 use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
-use crate::stream::grpc_client::pb::{StreamReq, StreamRes};
 use crate::util::RunAddr;
 use futures::StreamExt;
 use std::io::ErrorKind;
@@ -7,10 +6,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 use tonic::Streaming;
-
-pub mod pb {
-    tonic::include_proto!("moe.rikaaa0928.rog");
-}
+use crate::proto::v1::pb::{StreamReq, StreamRes};
 
 pub struct GrpcClientReadHalf {
     reader: Arc<Mutex<Streaming<StreamRes>>>,

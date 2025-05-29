@@ -1,7 +1,7 @@
 use crate::def::{RouterSet, RunAccStream, RunAcceptor, RunListener, RunReadHalf, RunWriteHalf};
 use crate::object::config::ObjectConfig;
-use crate::stream::grpc_client::pb::rog_service_server::{RogService, RogServiceServer};
-use crate::stream::grpc_client::pb::{StreamReq, StreamRes, UdpReq, UdpRes};
+use crate::proto::v1::pb::rog_service_server::{RogService, RogServiceServer};
+use crate::proto::v1::pb::{StreamReq, StreamRes, UdpReq, UdpRes};
 use crate::stream::grpc_server::GrpcServerRunStream;
 use crate::stream::grpc_udp_server::{GrpcUdpServerReadHalf, GrpcUdpServerWriteHalf};
 use crate::util::RunAddr;

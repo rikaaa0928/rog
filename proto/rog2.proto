@@ -1,0 +1,23 @@
+syntax = "proto3";
+package moe.rikaaa0928.rogv2;
+
+message StreamReq {
+  string auth = 1;
+  optional bytes payload = 2;
+  optional string dstAddr = 3;
+  optional uint32 dstPort = 4;
+  optional string srcAddr = 5;
+  optional uint32 srcPort = 6;
+}
+
+message StreamRes {
+  optional bytes payload = 1;
+  optional string dstAddr = 2;
+  optional uint32 dstPort = 3;
+  optional string srcAddr = 4;
+  optional uint32 srcPort = 5;
+}
+
+service RogV2 {
+  rpc stream(stream StreamReq) returns (stream StreamRes) {}
+}

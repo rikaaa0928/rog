@@ -15,6 +15,7 @@ mod router;
 mod stream;
 mod test;
 mod util;
+mod proto;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
