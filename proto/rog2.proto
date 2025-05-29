@@ -6,21 +6,24 @@ message StreamReq {
   bytes payload = 2;
   string dstAddr = 3;
   uint32 dstPort = 4;
-  string srcAddr = 5;
-  uint32 srcPort = 6;
-  uint32 cmd = 7; // 0:data, 1: handshake
-  string srcID = 8;
-  map<string, string> addons = 9;
+  string srcAddr = 5; // For UDP, client can suggest its source, server may override or use it for context
+  uint32 srcPort = 6; // For UDP
+  bool udp = 7;
+  uint32 cmd = 8; // 0: DATA, 1: HANDSHAKE_REQ, 3: CLOSE_SRC_ID
+  string srcID = 9; // Unique ID for the logical stream within this gRPC stream
+  map<string, string> addons = 10;
 }
 
 message StreamRes {
   bytes payload = 1;
-  string dstAddr = 2;
-  uint32 dstPort = 3;
-  string srcAddr = 4;
-  uint32 srcPort = 5;
-  uint32 cmd = 6;// 0:data, 1: handshake done, 2: conflict src id
-  map<string, string> addons = 7;
+  string dstAddr = 2; // For UDP, original destination from client's perspective
+  uint32 dstPort = 3; // For UDP
+  string srcAddr = 4; // For UDP, actual source of the packet from the internet
+  uint32 srcPort = 5; // For UDP
+  bool udp = 6;
+  uint32 cmd = 7; // 0: DATA, 1: HANDSHAKE_DONE, 2: HANDSHAKE_CONFLICT_SRC_ID
+  string srcID = 8; // Corresponding srcID from StreamReq, essential for demultiplexing
+  map<string, string> addons = 9;
 }
 
 service RogV2 {

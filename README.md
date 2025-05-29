@@ -94,6 +94,46 @@ proto = "tcp"
 - `pw`: Optional password for authentication.
 - `proto`: The protocol of the connector (e.g., "tcp", "grpc").
 
+### RogV2 Configuration Example
+
+The RogV2 protocol allows multiplexing TCP and UDP connections over a single gRPC stream. Here's an example configuration:
+
+```toml
+# RogV2 Config Example
+# This configuration demonstrates how to use the new rogv2 protocol,
+# which supports multiplexing TCP and UDP connections over the same gRPC stream.
+
+[[listener]]
+name = "rogv2_server"
+endpoint = "0.0.0.0:8443"  # gRPC service listening address
+proto = "rogv2"
+pw = "your_auth_password"  # Authentication password
+router = "default_router"
+
+[[connector]]
+name = "rogv2_client"
+endpoint = "https://your-server.com:8443"  # gRPC server address
+proto = "rogv2"
+pw = "your_auth_password"  # Authentication password
+
+# Routing configuration
+[[router]]
+name = "default_router"
+default = "rogv2_client"
+
+# Usage Example:
+# 1. After the server starts, it will listen for gRPC connections on port 8443.
+# 2. After the client connects to the server, it will automatically multiplex multiple TCP/UDP connections
+#    over the same gRPC stream.
+# 3. Each connection has a unique srcID identifier to ensure correct data packet routing.
+
+# Features:
+# - TCP and UDP connections are multiplexed over the same gRPC stream, reducing connection overhead.
+# - Uses srcID for connection identification and data packet routing.
+# - Supports authentication mechanisms.
+# - Supports connection handshake and conflict detection.
+```
+
 ## Usage
 
 Here's an example of how to configure rog to act as a SOCKS5 proxy:

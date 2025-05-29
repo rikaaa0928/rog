@@ -19,12 +19,12 @@ use tonic::{Code, Request, Response, Status, Streaming};
 
 pub struct GrpcListener {
     cfg: ObjectConfig,
-    router: Arc<dyn RouterSet>,
+    // router: Arc<dyn RouterSet>, // Removed
 }
 
 impl GrpcListener {
-    pub fn new(cfg: ObjectConfig, router: Arc<dyn RouterSet>) -> GrpcListener {
-        GrpcListener { cfg, router }
+    pub fn new(cfg: ObjectConfig) -> GrpcListener { // _router argument completely removed
+        GrpcListener { cfg }
     }
 }
 
@@ -32,7 +32,7 @@ struct GrpcServer {
     sender: Sender<GrpcServerRunStream>,
     udp_sender: Sender<(Streaming<UdpReq>, Sender<Result<UdpRes, Status>>, String)>,
     cfg: ObjectConfig,
-    router: Arc<dyn RouterSet>,
+    // router: Arc<dyn RouterSet>, // Removed
 }
 type ResponseStream = Pin<Box<dyn Stream<Item = Result<StreamRes, Status>> + Send>>;
 type ResponseUdp = Pin<Box<dyn Stream<Item = Result<UdpRes, Status>> + Send>>;
@@ -229,7 +229,7 @@ impl RunListener for GrpcListener {
             sender: tx,
             udp_sender: udp_tx,
             cfg: self.cfg.clone(),
-            router: self.router.clone(),
+            // router: self.router.clone(), // Removed
         };
         let addr = addr.to_owned();
         spawn(async move {

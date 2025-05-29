@@ -1,11 +1,12 @@
 use crate::connector;
-use crate::def::{RouterSet, RunUdpReader, RunUdpWriter, UDPPacket};
+use crate::def::{RunConnector, RouterSet, RunUdpReader, RunUdpWriter, UDPPacket}; // Added RunConnector
 use crate::object::config::ObjectConfig;
 use crate::util::RunAddr;
 use log::{debug, warn};
-use std::io::{Error, ErrorKind, Result};
+use std::collections::HashMap; // Added HashMap
+use std::io::{self, Error, ErrorKind, Result}; // Ensure io is imported for io::Error::new
 use std::sync::Arc;
-use tokio::sync::Notify;
+use tokio::sync::{Mutex, Notify}; // Added Mutex
 use tokio::{select, spawn};
 
 pub async fn handle_rwa_udp(
@@ -13,8 +14,7 @@ pub async fn handle_rwa_udp(
     w: Box<dyn RunUdpWriter>,
     config: Arc<ObjectConfig>,
     router: Arc<dyn RouterSet>,
-    // addr: RunAddr,
-    // connector: Arc<Mutex<Box<dyn RunConnector>>>,
+    connector_cache: Arc<Mutex<HashMap<String, Arc<Mutex<Box<dyn RunConnector>>>>>>, // New argument
 ) -> Result<()> {
     debug!("raw udp, route based on the first packet");
     let first_packet = r.read().await?;
@@ -25,21 +25,41 @@ pub async fn handle_rwa_udp(
             &RunAddr {
                 addr: (&first_packet).meta.dst_addr.clone(),
                 port: (&first_packet).meta.dst_port,
-                udp: false,
+                udp: true, // Set to true for UDP context
                 cache: None,
             },
         )
         .await;
-    let conn_conf = config.connector.get(client_name.as_str()).unwrap();
-    let ctor = connector::create(conn_conf).await?;
-    let (mut udp_reader, udp_writer) = ctor
+
+    let conn_conf = config.connector.get(client_name.as_str())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("Connector config '{}' not found for UDP", client_name)))?;
+
+    let connector_obj: Arc<Mutex<Box<dyn RunConnector>>>;
+    {
+        let mut cache_guard = connector_cache.lock().await;
+        if let Some(cached_connector) = cache_guard.get(client_name.as_str()) {
+            connector_obj = Arc::clone(cached_connector);
+            debug!("Reusing cached connector for UDP: {}", client_name);
+        } else {
+            debug!("Creating new connector for UDP: {}", client_name);
+            let new_connector = connector::create(conn_conf).await?;
+            let new_connector_arc = Arc::new(Mutex::new(new_connector));
+            cache_guard.insert(client_name.clone(), Arc::clone(&new_connector_arc));
+            connector_obj = new_connector_arc;
+        }
+    }
+
+    let (mut udp_reader, udp_writer) = connector_obj
+        .lock()
+        .await
         .udp_tunnel(format!(
             "{}:{}",
             (&first_packet).meta.src_addr,
             (&first_packet).meta.src_port,
         ))
         .await?
-        .unwrap();
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "UDP tunnel creation failed or not supported by connector"))?;
+    
     udp_writer.write(first_packet).await?;
 
     let shutdown_notifier = Arc::new(Notify::new());
