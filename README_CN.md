@@ -94,44 +94,6 @@ proto = "tcp"
 - `pw`: 用于身份验证的可选密码。
 - `proto`: 连接器的协议 (例如, "tcp", "grpc")。
 
-### RogV2 配置示例
-
-RogV2 协议允许在单个 gRPC 流上复用 TCP 和 UDP 连接。这是一个配置示例：
-
-```toml
-# RogV2 配置示例
-# 这个配置展示了如何使用新的rogv2协议，它支持在同一个gRPC stream上复用TCP和UDP连接
-
-[[listener]]
-name = "rogv2_server"
-endpoint = "0.0.0.0:8443"  # gRPC服务监听地址
-proto = "rogv2"
-pw = "your_auth_password"  # 认证密码
-router = "default_router"
-
-[[connector]]
-name = "rogv2_client"
-endpoint = "https://your-server.com:8443"  # gRPC服务端地址
-proto = "rogv2"
-pw = "your_auth_password"  # 认证密码
-
-# 路由配置
-[[router]]
-name = "default_router"
-default = "rogv2_client"
-
-# 使用示例：
-# 1. 服务端启动后会监听8443端口的gRPC连接
-# 2. 客户端连接到服务端后，会自动复用同一个gRPC stream处理多个TCP/UDP连接
-# 3. 每个连接都有唯一的srcID标识，确保数据包正确分流
-
-# 特性：
-# - TCP和UDP连接复用同一个gRPC stream，减少连接开销
-# - 使用srcID进行连接标识和数据包分流
-# - 支持认证机制
-# - 支持连接握手和冲突检测
-```
-
 ## 用法
 
 以下是如何配置 rog 以充当 SOCKS5 代理的示例：
