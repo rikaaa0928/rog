@@ -9,12 +9,12 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, Notify}; // Added Mutex
 use tokio::{select, spawn};
 
-pub async fn handle_rwa_udp(
+pub async fn handle_raw_udp(
     mut r: Box<dyn RunUdpReader>,
     w: Box<dyn RunUdpWriter>,
     config: Arc<ObjectConfig>,
     router: Arc<dyn RouterSet>,
-    connector_cache: Arc<Mutex<HashMap<String, Arc<Mutex<Box<dyn RunConnector>>>>>>, // New argument
+    connector_cache: Arc<Mutex<HashMap<String, Arc<Box<dyn RunConnector>>>>>, // New argument
 ) -> Result<()> {
     debug!("raw udp, route based on the first packet");
     let first_packet = r.read().await?;
@@ -34,7 +34,7 @@ pub async fn handle_rwa_udp(
     let conn_conf = config.connector.get(client_name.as_str())
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("Connector config '{}' not found for UDP", client_name)))?;
 
-    let connector_obj: Arc<Mutex<Box<dyn RunConnector>>>;
+    let connector_obj: Arc<Box<dyn RunConnector>>;
     {
         let mut cache_guard = connector_cache.lock().await;
         if let Some(cached_connector) = cache_guard.get(client_name.as_str()) {
@@ -43,15 +43,13 @@ pub async fn handle_rwa_udp(
         } else {
             debug!("Creating new connector for UDP: {}", client_name);
             let new_connector = connector::create(conn_conf).await?;
-            let new_connector_arc = Arc::new(Mutex::new(new_connector));
+            let new_connector_arc = Arc::new(new_connector);
             cache_guard.insert(client_name.clone(), Arc::clone(&new_connector_arc));
             connector_obj = new_connector_arc;
         }
     }
 
     let (mut udp_reader, udp_writer) = connector_obj
-        .lock()
-        .await
         .udp_tunnel(format!(
             "{}:{}",
             (&first_packet).meta.src_addr,

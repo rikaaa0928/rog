@@ -17,7 +17,7 @@ pub mod raw_udp;
 pub struct Object {
     config: Arc<ObjectConfig>,
     router: Arc<dyn RouterSet>,
-    connector_cache: Arc<Mutex<HashMap<String, Arc<Mutex<Box<dyn RunConnector>>>>>>, // New field
+    connector_cache: Arc<Mutex<HashMap<String, Arc<Box<dyn RunConnector>>>>>, // New field
 }
 
 impl Object {
@@ -78,7 +78,7 @@ impl Object {
                                     let conn_conf = config_clone.connector.get(client_name.as_str())
                                         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("Connector config '{}' not found", client_name)))?;
 
-                                    let connector_obj: Arc<Mutex<Box<dyn RunConnector>>>;
+                                    let connector_obj: Arc<Box<dyn RunConnector>>;
                                     {
                                         let mut cache_guard = cache_clone.lock().await;
                                         if let Some(cached_connector) = cache_guard.get(client_name.as_str()) {
@@ -87,7 +87,7 @@ impl Object {
                                         } else {
                                             debug!("Creating new connector for TCP: {}", client_name);
                                             let new_connector = connector::create(conn_conf).await?;
-                                            let new_connector_arc = Arc::new(Mutex::new(new_connector));
+                                            let new_connector_arc = Arc::new(new_connector);
                                             cache_guard.insert(client_name.clone(), Arc::clone(&new_connector_arc));
                                             connector_obj = new_connector_arc;
                                         }
@@ -95,14 +95,13 @@ impl Object {
 
                                     debug!("Handshake successful {:?}", addr_ref);
                                     let client_stream_res = Arc::clone(&connector_obj)
-                                        .lock()
-                                        .await
                                         .connect(addr_ref.endpoint())
                                         .await;
                                     let mut error_occurred = false; // Renamed for clarity
                                     if client_stream_res.is_err() {
                                         error_occurred = true;
                                     }
+                                    debug!("object connect successful {:?} {:?}", addr_ref,&error_occurred);
                                     let client_stream = client_stream_res?;
                                     main_acceptor_clone
                                         .post_handshake(r.as_mut(), w.as_mut(), error_occurred, 0)
@@ -115,7 +114,7 @@ impl Object {
                     }
                     RunAccStream::UDPSocket((r, w)) => {
                         // Pass the cloned cache to raw_udp handling
-                        raw_udp::handle_rwa_udp(r, w, config_clone, router_clone, cache_clone).await
+                        raw_udp::handle_raw_udp(r, w, config_clone, router_clone, cache_clone).await
                     }
                 }
             });

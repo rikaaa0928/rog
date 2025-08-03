@@ -28,7 +28,7 @@ pub enum RunAccStream {
 }
 
 #[async_trait::async_trait]
-pub trait RunConnector: Send {
+pub trait RunConnector: Send +Sync {
     async fn connect(&self, addr: String) -> Result<Box<dyn RunStream>>;
 
     async fn udp_tunnel(&self, src_addr: String) -> Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>>;
