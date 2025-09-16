@@ -97,7 +97,6 @@ jobs:
 
   build-and-push-docker:
     name: Build and push docker image
-    needs: build-and-upload
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
