@@ -2,7 +2,6 @@ name: release
 
 on:
   push:
-    # Sequence of patterns matched against refs/tags
     tags:
       - 'v*'
 
@@ -22,9 +21,11 @@ jobs:
           - build: linux
             os: ubuntu-latest
             target: x86_64-unknown-linux-musl
+            platform: linux/amd64
           - build: linux-arm64
             os: ubuntu-latest
             target: aarch64-unknown-linux-musl
+            platform: linux/arm64
           - build: linux-gnu
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
@@ -40,11 +41,9 @@ jobs:
           - build: windows
             os: windows-latest
             target: x86_64-pc-windows-msvc
-
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-
       - name: Get the release version from the tag
         shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
@@ -53,32 +52,31 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Rust
-        # Or @nightly if you want
         uses: dtolnay/rust-toolchain@stable
-        # Arguments to pass in
         with:
-          # Make Rust compile to our target (defined in the matrix)
           targets: ${{ matrix.target }}
-
       - name: Build
         uses: actions-rs/cargo@v1
         with:
           use-cross: true
           command: build
-          args: --verbose --release --target ${{ matrix.target }}  --bin rog
-
-      - name: Build archive
+          args: --verbose --release --target ${{ matrix.target }} --bin rog
+      - name: Build archive and prepare for Docker
         shell: bash
         run: |
-          # Replace with the name of your binary
           binary_name="rog"
-
           dirname="$binary_name-${{ env.VERSION }}-${{ matrix.target }}"
           mkdir "$dirname"
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             mv "target/${{ matrix.target }}/release/$binary_name.exe" "$dirname"
           else
             mv "target/${{ matrix.target }}/release/$binary_name" "$dirname"
+          fi
+
+          # If this is a linux build for docker, copy the binary for the artifact
+          if [ -n "${{ matrix.platform }}" ]; then
+            mkdir -p release/${{ matrix.platform }}
+            cp "$dirname/$binary_name" release/${{ matrix.platform }}/
           fi
 
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
@@ -88,7 +86,12 @@ jobs:
             tar -czf "$dirname.tar.gz" "$dirname"
             echo "ASSET=$dirname.tar.gz" >> $GITHUB_ENV
           fi
-
+      - name: Upload Docker binaries artifact
+        if: matrix.platform
+        uses: actions/upload-artifact@v3
+        with:
+          name: docker-binaries-${{ matrix.target }}
+          path: release/
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
@@ -97,15 +100,26 @@ jobs:
 
   build-and-push-docker:
     name: Build and push docker image
+    needs: build-and-upload
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+      - name: Download all Docker binaries
+        uses: actions/download-artifact@v3
+        with:
+          path: release/
+      - name: Reorganize downloaded artifacts
+        run: |
+          # The download-artifact action places artifacts in subdirectories named after the artifact name.
+          # We need to move them to the structure our Dockerfile expects.
+          find release -mindepth 2 -type f -print -exec mv {} release/ \;
       - name: Get the release version from the tag
         shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
       - name: Login to GitHub Container Registry
