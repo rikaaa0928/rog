@@ -1,5 +1,5 @@
 # Use a slim base image
-FROM debian:bullseye-slim AS final
+FROM debian:trixie AS final
 
 # TARGETPLATFORM is an automatic build argument provided by docker/build-push-action
 # It will be something like linux/amd64, linux/arm64, etc.
