@@ -13,5 +13,8 @@ WORKDIR /app
 # e.g., copy release/linux/amd64/rog
 COPY release/${TARGETPLATFORM}/rog .
 
+# Grant execute permissions to the binary
+RUN chmod +x /app/rog
+
 # Set the entrypoint for the container
 ENTRYPOINT ["/app/rog"]

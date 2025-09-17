@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rog-deployment
+  labels:
+    app: rog
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rog
+  template:
+    metadata:
+      labels:
+        app: rog
+    spec:
+      containers:
+      - name: rog
+        image: ghcr.io/rikaaa0928/rog:latest
+        args: ["-c", "/etc/rog/config.toml"]
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/rog
+      volumes:
+        - name: config-volume
+          configMap:
+            # Name of the ConfigMap
+            name: rog-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rog-service
+spec:
+  selector:
+    app: rog
+  ports:
+    - name: socks5
+      protocol: TCP
+      port: 1080
+      targetPort: 1080
+  type: ClusterIP

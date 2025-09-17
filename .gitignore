@@ -3,3 +3,4 @@
 .vscode
 demo
 .cargo
+rancher-deployment.yaml
