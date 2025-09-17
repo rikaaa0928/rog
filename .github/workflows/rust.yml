@@ -115,8 +115,17 @@ jobs:
       - name: Reorganize downloaded artifacts
         run: |
           # The download-artifact action places artifacts in subdirectories named after the artifact name.
-          # We need to move them to the structure our Dockerfile expects.
-          find release -mindepth 2 -type f -print -exec mv {} release/ \;
+          # We need to move the contents to the structure our Dockerfile expects.
+          mkdir -p release/linux
+          for dir in release/docker-binaries-*; do
+            if [ -d "$dir/linux" ]; then
+              # Move the platform-specific directories (amd64, arm64) into the top-level release/linux directory
+              mv $dir/linux/* release/linux/
+            fi
+          done
+          # Verify the final structure, which should be release/linux/amd64/rog and release/linux/arm64/rog
+          echo "Final directory structure:"
+          ls -R release
       - name: Get the release version from the tag
         shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
