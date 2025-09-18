@@ -83,9 +83,9 @@ impl Object {
                                         let mut cache_guard = cache_clone.lock().await;
                                         if let Some(cached_connector) = cache_guard.get(client_name.as_str()) {
                                             connector_obj = Arc::clone(cached_connector);
-                                            debug!("Reusing cached connector for TCP: {}", client_name);
+                                            debug!("Reusing cached connector for client: {}", client_name);
                                         } else {
-                                            debug!("Creating new connector for TCP: {}", client_name);
+                                            debug!("Creating new connector for client: {}", client_name);
                                             let new_connector = connector::create(conn_conf).await?;
                                             let new_connector_arc = Arc::new(new_connector);
                                             cache_guard.insert(client_name.clone(), Arc::clone(&new_connector_arc));
