@@ -32,12 +32,18 @@ impl Object {
     pub async fn start(&self) -> io::Result<()> {
         let config_outer = self.config.clone(); // Renamed for clarity
         let router_outer = self.router.clone(); // Renamed for clarity
-        let acc = listener::create(&config_outer, router_outer.clone()).await?;
+        let acc = listener::create(&config_outer, router_outer.clone()).await.map_err(|e| {
+            error!("Failed to create listener: {}", e);
+            e
+        })?;
         let main_acceptor = Arc::new(acc);
         let connector_cache_outer = self.connector_cache.clone(); // Clone cache Arc for the loop
 
         loop {
-            let (acc_stream, _) = main_acceptor.accept().await?;
+            let (acc_stream, _) = main_acceptor.accept().await.map_err(|e| {
+                error!("Failed to accept connection: {}", e);
+                e
+            })?;
             let main_acceptor_clone = Arc::clone(&main_acceptor);
             let router_clone = Arc::clone(&router_outer);
             let config_clone = Arc::clone(&config_outer);
@@ -58,7 +64,7 @@ impl Object {
                                 if addr_ref.udp {
                                     // Assuming udp::handle_udp_connection might also need caching if it creates connectors.
                                     // For now, this part remains as is, focusing on the primary TCP/raw_udp paths.
-                                    udp::handle_udp_connection(
+                                    if let Err(e) = udp::handle_udp_connection(
                                         r,
                                         w,
                                         Arc::clone(&main_acceptor_clone),
@@ -66,7 +72,9 @@ impl Object {
                                         router_clone.clone(), // Pass cloned router
                                         addr,
                                     )
-                                    .await?;
+                                    .await {
+                                        error!("Error handling UDP connection: {}", e);
+                                    }
                                 } else {
                                     let client_name = router_clone
                                         .route(
@@ -75,8 +83,13 @@ impl Object {
                                             addr_ref,
                                         )
                                         .await;
-                                    let conn_conf = config_clone.connector.get(client_name.as_str())
-                                        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("Connector config '{}' not found", client_name)))?;
+                                    let conn_conf = match config_clone.connector.get(client_name.as_str()) {
+                                        Some(c) => c,
+                                        None => {
+                                            error!("Connector config '{}' not found", client_name);
+                                            return Ok(()); // Exit the task for this connection
+                                        }
+                                    };
 
                                     let connector_obj: Arc<Box<dyn RunConnector>>;
                                     {
@@ -86,7 +99,13 @@ impl Object {
                                             debug!("Reusing cached connector for client: {}", client_name);
                                         } else {
                                             debug!("Creating new connector for client: {}", client_name);
-                                            let new_connector = connector::create(conn_conf).await?;
+                                            let new_connector = match connector::create(conn_conf).await {
+                                                Ok(c) => c,
+                                                Err(e) => {
+                                                    error!("Failed to create connector '{}': {}", client_name, e);
+                                                    return Ok(());
+                                                }
+                                            };
                                             let new_connector_arc = Arc::new(new_connector);
                                             cache_guard.insert(client_name.clone(), Arc::clone(&new_connector_arc));
                                             connector_obj = new_connector_arc;
@@ -97,24 +116,41 @@ impl Object {
                                     let client_stream_res = Arc::clone(&connector_obj)
                                         .connect(addr_ref.endpoint())
                                         .await;
-                                    let mut error_occurred = false; // Renamed for clarity
-                                    if client_stream_res.is_err() {
-                                        error_occurred = true;
+
+                                    let error_occurred = client_stream_res.is_err();
+                                    debug!("object connect successful {:?} {:?}", addr_ref, !error_occurred);
+
+                                    let client_stream = match client_stream_res {
+                                        Ok(s) => s,
+                                        Err(e) => {
+                                            error!("Connector '{}' failed to connect to {:?}: {}", client_name, addr_ref.endpoint(), e);
+                                            // We still need to run post_handshake to inform the client
+                                            if let Err(e) = main_acceptor_clone.post_handshake(r.as_mut(), w.as_mut(), true, 0).await {
+                                                error!("Error in post_handshake after connection failure: {}", e);
+                                            }
+                                            return Ok(());
+                                        }
+                                    };
+
+                                    if let Err(e) = main_acceptor_clone.post_handshake(r.as_mut(), w.as_mut(), false, 0).await {
+                                        error!("Error in post_handshake: {}", e);
+                                        return Ok(());
                                     }
-                                    debug!("object connect successful {:?} {:?}", addr_ref,&error_occurred);
-                                    let client_stream = client_stream_res?;
-                                    main_acceptor_clone
-                                        .post_handshake(r.as_mut(), w.as_mut(), error_occurred, 0)
-                                        .await?;
-                                    tcp::handle_tcp_connection(r, w, addr, client_stream).await?;
+
+                                    if let Err(e) = tcp::handle_tcp_connection(r, w, addr, client_stream).await {
+                                        error!("Error handling TCP connection: {}", e);
+                                    }
                                 }
                             }
                         }
-                        Ok::<(), Error>(())
+                        Ok::<(), Error>(()) // This Ok is for the spawn block's Result type
                     }
                     RunAccStream::UDPSocket((r, w)) => {
                         // Pass the cloned cache to raw_udp handling
-                        raw_udp::handle_raw_udp(r, w, config_clone, router_clone, cache_clone).await
+                        if let Err(e) = raw_udp::handle_raw_udp(r, w, config_clone, router_clone, cache_clone).await {
+                            error!("Error handling raw UDP: {}", e);
+                        }
+                        Ok::<(), Error>(())
                     }
                 }
             });
