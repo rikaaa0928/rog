@@ -3,6 +3,7 @@ use crate::proto::v1::pb::rog_service_client::RogServiceClient;
 use crate::proto::v1::pb::{StreamReq, UdpReq};
 use crate::stream::grpc_client::GrpcClientRunStream;
 use crate::stream::grpc_udp_client::{GrpcUdpClientRunReader, GrpcUdpClientRunWriter};
+use log::error;
 use std::io;
 use std::io::ErrorKind;
 use std::sync::Arc;
@@ -19,11 +20,23 @@ pub struct GrpcRunConnector {
 }
 impl GrpcRunConnector {
     pub async fn new(cfg: &config::Connector) -> io::Result<Self> {
-        let x = RogServiceClient::connect(cfg.endpoint.as_ref().unwrap().clone()).await;
-        if x.is_err() {
-            return Err(io::Error::new(ErrorKind::InvalidData, "invalid endpoint"));
-        }
-        let client = x.unwrap();
+        let endpoint = cfg.endpoint.as_ref().ok_or_else(|| {
+            let err_msg = "gRPC connector config is missing 'endpoint'";
+            error!("{}", err_msg);
+            io::Error::new(ErrorKind::InvalidInput, err_msg)
+        })?;
+
+        let client = match RogServiceClient::connect(endpoint.clone()).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!(
+                    "gRPC connector failed to connect to endpoint '{}': {}",
+                    endpoint, e
+                );
+                return Err(io::Error::new(ErrorKind::Other, e));
+            }
+        };
+
         Ok(Self {
             client: Arc::new(Mutex::new(client)),
             cfg: cfg.clone(),
@@ -38,19 +51,27 @@ impl RunConnector for GrpcRunConnector {
         let (tx, rx) = mpsc::channel::<StreamReq>(8);
         let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
         let rx = Request::new(rx);
-        let res = self.client.lock().await.stream(rx).await;
-        if res.is_err() {
-            return Err(io::Error::new(ErrorKind::Other, "grpc stream error"));
-        }
-        let resp = res.unwrap().into_inner();
+
+        let resp = match self.client.lock().await.stream(rx).await {
+            Ok(r) => r.into_inner(),
+            Err(e) => {
+                error!("gRPC connector failed to open stream: {}", e);
+                return Err(io::Error::new(ErrorKind::Other, e));
+            }
+        };
+
         let t = tx.clone();
         let mut auth = StreamReq::default();
         auth.auth = self.cfg.pw.clone().unwrap();
         auth.dst_port = Some(port as u32);
         auth.dst_addr = Some(host);
         let res = t.send(auth).await;
-        if res.is_err() {
-            return Err(io::Error::new(ErrorKind::Other, "failed to send auth"));
+        if let Err(e) = res {
+            error!("gRPC connector failed to send auth request: {}", e);
+            return Err(io::Error::new(
+                ErrorKind::Other,
+                "failed to send auth request",
+            ));
         }
 
         Ok(Box::new(GrpcClientRunStream::new(

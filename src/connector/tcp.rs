@@ -1,6 +1,7 @@
 use crate::def::{RunConnector, RunStream, RunUdpReader, RunUdpWriter};
 use crate::stream::tcp::TcpRunStream;
 use crate::stream::udp::UdpRunStream;
+use log::error;
 use std::io::Result;
 use std::sync::Arc;
 use tokio::net::{TcpStream, UdpSocket};
@@ -16,7 +17,13 @@ impl TcpRunConnector {
 #[async_trait::async_trait]
 impl RunConnector for TcpRunConnector {
     async fn connect(&self, addr: String) -> Result<Box<dyn RunStream>> {
-        let tcp_stream = TcpStream::connect(addr).await?;
+        let tcp_stream = match TcpStream::connect(addr.clone()).await {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Tcp connector failed to connect to {}: {}", addr, e);
+                return Err(e);
+            }
+        };
         Ok(Box::new(TcpRunStream::new(tcp_stream)))
     }
 
