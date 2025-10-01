@@ -10,15 +10,16 @@ pub async fn handle_tcp_connection(
     mut r: Box<dyn RunReadHalf>,
     mut w: Box<dyn RunWriteHalf>,
     addr: RunAddr,
+    cache: Option<Vec<u8>>,
     client_stream: Box<dyn RunStream>,
 ) -> Result<()>
 {
     debug!("Post Handshake successful {:?}", addr);
     let (mut tcp_r, mut tcp_w) = client_stream.split();
     let shutdown_signal = Arc::new(Notify::new());
-    if addr.cache.is_some() {
+    if cache.is_some() {
         tcp_w
-            .write(addr.cache.clone().unwrap().as_slice())
+            .write(cache.unwrap().as_slice())
             .await?;
     }
 

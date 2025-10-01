@@ -26,7 +26,7 @@ pub async fn handle_raw_udp(
                 addr: (&first_packet).meta.dst_addr.clone(),
                 port: (&first_packet).meta.dst_port,
                 udp: true, // Set to true for UDP context
-                cache: None,
+                // cache: None,
             },
         )
         .await;

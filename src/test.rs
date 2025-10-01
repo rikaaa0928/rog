@@ -35,7 +35,7 @@ mod tests {
                             Err(e) => {
                                 println!("Handshake error: {}", e);
                             }
-                            Ok(addr) => {
+                            Ok((addr,payload_cache)) => {
                                 let addr_ref = &addr;
                                 if addr_ref.udp {
                                     println!("udp? {:?}", addr_ref);

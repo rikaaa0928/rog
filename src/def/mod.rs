@@ -20,18 +20,19 @@ pub trait RunStream: Send {
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>);
 }
 
-
-
 pub enum RunAccStream {
     TCPStream(Box<dyn RunStream>),
     UDPSocket((Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)),
 }
 
 #[async_trait::async_trait]
-pub trait RunConnector: Send +Sync {
+pub trait RunConnector: Send + Sync {
     async fn connect(&self, addr: String) -> Result<Box<dyn RunStream>>;
 
-    async fn udp_tunnel(&self, src_addr: String) -> Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>>;
+    async fn udp_tunnel(
+        &self,
+        src_addr: String,
+    ) -> Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>>;
 }
 
 #[async_trait::async_trait]
@@ -39,8 +40,11 @@ pub trait RunAcceptor: Send + Sync {
     async fn accept(&self) -> Result<(RunAccStream, SocketAddr)>;
 
     // stream handshake
-    async fn handshake(&self, r: &mut dyn RunReadHalf, w: &mut dyn RunWriteHalf)
-        -> Result<RunAddr>;
+    async fn handshake(
+        &self,
+        r: &mut dyn RunReadHalf,
+        w: &mut dyn RunWriteHalf,
+    ) -> Result<(RunAddr, Option<Vec<u8>>)>;
 
     // stream post handshake
     async fn post_handshake(

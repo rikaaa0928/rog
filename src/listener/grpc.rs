@@ -23,7 +23,8 @@ pub struct GrpcListener {
 }
 
 impl GrpcListener {
-    pub fn new(cfg: ObjectConfig) -> GrpcListener { // _router argument completely removed
+    pub fn new(cfg: ObjectConfig) -> GrpcListener {
+        // _router argument completely removed
         GrpcListener { cfg }
     }
 }
@@ -276,13 +277,13 @@ impl RunAcceptor for GrpcRunListener {
         &self,
         r: &mut dyn RunReadHalf,
         w: &mut dyn RunWriteHalf,
-    ) -> std::io::Result<RunAddr> {
+    ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
         match r.handshake().await? {
             Some((addr, auth)) => {
                 if auth != self.auth {
                     return Err(Error::new(ErrorKind::Other, "invalid auth"));
                 }
-                Ok(addr)
+                Ok((addr, None))
             }
             None => Err(Error::new(ErrorKind::Other, "handshake failed")),
         }

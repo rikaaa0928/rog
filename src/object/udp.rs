@@ -95,7 +95,7 @@ pub async fn handle_udp_connection(
                 addr: (&udp_packet).meta.dst_addr.clone(),
                 port: (&udp_packet).meta.dst_port,
                 udp: false,
-                cache: None,
+                // cache: None,
             },
         )
         .await;

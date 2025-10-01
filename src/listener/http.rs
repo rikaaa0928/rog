@@ -1,7 +1,7 @@
-use std::io::ErrorKind;
 use crate::def::{RunAccStream, RunAcceptor, RunReadHalf, RunWriteHalf};
 use crate::util::RunAddr;
-use log::{debug};
+use log::debug;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use url::Url;
 
@@ -28,19 +28,23 @@ impl RunAcceptor for HttpRunAcceptor {
         &self,
         r: &mut dyn RunReadHalf,
         w: &mut dyn RunWriteHalf,
-    ) -> std::io::Result<RunAddr> {
+    ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
         let mut buf = [0u8; 2048];
         let n = r.read(&mut buf).await?;
         let data = buf[0..n].to_vec();
         let mut cache = Some(data.clone());
         let str = String::from_utf8(data).map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
         let lines = str.split("\r\n").collect::<Vec<&str>>();
-        let f_line = lines.first().ok_or_else(|| { // 2. 使用 lines.first().ok_or_else 处理空数据
+        let f_line = lines.first().ok_or_else(|| {
+            // 2. 使用 lines.first().ok_or_else 处理空数据
             std::io::Error::new(ErrorKind::InvalidData, "Empty request data")
         })?;
         let parts = f_line.split(" ").collect::<Vec<&str>>();
         if parts.len() < 2 {
-            return Err(std::io::Error::new(ErrorKind::InvalidData, "invalid parts ".to_owned() +f_line ));
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "invalid parts ".to_owned() + f_line,
+            ));
         }
         let mut dst = parts[1].to_string();
         if !dst.contains("://") {
@@ -56,11 +60,19 @@ impl RunAcceptor for HttpRunAcceptor {
             debug!("http HTTP/1.1 200 Connection Established\r\n\r\n");
         }
 
-        Ok(RunAddr {
-            addr: ip_port.host_str().ok_or_else(|| std::io::Error::new(ErrorKind::InvalidData, "URL has no host"))?.to_owned(),
-            port: ip_port.port_or_known_default().ok_or_else(|| std::io::Error::new(ErrorKind::InvalidData, "URL has no port"))?,
-            udp: false,
+        Ok((
+            RunAddr {
+                addr: ip_port
+                    .host_str()
+                    .ok_or_else(|| std::io::Error::new(ErrorKind::InvalidData, "URL has no host"))?
+                    .to_owned(),
+                port: ip_port.port_or_known_default().ok_or_else(|| {
+                    std::io::Error::new(ErrorKind::InvalidData, "URL has no port")
+                })?,
+                udp: false,
+                // cache,
+            },
             cache,
-        })
+        ))
     }
 }
