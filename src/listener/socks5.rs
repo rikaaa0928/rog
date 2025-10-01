@@ -1,4 +1,4 @@
-use crate::def::RunWriteHalf;
+use crate::def::{RunStream, RunWriteHalf};
 use crate::def::{RunAccStream, RunAcceptor, RunReadHalf};
 use crate::util;
 use crate::util::RunAddr;
@@ -29,10 +29,9 @@ impl RunAcceptor for SocksRunAcceptor {
 
     async fn handshake(
         &self,
-        r: &mut dyn RunReadHalf,
-        w: &mut dyn RunWriteHalf,
+        stream: &mut dyn RunStream
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
-        let hello = &util::socks5::client_hello::ClientHello::parse(r).await?;
+        let hello = &util::socks5::client_hello::ClientHello::parse(stream).await?;
         if !hello.contains(util::socks5::NO_AUTH) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -43,8 +42,8 @@ impl RunAcceptor for SocksRunAcceptor {
             hello.version.clone(),
             util::socks5::NO_AUTH,
         );
-        w.write(&hello_back.to_bytes()).await?;
-        let req = &util::socks5::request::Request::parse(r).await?;
+        stream.write(&hello_back.to_bytes()).await?;
+        let req = &util::socks5::request::Request::parse(stream).await?;
         let ret: std::io::Result<RunAddr> = req.try_into();
         match ret {
             Ok(addr) => Ok((addr, None)),
@@ -54,13 +53,12 @@ impl RunAcceptor for SocksRunAcceptor {
 
     async fn post_handshake(
         &self,
-        r: &mut dyn RunReadHalf,
-        w: &mut dyn RunWriteHalf,
+        stream: &mut dyn RunStream,
         error: bool,
         port: u16,
     ) -> std::io::Result<()> {
         let confirm = util::socks5::confirm::Confirm::new(error, port);
-        w.write(&confirm.to_bytes()).await?;
+        stream.write(&confirm.to_bytes()).await?;
         Ok(())
     }
 }

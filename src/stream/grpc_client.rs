@@ -45,9 +45,9 @@ impl RunReadHalf for GrpcClientReadHalf {
         Ok(0)
     }
 
-    async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
-        Ok(None)
-    }
+    // async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
+    //     Ok(None)
+    // }
 }
 
 #[async_trait::async_trait]
@@ -81,5 +81,44 @@ impl RunStream for GrpcClientRunStream {
         (Box::new(GrpcClientReadHalf { reader: Arc::clone(&self.reader) }), Box::new(GrpcClientWriteHalf {
             writer: self.writer,
         }))
+    }
+
+    async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let res = self.reader.lock().await.next().await;
+        if res.is_none() {
+            return Err(std::io::Error::new(ErrorKind::Other, "no more data"));
+        }
+        let res = res.unwrap();
+        match res {
+            Ok(data) => {
+                let n = data.payload.len();
+                buf[..n].copy_from_slice(&data.payload);
+                Ok(n)
+            }
+            Err(e) => {
+                Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string()))
+            }
+        }
+    }
+
+    async fn read_exact(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+        Ok(0)
+    }
+
+    async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
+        Ok(None)
+    }
+
+    async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        let mut req = StreamReq::default();
+        req.payload = Some(buf.to_vec());
+        match self.writer.send(req).await {
+            Ok(_) => {
+                Ok(())
+            }
+            Err(e) => {
+                Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string()))
+            }
+        }
     }
 }

@@ -8,7 +8,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 pub trait RunReadHalf: Send {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
     async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize>;
-    async fn handshake(&self) -> Result<Option<(RunAddr, String)>>;
+    // async fn handshake(&self) -> Result<Option<(RunAddr, String)>>;
 }
 
 #[async_trait::async_trait]
@@ -16,8 +16,13 @@ pub trait RunWriteHalf: Send {
     async fn write(&mut self, buf: &[u8]) -> Result<()>;
 }
 
+#[async_trait::async_trait]
 pub trait RunStream: Send {
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>);
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
+    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize>;
+    async fn handshake(&self) -> Result<Option<(RunAddr, String)>>;
+    async fn write(&mut self, buf: &[u8]) -> Result<()>;
 }
 
 pub enum RunAccStream {
@@ -42,15 +47,13 @@ pub trait RunAcceptor: Send + Sync {
     // stream handshake
     async fn handshake(
         &self,
-        r: &mut dyn RunReadHalf,
-        w: &mut dyn RunWriteHalf,
+        stream: &mut dyn RunStream,
     ) -> Result<(RunAddr, Option<Vec<u8>>)>;
 
     // stream post handshake
     async fn post_handshake(
         &self,
-        _: &mut dyn RunReadHalf,
-        _: &mut dyn RunWriteHalf,
+        _: &mut dyn RunStream,
         _: bool,
         _: u16,
     ) -> Result<()> {

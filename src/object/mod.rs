@@ -42,7 +42,7 @@ impl Object {
         let connector_cache_outer = self.connector_cache.clone(); // Clone cache Arc for the loop
 
         loop {
-            let (acc_stream, _) = main_acceptor.accept().await.map_err(|e| {
+            let (mut acc_stream, _) = main_acceptor.accept().await.map_err(|e| {
                 error!("Failed to accept connection: {}", e);
                 e
             })?;
@@ -53,9 +53,9 @@ impl Object {
 
             spawn(async move {
                 match acc_stream {
-                    RunAccStream::TCPStream(tcp_stream) => {
-                        let (mut r, mut w) = tcp_stream.split();
-                        let addr_res = main_acceptor_clone.handshake(r.as_mut(), w.as_mut()).await;
+                    RunAccStream::TCPStream(mut tcp_stream) => {
+                        
+                        let addr_res = main_acceptor_clone.handshake(tcp_stream.as_mut()).await;
                         match addr_res {
                             Err(e) => {
                                 error!("Handshake error: {}", e);
@@ -66,8 +66,7 @@ impl Object {
                                     // Assuming udp::handle_udp_connection might also need caching if it creates connectors.
                                     // For now, this part remains as is, focusing on the primary TCP/raw_udp paths.
                                     if let Err(e) = udp::handle_udp_connection(
-                                        r,
-                                        w,
+                                        tcp_stream,
                                         Arc::clone(&main_acceptor_clone),
                                         config_clone.clone(), // Pass cloned config
                                         router_clone.clone(), // Pass cloned router
@@ -154,7 +153,7 @@ impl Object {
                                             );
                                             // We still need to run post_handshake to inform the client
                                             if let Err(e) = main_acceptor_clone
-                                                .post_handshake(r.as_mut(), w.as_mut(), true, 0)
+                                                .post_handshake(tcp_stream.as_mut(), true, 0)
                                                 .await
                                             {
                                                 error!("Error in post_handshake after connection failure: {}", e);
@@ -164,13 +163,13 @@ impl Object {
                                     };
 
                                     if let Err(e) = main_acceptor_clone
-                                        .post_handshake(r.as_mut(), w.as_mut(), false, 0)
+                                        .post_handshake(tcp_stream.as_mut(), false, 0)
                                         .await
                                     {
                                         error!("Error in post_handshake: {}", e);
                                         return Ok(());
                                     }
-
+                                    let (mut r, mut w) = tcp_stream.split();
                                     if let Err(e) =
                                         tcp::handle_tcp_connection(r, w, addr, payload_cache, client_stream)
                                             .await
