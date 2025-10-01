@@ -29,9 +29,9 @@ impl RunReadHalf for TcpReadHalf {
         self.reader.read_exact(buf).await
     }
 
-    async fn handshake(&self) -> Result<Option<(RunAddr, String)>> {
-        Ok(None)
-    }
+    // async fn handshake(&self) -> Result<Option<(RunAddr, String)>> {
+    //     Ok(None)
+    // }
 }
 
 // 为 TcpWriteHalf 实现 MyWriteHalf trait
@@ -50,6 +50,7 @@ impl TcpRunStream {
 }
 
 // 为 MyTcpStream 实现 MyStream trait
+#[async_trait::async_trait]
 impl RunStream for TcpRunStream {
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>) {
         let (reader, writer) = self.inner.into_split();
@@ -57,5 +58,21 @@ impl RunStream for TcpRunStream {
             Box::new(TcpReadHalf { reader }),
             Box::new(TcpWriteHalf { writer }),
         )
+    }
+
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        self.inner.read(buf).await
+    }
+
+    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize> {
+        self.inner.read_exact(buf).await
+    }
+
+    async fn handshake(&self) -> Result<Option<(RunAddr, String)>> {
+        Ok(None)
+    }
+
+    async fn write(&mut self, buf: &[u8]) -> Result<()> {
+        self.inner.write_all(buf).await
     }
 }

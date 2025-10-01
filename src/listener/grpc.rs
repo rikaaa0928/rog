@@ -1,4 +1,4 @@
-use crate::def::{RouterSet, RunAccStream, RunAcceptor, RunListener, RunReadHalf, RunWriteHalf};
+use crate::def::{RouterSet, RunAccStream, RunAcceptor, RunListener, RunReadHalf, RunStream, RunWriteHalf};
 use crate::object::config::ObjectConfig;
 use crate::proto::v1::pb::rog_service_server::{RogService, RogServiceServer};
 use crate::proto::v1::pb::{StreamReq, StreamRes, UdpReq, UdpRes};
@@ -275,10 +275,9 @@ impl RunAcceptor for GrpcRunListener {
 
     async fn handshake(
         &self,
-        r: &mut dyn RunReadHalf,
-        w: &mut dyn RunWriteHalf,
+        stream: &mut dyn RunStream
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
-        match r.handshake().await? {
+        match stream.handshake().await? {
             Some((addr, auth)) => {
                 if auth != self.auth {
                     return Err(Error::new(ErrorKind::Other, "invalid auth"));

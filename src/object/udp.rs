@@ -1,4 +1,4 @@
-use crate::def::{RouterSet, RunAcceptor, RunConnector, RunReadHalf, RunWriteHalf, UDPPacket};
+use crate::def::{RouterSet, RunAcceptor, RunConnector, RunReadHalf, RunStream, RunWriteHalf, UDPPacket};
 use crate::object::config::ObjectConfig;
 use crate::util::RunAddr;
 use crate::connector;
@@ -11,8 +11,7 @@ use tokio::sync::Notify;
 use tokio::{select, spawn};
 
 pub async fn handle_udp_connection(
-    mut r: Box<dyn RunReadHalf>,
-    mut w: Box<dyn RunWriteHalf>,
+    mut stream: Box<dyn RunStream>,
     acc: Arc<Box<dyn RunAcceptor>>,
     config: Arc<ObjectConfig>,
     router: Arc<dyn RouterSet>,
@@ -20,14 +19,15 @@ pub async fn handle_udp_connection(
     // connector: Arc<Mutex<Box<dyn RunConnector>>>,
 ) -> Result<()> {
     info!("udp? {:?}", addr);
+    // let (mut r, mut w) = stream.split();
     let udp_socket_base_res = UdpSocket::bind("127.0.0.1:0").await;
     if udp_socket_base_res.is_err() {
-        acc.post_handshake(r.as_mut(), w.as_mut(), true, 0).await?;
+        acc.post_handshake(stream.as_mut(), true, 0).await?;
         return Err(udp_socket_base_res.err().unwrap());
     }
     let udp_socket_base = udp_socket_base_res?;
     let udp_port = udp_socket_base.local_addr()?.port();
-    acc.post_handshake(r.as_mut(), w.as_mut(), false, udp_port)
+    acc.post_handshake(stream.as_mut(), false, udp_port)
         .await?;
     let udp_socket_reader = Arc::new(udp_socket_base);
     let udp_socket_writer = Arc::clone(&udp_socket_reader);
@@ -45,7 +45,7 @@ pub async fn handle_udp_connection(
                     debug!("UDP TCP read loop (a) interrupted by shutdown signal.");
                     break;
                 }
-                read_res = r.read_exact(&mut buf) => {
+                read_res = stream.read_exact(&mut buf) => {
                     match read_res {
                         Err(e) => {
                             debug!("UDP TCP read error: {:?}", e);

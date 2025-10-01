@@ -1,4 +1,4 @@
-use crate::def::{RunAccStream, RunAcceptor, RunListener, RunReadHalf, RunWriteHalf};
+use crate::def::{RunAccStream, RunAcceptor, RunListener, RunReadHalf, RunStream, RunWriteHalf};
 use crate::stream::tcp::TcpRunStream;
 use crate::util::RunAddr;
 use std::net::SocketAddr;
@@ -22,8 +22,7 @@ impl RunAcceptor for TcpRunAcceptor {
 
     async fn handshake(
         &self,
-        _: &mut dyn RunReadHalf,
-        _: &mut dyn RunWriteHalf,
+        _stream: &mut dyn RunStream
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
         Ok((
             RunAddr {

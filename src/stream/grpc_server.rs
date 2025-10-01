@@ -47,24 +47,24 @@ impl RunReadHalf for GrpcServerReadHalf {
         Ok(0)
     }
 
-    async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
-        let auth = self.reader.lock().await.next().await;
-        match auth {
-            Some(Ok(a)) => {
-                let pw = a.auth;
-                let ra = RunAddr {
-                    addr: a.dst_addr.unwrap(),
-                    port: a.dst_port.unwrap() as u16,
-                    // a_type: 0,
-                    udp: false,
-                    // cache: None,
-                };
-                Ok(Some((ra, pw)))
-            }
-            Some(Err(err)) => Err(std::io::Error::new(ErrorKind::Interrupted, err.to_string())),
-            None => Err(std::io::Error::new(ErrorKind::Interrupted, "interrupted")),
-        }
-    }
+    // async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
+    //     let auth = self.reader.lock().await.next().await;
+    //     match auth {
+    //         Some(Ok(a)) => {
+    //             let pw = a.auth;
+    //             let ra = RunAddr {
+    //                 addr: a.dst_addr.unwrap(),
+    //                 port: a.dst_port.unwrap() as u16,
+    //                 // a_type: 0,
+    //                 udp: false,
+    //                 // cache: None,
+    //             };
+    //             Ok(Some((ra, pw)))
+    //         }
+    //         Some(Err(err)) => Err(std::io::Error::new(ErrorKind::Interrupted, err.to_string())),
+    //         None => Err(std::io::Error::new(ErrorKind::Interrupted, "interrupted")),
+    //     }
+    // }
 }
 
 #[async_trait::async_trait]
@@ -99,5 +99,53 @@ impl RunStream for GrpcServerRunStream {
                 writer: self.writer,
             }),
         )
+    }
+
+    async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let res = self.reader.lock().await.next().await;
+        if res.is_none() {
+            return Err(std::io::Error::new(ErrorKind::Other, "no more data"));
+        }
+        let res = res.unwrap();
+        match res {
+            Ok(data) => {
+                let n = data.payload.as_ref().unwrap().len();
+                buf[..n].copy_from_slice(data.payload.as_ref().unwrap());
+                Ok(n)
+            }
+            Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
+        }
+    }
+
+    async fn read_exact(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+        Ok(0)
+    }
+
+    async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
+        let auth = self.reader.lock().await.next().await;
+        match auth {
+            Some(Ok(a)) => {
+                let pw = a.auth;
+                let ra = RunAddr {
+                    addr: a.dst_addr.unwrap(),
+                    port: a.dst_port.unwrap() as u16,
+                    // a_type: 0,
+                    udp: false,
+                    // cache: None,
+                };
+                Ok(Some((ra, pw)))
+            }
+            Some(Err(err)) => Err(std::io::Error::new(ErrorKind::Interrupted, err.to_string())),
+            None => Err(std::io::Error::new(ErrorKind::Interrupted, "interrupted")),
+        }
+    }
+
+    async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        let mut res = StreamRes::default();
+        res.payload = buf.to_vec();
+        match self.writer.send(Ok(res)).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
+        }
     }
 }
