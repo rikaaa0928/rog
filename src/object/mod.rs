@@ -169,9 +169,8 @@ impl Object {
                                         error!("Error in post_handshake: {}", e);
                                         return Ok(());
                                     }
-                                    let (mut r, mut w) = tcp_stream.split();
                                     if let Err(e) =
-                                        tcp::handle_tcp_connection(r, w, addr, payload_cache, client_stream)
+                                        tcp::handle_tcp_connection(tcp_stream, client_stream, addr, payload_cache)
                                             .await
                                     {
                                         error!("Error handling TCP connection: {}", e);

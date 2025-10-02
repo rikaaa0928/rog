@@ -1,4 +1,4 @@
-use crate::def::{RunAccStream, RunAcceptor, RunReadHalf, RunStream, RunWriteHalf};
+use crate::def::{RunAccStream, RunAcceptor, ReadWrite};
 use crate::util::RunAddr;
 use log::debug;
 use std::io::ErrorKind;
@@ -17,16 +17,17 @@ impl HttpRunAcceptor {
         Self { inner: a, user, pw }
     }
 }
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 #[async_trait::async_trait]
 impl RunAcceptor for HttpRunAcceptor {
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
-        let res = self.inner.accept().await;
-        res
+        self.inner.accept().await
     }
 
     async fn handshake(
         &self,
-        stream: &mut dyn RunStream
+        stream: &mut (dyn ReadWrite + Unpin + Send),
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
         let mut buf = [0u8; 2048];
         let n = stream.read(&mut buf).await?;
@@ -54,7 +55,8 @@ impl RunAcceptor for HttpRunAcceptor {
         })?;
         if f_line.starts_with("CONNECT") {
             cache = None;
-            stream.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            stream
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 .await?;
             debug!("http HTTP/1.1 200 Connection Established\r\n\r\n");
         }
@@ -69,9 +71,17 @@ impl RunAcceptor for HttpRunAcceptor {
                     std::io::Error::new(ErrorKind::InvalidData, "URL has no port")
                 })?,
                 udp: false,
-                // cache,
             },
             cache,
         ))
+    }
+
+    async fn post_handshake(
+        &self,
+        _stream: &mut (dyn ReadWrite + Unpin + Send),
+        _error: bool,
+        _port: u16,
+    ) -> std::io::Result<()> {
+        Ok(())
     }
 }

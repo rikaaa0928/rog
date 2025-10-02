@@ -1,44 +1,44 @@
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
+use crate::def::ReadWrite;
 use std::io::Result;
-use crate::util::RunAddr;
-
-pub struct TcpReadHalf {
-    reader: tokio::net::tcp::OwnedReadHalf,
-}
-
-// TcpStream 实现的写半边
-pub struct TcpWriteHalf {
-    writer: tokio::net::tcp::OwnedWriteHalf,
-}
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpStream;
 
 // TcpStream 的包装
 pub struct TcpRunStream {
     inner: TcpStream,
 }
 
-// 为 TcpReadHalf 实现 MyReadHalf trait
-#[async_trait::async_trait]
-impl RunReadHalf for TcpReadHalf {
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        self.reader.read(buf).await
+impl AsyncRead for TcpRunStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
     }
-
-    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize> {
-        self.reader.read_exact(buf).await
-    }
-
-    // async fn handshake(&self) -> Result<Option<(RunAddr, String)>> {
-    //     Ok(None)
-    // }
 }
 
-// 为 TcpWriteHalf 实现 MyWriteHalf trait
-#[async_trait::async_trait]
-impl RunWriteHalf for TcpWriteHalf {
-    async fn write(&mut self, buf: &[u8]) -> Result<()> {
-        self.writer.write_all(buf).await
+impl AsyncWrite for TcpRunStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 
@@ -47,32 +47,14 @@ impl TcpRunStream {
     pub fn new(stream: TcpStream) -> Self {
         Self { inner: stream }
     }
-}
 
-// 为 MyTcpStream 实现 MyStream trait
-#[async_trait::async_trait]
-impl RunStream for TcpRunStream {
-    fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>) {
-        let (reader, writer) = self.inner.into_split();
-        (
-            Box::new(TcpReadHalf { reader }),
-            Box::new(TcpWriteHalf { writer }),
-        )
-    }
-
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        self.inner.read(buf).await
-    }
-
-    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize> {
-        self.inner.read_exact(buf).await
-    }
-
-    async fn handshake(&self) -> Result<Option<(RunAddr, String)>> {
-        Ok(None)
-    }
-
-    async fn write(&mut self, buf: &[u8]) -> Result<()> {
-        self.inner.write_all(buf).await
+    pub fn split(
+        self,
+    ) -> (
+        Box<dyn AsyncRead + Unpin + Send>,
+        Box<dyn AsyncWrite + Unpin + Send>,
+    ) {
+        let (reader, writer) = tokio::io::split(self.inner);
+        (Box::new(reader), Box::new(writer))
     }
 }

@@ -1,38 +1,33 @@
 pub mod config;
 
 use crate::util::RunAddr;
+use std::any::Any;
 use std::io::{Error, ErrorKind, Result};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use tokio::io::{AsyncRead, AsyncWrite};
 
-#[async_trait::async_trait]
-pub trait RunReadHalf: Send {
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
-    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize>;
-    // async fn handshake(&self) -> Result<Option<(RunAddr, String)>>;
+pub trait ReadWrite: AsyncRead + AsyncWrite + Unpin + Send {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
-#[async_trait::async_trait]
-pub trait RunWriteHalf: Send {
-    async fn write(&mut self, buf: &[u8]) -> Result<()>;
-}
-
-#[async_trait::async_trait]
-pub trait RunStream: Send {
-    fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>);
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
-    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize>;
-    async fn handshake(&self) -> Result<Option<(RunAddr, String)>>;
-    async fn write(&mut self, buf: &[u8]) -> Result<()>;
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> ReadWrite for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 pub enum RunAccStream {
-    TCPStream(Box<dyn RunStream>),
+    TCPStream(Box<dyn ReadWrite>),
     UDPSocket((Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)),
 }
 
 #[async_trait::async_trait]
 pub trait RunConnector: Send + Sync {
-    async fn connect(&self, addr: String) -> Result<Box<dyn RunStream>>;
+    async fn connect(&self, addr: String) -> Result<Box<dyn ReadWrite>>;
 
     async fn udp_tunnel(
         &self,
@@ -44,21 +39,17 @@ pub trait RunConnector: Send + Sync {
 pub trait RunAcceptor: Send + Sync {
     async fn accept(&self) -> Result<(RunAccStream, SocketAddr)>;
 
-    // stream handshake
     async fn handshake(
         &self,
-        stream: &mut dyn RunStream,
+        stream: &mut (dyn ReadWrite + Unpin + Send),
     ) -> Result<(RunAddr, Option<Vec<u8>>)>;
 
-    // stream post handshake
     async fn post_handshake(
         &self,
-        _: &mut dyn RunStream,
-        _: bool,
-        _: u16,
-    ) -> Result<()> {
-        Ok(())
-    }
+        stream: &mut (dyn ReadWrite + Unpin + Send),
+        error: bool,
+        port: u16,
+    ) -> Result<()>;
 }
 
 #[async_trait::async_trait]
@@ -69,12 +60,6 @@ pub trait RunListener: Send {
 pub trait RouterSet: Send + Sync {
     async fn route(&self, l_name: &str, r_name: &str, addr: &RunAddr) -> String;
 }
-
-// #[async_trait::async_trait]
-// pub trait RunUdpStream: Send + Sync {
-//     async fn read(&self) -> Result<UDPPacket>;
-//     async fn write(&self, packet: UDPPacket) -> Result<()>;
-// }
 
 #[async_trait::async_trait]
 pub trait RunUdpReader: Send {
@@ -168,7 +153,6 @@ impl UDPPacket {
         let data = buf[start + a_len + 2..].to_vec();
         let port = u16::from_be_bytes(dst_port.try_into().unwrap());
         let addr = match a_typ {
-            // IPv4
             1 => {
                 if dst_addr.len() != 4 {
                     return Err(Error::new(ErrorKind::Other, "Not a ipv4"));
@@ -176,12 +160,10 @@ impl UDPPacket {
                 let ip = Ipv4Addr::new(dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
                 Ok(ip.to_string())
             }
-            // Domain name
             3 => match std::str::from_utf8(&dst_addr) {
                 Ok(domain) => Ok(domain.to_string()),
                 Err(_) => Err(Error::new(ErrorKind::Other, "Not a domain")),
             },
-            // IPv6
             4 => {
                 if dst_addr.len() != 16 {
                     return Err(Error::new(ErrorKind::Other, "Not a ipv6"));
