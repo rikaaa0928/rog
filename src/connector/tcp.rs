@@ -1,5 +1,4 @@
 use crate::def::{ReadWrite, RunConnector, RunUdpReader, RunUdpWriter};
-use crate::stream::tcp::TcpRunStream;
 use crate::stream::udp::UdpRunStream;
 use log::error;
 use std::io::Result;
@@ -24,7 +23,7 @@ impl RunConnector for TcpRunConnector {
                 return Err(e);
             }
         };
-        Ok(Box::new(TcpRunStream::new(tcp_stream)))
+        Ok(Box::new(tcp_stream))
     }
 
     async fn udp_tunnel(

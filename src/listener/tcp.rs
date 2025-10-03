@@ -1,5 +1,4 @@
 use crate::def::{ReadWrite, RunAccStream, RunAcceptor, RunListener};
-use crate::stream::tcp::TcpRunStream;
 use crate::util::RunAddr;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -15,7 +14,7 @@ impl RunAcceptor for TcpRunAcceptor {
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
         let (socket, addr) = self.inner.accept().await?;
         Ok((
-            RunAccStream::TCPStream(Box::new(TcpRunStream::new(socket))),
+            RunAccStream::TCPStream(Box::new(socket)),
             addr,
         ))
     }
