@@ -1,5 +1,4 @@
-use crate::def::{RunConnector, RunStream, RunUdpReader, RunUdpWriter};
-use crate::stream::tcp::TcpRunStream;
+use crate::def::{ReadWrite, RunConnector, RunUdpReader, RunUdpWriter};
 use crate::stream::udp::UdpRunStream;
 use log::error;
 use std::io::Result;
@@ -16,7 +15,7 @@ impl TcpRunConnector {
 
 #[async_trait::async_trait]
 impl RunConnector for TcpRunConnector {
-    async fn connect(&self, addr: String) -> Result<Box<dyn RunStream>> {
+    async fn connect(&self, addr: String) -> Result<Box<dyn ReadWrite>> {
         let tcp_stream = match TcpStream::connect(addr.clone()).await {
             Ok(s) => s,
             Err(e) => {
@@ -24,7 +23,7 @@ impl RunConnector for TcpRunConnector {
                 return Err(e);
             }
         };
-        Ok(Box::new(TcpRunStream::new(tcp_stream)))
+        Ok(Box::new(tcp_stream))
     }
 
     async fn udp_tunnel(

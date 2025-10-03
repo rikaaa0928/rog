@@ -1,4 +1,4 @@
-use crate::def::{RouterSet, RunAcceptor, RunConnector, RunReadHalf, RunStream, RunWriteHalf, UDPPacket};
+use crate::def::{ReadWrite, RouterSet, RunAcceptor, RunConnector, UDPPacket};
 use crate::object::config::ObjectConfig;
 use crate::util::RunAddr;
 use crate::connector;
@@ -8,10 +8,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::Notify;
+use tokio::io::AsyncReadExt;
 use tokio::{select, spawn};
 
 pub async fn handle_udp_connection(
-    mut stream: Box<dyn RunStream>,
+    mut stream: Box<dyn ReadWrite>,
     acc: Arc<Box<dyn RunAcceptor>>,
     config: Arc<ObjectConfig>,
     router: Arc<dyn RouterSet>,

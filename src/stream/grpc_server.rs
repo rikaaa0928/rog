@@ -1,151 +1,118 @@
-use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
+use crate::def::ReadWrite;
 use crate::proto::v1::pb::{StreamReq, StreamRes};
 use crate::util::RunAddr;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use std::io::ErrorKind;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 use tonic::{Status, Streaming};
 
-// pub mod pb {
-//     tonic::include_proto!("moe.rikaaa0928.rog");
-// }
-
-pub struct GrpcServerReadHalf {
-    reader: Arc<Mutex<Streaming<StreamReq>>>,
-}
-
-pub struct GrpcServerWriteHalf {
-    writer: Sender<Result<StreamRes, Status>>,
-}
-
 pub struct GrpcServerRunStream {
     reader: Arc<Mutex<Streaming<StreamReq>>>,
-    writer: Sender<Result<StreamRes, Status>>,
+    writer: Sender<std::result::Result<StreamRes, Status>>,
+    handshake_done: bool,
+    buffer: Vec<u8>,
+    read_pos: usize,
 }
 
-#[async_trait::async_trait]
-impl RunReadHalf for GrpcServerReadHalf {
-    async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let res = self.reader.lock().await.next().await;
-        if res.is_none() {
-            return Err(std::io::Error::new(ErrorKind::Other, "no more data"));
-        }
-        let res = res.unwrap();
-        match res {
-            Ok(data) => {
-                let n = data.payload.as_ref().unwrap().len();
-                buf[..n].copy_from_slice(data.payload.as_ref().unwrap());
-                Ok(n)
+impl AsyncRead for GrpcServerRunStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if self.read_pos >= self.buffer.len() {
+            let next_item = {
+                let mut reader_lock = self.reader.try_lock().unwrap();
+                let stream = Pin::new(&mut *reader_lock);
+                stream.poll_next(cx)
+            };
+
+            match next_item {
+                Poll::Ready(Some(Ok(res))) => {
+                    self.buffer = res.payload.unwrap_or_default();
+                    self.read_pos = 0;
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        ErrorKind::Interrupted,
+                        e.to_string(),
+                    )))
+                }
+                Poll::Ready(None) => return Poll::Ready(Ok(())), // EOF
+                Poll::Pending => return Poll::Pending,
             }
-            Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }
-    }
 
-    async fn read_exact(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-        Ok(0)
-    }
+        let remaining = self.buffer.len() - self.read_pos;
+        let amt = std::cmp::min(remaining, buf.remaining());
+        buf.put_slice(&self.buffer[self.read_pos..self.read_pos + amt]);
+        self.read_pos += amt;
 
-    // async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
-    //     let auth = self.reader.lock().await.next().await;
-    //     match auth {
-    //         Some(Ok(a)) => {
-    //             let pw = a.auth;
-    //             let ra = RunAddr {
-    //                 addr: a.dst_addr.unwrap(),
-    //                 port: a.dst_port.unwrap() as u16,
-    //                 // a_type: 0,
-    //                 udp: false,
-    //                 // cache: None,
-    //             };
-    //             Ok(Some((ra, pw)))
-    //         }
-    //         Some(Err(err)) => Err(std::io::Error::new(ErrorKind::Interrupted, err.to_string())),
-    //         None => Err(std::io::Error::new(ErrorKind::Interrupted, "interrupted")),
-    //     }
-    // }
+        Poll::Ready(Ok(()))
+    }
 }
 
-#[async_trait::async_trait]
-impl RunWriteHalf for GrpcServerWriteHalf {
-    async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
+impl AsyncWrite for GrpcServerRunStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
         let mut res = StreamRes::default();
         res.payload = buf.to_vec();
-        match self.writer.send(Ok(res)).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
+        match self.writer.try_send(Ok(res)) {
+            Ok(_) => Poll::Ready(Ok(buf.len())),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Poll::Pending,
+            Err(e) => Poll::Ready(Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string()))),
         }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 }
 
 impl GrpcServerRunStream {
     pub fn new(
         reader: Arc<Mutex<Streaming<StreamReq>>>,
-        writer: Sender<Result<StreamRes, Status>>,
+        writer: Sender<std::result::Result<StreamRes, Status>>,
     ) -> Self {
-        Self { reader, writer }
-    }
-}
-
-#[async_trait::async_trait]
-impl RunStream for GrpcServerRunStream {
-    fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>) {
-        (
-            Box::new(GrpcServerReadHalf {
-                reader: Arc::clone(&self.reader),
-            }),
-            Box::new(GrpcServerWriteHalf {
-                writer: self.writer,
-            }),
-        )
-    }
-
-    async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let res = self.reader.lock().await.next().await;
-        if res.is_none() {
-            return Err(std::io::Error::new(ErrorKind::Other, "no more data"));
-        }
-        let res = res.unwrap();
-        match res {
-            Ok(data) => {
-                let n = data.payload.as_ref().unwrap().len();
-                buf[..n].copy_from_slice(data.payload.as_ref().unwrap());
-                Ok(n)
-            }
-            Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
+        Self {
+            reader,
+            writer,
+            handshake_done: false,
+            buffer: Vec::new(),
+            read_pos: 0,
         }
     }
 
-    async fn read_exact(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-        Ok(0)
-    }
-
-    async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
+    pub async fn handshake(&mut self) -> std::io::Result<Option<(RunAddr, String)>> {
+        if self.handshake_done {
+            return Ok(None);
+        }
         let auth = self.reader.lock().await.next().await;
+        self.handshake_done = true;
         match auth {
             Some(Ok(a)) => {
                 let pw = a.auth;
                 let ra = RunAddr {
                     addr: a.dst_addr.unwrap(),
                     port: a.dst_port.unwrap() as u16,
-                    // a_type: 0,
                     udp: false,
-                    // cache: None,
                 };
                 Ok(Some((ra, pw)))
             }
             Some(Err(err)) => Err(std::io::Error::new(ErrorKind::Interrupted, err.to_string())),
             None => Err(std::io::Error::new(ErrorKind::Interrupted, "interrupted")),
-        }
-    }
-
-    async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        let mut res = StreamRes::default();
-        res.payload = buf.to_vec();
-        match self.writer.send(Ok(res)).await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }
     }
 }

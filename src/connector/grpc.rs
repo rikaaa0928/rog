@@ -1,4 +1,4 @@
-use crate::def::{config, RunConnector, RunStream, RunUdpReader, RunUdpWriter};
+use crate::def::{config, ReadWrite, RunConnector, RunUdpReader, RunUdpWriter};
 use crate::proto::v1::pb::rog_service_client::RogServiceClient;
 use crate::proto::v1::pb::{StreamReq, UdpReq};
 use crate::stream::grpc_client::GrpcClientRunStream;
@@ -46,7 +46,7 @@ impl GrpcRunConnector {
 
 #[async_trait::async_trait]
 impl RunConnector for GrpcRunConnector {
-    async fn connect(&self, addr: String) -> io::Result<Box<dyn RunStream>> {
+    async fn connect(&self, addr: String) -> io::Result<Box<dyn ReadWrite>> {
         let (host, port) = parse_address(addr.as_str())?;
         let (tx, rx) = mpsc::channel::<StreamReq>(8);
         let rx = tokio_stream::wrappers::ReceiverStream::new(rx);

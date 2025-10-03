@@ -1,5 +1,4 @@
-use crate::def::{RunAccStream, RunAcceptor, RunListener, RunReadHalf, RunStream, RunWriteHalf};
-use crate::stream::tcp::TcpRunStream;
+use crate::def::{ReadWrite, RunAccStream, RunAcceptor, RunListener};
 use crate::util::RunAddr;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -15,25 +14,32 @@ impl RunAcceptor for TcpRunAcceptor {
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
         let (socket, addr) = self.inner.accept().await?;
         Ok((
-            RunAccStream::TCPStream(Box::new(TcpRunStream::new(socket))),
+            RunAccStream::TCPStream(Box::new(socket)),
             addr,
         ))
     }
 
     async fn handshake(
         &self,
-        _stream: &mut dyn RunStream
+        _stream: &mut (dyn ReadWrite + Unpin + Send),
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
         Ok((
             RunAddr {
                 addr: "".to_string(),
                 port: 0,
-                // a_type: 0,
                 udp: false,
-                // cache: None,
             },
             None,
         ))
+    }
+
+    async fn post_handshake(
+        &self,
+        _stream: &mut (dyn ReadWrite + Unpin + Send),
+        _error: bool,
+        _port: u16,
+    ) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

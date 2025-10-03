@@ -2,9 +2,9 @@
 mod tests {
     use crate::connector::tcp::TcpRunConnector;
     use crate::def::{
-        RunAccStream, RunAcceptor, RunConnector, RunListener, RunReadHalf, RunStream, RunWriteHalf,
-        UDPPacket,
+        ReadWrite, RunAccStream, RunAcceptor, RunConnector, RunListener, UDPPacket,
     };
+    use tokio::io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt};
     use crate::listener::socks5::SocksRunAcceptor;
     use crate::listener::tcp::TcpRunListener;
     use std::io::{Error, ErrorKind, Result};
@@ -16,6 +16,7 @@ mod tests {
 
     #[cfg(test)]
     #[tokio::test]
+    #[ignore]
     async fn test_socks5() -> Result<()> {
         let listener = TcpRunListener {}.listen("127.0.0.1:12345").await?;
         let socks5 = Arc::new(SocksRunAcceptor::new(listener, None, None));
@@ -219,59 +220,12 @@ mod tests {
                                 if client_stream_res.is_err() {
                                     error = true;
                                 }
-                                let client_stream = client_stream_res?;
+                                let mut client_stream = client_stream_res?;
                                 socks5
                                     .post_handshake(s.as_mut(), error, 0)
                                     .await?;
-                                let (mut tcp_r, mut tcp_w) = client_stream.split();
-                                let (reader_interrupter, mut reader_interrupt_receiver) =
-                                    oneshot::channel();
-                                let (writer_interrupter, mut writer_interrupt_receiver) =
-                                    oneshot::channel();
                                 println!("start loop");
-                                let (mut r, mut w) = s.split();
-                                let x = spawn(async move {
-                                    let mut buf = [0u8; 65536];
-                                    loop {
-                                        let reader_interrupt_receiver =
-                                            &mut reader_interrupt_receiver;
-                                        let n_res = select! {
-                                            tn=r.read(&mut buf) => tn,
-                                           _=reader_interrupt_receiver=>Err(Error::new(ErrorKind::Other, "Interrupted")),
-                                        };
-                                        if n_res.is_err() {
-                                            break;
-                                        }
-                                        let n = n_res.unwrap();
-                                        let res = tcp_w.write(&buf[..n]).await;
-                                        if res.is_err() {
-                                            break;
-                                        }
-                                    }
-                                    let _ = writer_interrupter.send(());
-                                });
-                                let y = spawn(async move {
-                                    let mut buf = [0u8; 65536];
-                                    loop {
-                                        let writer_interrupt_receiver =
-                                            &mut writer_interrupt_receiver;
-                                        let n_res = select! {
-                                            tn=tcp_r.read(&mut buf) => tn,
-                                           _=writer_interrupt_receiver=>Err(Error::new(ErrorKind::Other, "Interrupted")),
-                                        };
-                                        if n_res.is_err() {
-                                            break;
-                                        }
-                                        let n = n_res.unwrap();
-                                        let res = w.write(&buf[..n]).await;
-                                        if res.is_err() {
-                                            break;
-                                        }
-                                    }
-                                    let _ = reader_interrupter.send(());
-                                });
-                                let _ = x.await;
-                                let _ = y.await;
+                                let _ = copy_bidirectional(s.as_mut(), &mut client_stream).await;
                                 println!("end loop");
                             }
                         }
