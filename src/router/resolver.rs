@@ -1,6 +1,4 @@
-use hickory_resolver::config::{
-    NameServerConfig, ResolverConfig, ResolverOpts,
-};
+use hickory_resolver::config::{NameServerConfig, ResolverConfig, ResolverOpts};
 use hickory_resolver::proto::xfer::Protocol;
 use hickory_resolver::{AsyncResolver, TokioAsyncResolver};
 use std::collections::HashMap;

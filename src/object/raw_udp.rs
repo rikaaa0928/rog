@@ -1,5 +1,5 @@
 use crate::connector;
-use crate::def::{RunConnector, RouterSet, RunUdpReader, RunUdpWriter, UDPPacket}; // Added RunConnector
+use crate::def::{RouterSet, RunConnector, RunUdpReader, RunUdpWriter, UDPPacket}; // Added RunConnector
 use crate::object::config::ObjectConfig;
 use crate::util::RunAddr;
 use log::{debug, warn};
@@ -26,13 +26,17 @@ pub async fn handle_raw_udp(
                 addr: (&first_packet).meta.dst_addr.clone(),
                 port: (&first_packet).meta.dst_port,
                 udp: true, // Set to true for UDP context
-                // cache: None,
+                           // cache: None,
             },
         )
         .await;
 
-    let conn_conf = config.connector.get(client_name.as_str())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("Connector config '{}' not found for UDP", client_name)))?;
+    let conn_conf = config.connector.get(client_name.as_str()).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Connector config '{}' not found for UDP", client_name),
+        )
+    })?;
 
     let connector_obj: Arc<Box<dyn RunConnector>>;
     {
@@ -56,8 +60,13 @@ pub async fn handle_raw_udp(
             (&first_packet).meta.src_port,
         ))
         .await?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "UDP tunnel creation failed or not supported by connector"))?;
-    
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                "UDP tunnel creation failed or not supported by connector",
+            )
+        })?;
+
     udp_writer.write(first_packet).await?;
 
     let shutdown_notifier = Arc::new(Notify::new());

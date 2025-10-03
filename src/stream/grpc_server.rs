@@ -14,6 +14,8 @@ use tonic::{Status, Streaming};
 
 pub struct GrpcServerReadHalf {
     reader: Arc<Mutex<Streaming<StreamReq>>>,
+    cache: Vec<u8>,
+    cache_pos: usize,
 }
 
 pub struct GrpcServerWriteHalf {
@@ -23,11 +25,28 @@ pub struct GrpcServerWriteHalf {
 pub struct GrpcServerRunStream {
     reader: Arc<Mutex<Streaming<StreamReq>>>,
     writer: Sender<Result<StreamRes, Status>>,
+    cache: Vec<u8>,
+    cache_pos: usize,
 }
 
 #[async_trait::async_trait]
 impl RunReadHalf for GrpcServerReadHalf {
     async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.cache_pos < self.cache.len() {
+            let available = self.cache.len() - self.cache_pos;
+            let to_copy = available.min(buf.len());
+            buf[..to_copy].copy_from_slice(&self.cache[self.cache_pos..self.cache_pos + to_copy]);
+            self.cache_pos += to_copy;
+            if self.cache_pos >= self.cache.len() {
+                self.cache.clear();
+                self.cache_pos = 0;
+            }
+            return Ok(to_copy);
+        }
+
+        self.cache.clear();
+        self.cache_pos = 0;
+
         let res = self.reader.lock().await.next().await;
         if res.is_none() {
             return Err(std::io::Error::new(ErrorKind::Other, "no more data"));
@@ -35,9 +54,19 @@ impl RunReadHalf for GrpcServerReadHalf {
         let res = res.unwrap();
         match res {
             Ok(data) => {
-                let n = data.payload.as_ref().unwrap().len();
-                buf[..n].copy_from_slice(data.payload.as_ref().unwrap());
-                Ok(n)
+                let payload = match data.payload {
+                    Some(p) => p,
+                    None => Vec::new(),
+                };
+                if payload.is_empty() {
+                    return Ok(0);
+                }
+                let to_copy = buf.len().min(payload.len());
+                buf[..to_copy].copy_from_slice(&payload[..to_copy]);
+                if payload.len() > to_copy {
+                    self.cache.extend_from_slice(&payload[to_copy..]);
+                }
+                Ok(to_copy)
             }
             Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }
@@ -84,7 +113,12 @@ impl GrpcServerRunStream {
         reader: Arc<Mutex<Streaming<StreamReq>>>,
         writer: Sender<Result<StreamRes, Status>>,
     ) -> Self {
-        Self { reader, writer }
+        Self {
+            reader,
+            writer,
+            cache: Vec::new(),
+            cache_pos: 0,
+        }
     }
 }
 
@@ -94,6 +128,8 @@ impl RunStream for GrpcServerRunStream {
         (
             Box::new(GrpcServerReadHalf {
                 reader: Arc::clone(&self.reader),
+                cache: Vec::new(),
+                cache_pos: 0,
             }),
             Box::new(GrpcServerWriteHalf {
                 writer: self.writer,
@@ -102,6 +138,21 @@ impl RunStream for GrpcServerRunStream {
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.cache_pos < self.cache.len() {
+            let available = self.cache.len() - self.cache_pos;
+            let to_copy = available.min(buf.len());
+            buf[..to_copy].copy_from_slice(&self.cache[self.cache_pos..self.cache_pos + to_copy]);
+            self.cache_pos += to_copy;
+            if self.cache_pos >= self.cache.len() {
+                self.cache.clear();
+                self.cache_pos = 0;
+            }
+            return Ok(to_copy);
+        }
+
+        self.cache.clear();
+        self.cache_pos = 0;
+
         let res = self.reader.lock().await.next().await;
         if res.is_none() {
             return Err(std::io::Error::new(ErrorKind::Other, "no more data"));
@@ -109,9 +160,19 @@ impl RunStream for GrpcServerRunStream {
         let res = res.unwrap();
         match res {
             Ok(data) => {
-                let n = data.payload.as_ref().unwrap().len();
-                buf[..n].copy_from_slice(data.payload.as_ref().unwrap());
-                Ok(n)
+                let payload = match data.payload {
+                    Some(p) => p,
+                    None => Vec::new(),
+                };
+                if payload.is_empty() {
+                    return Ok(0);
+                }
+                let to_copy = buf.len().min(payload.len());
+                buf[..to_copy].copy_from_slice(&payload[..to_copy]);
+                if payload.len() > to_copy {
+                    self.cache.extend_from_slice(&payload[to_copy..]);
+                }
+                Ok(to_copy)
             }
             Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }

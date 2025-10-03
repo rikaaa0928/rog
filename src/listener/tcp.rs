@@ -22,7 +22,7 @@ impl RunAcceptor for TcpRunAcceptor {
 
     async fn handshake(
         &self,
-        _stream: &mut dyn RunStream
+        _stream: &mut dyn RunStream,
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
         Ok((
             RunAddr {

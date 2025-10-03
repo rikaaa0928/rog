@@ -3,8 +3,8 @@ use crate::util::RunAddr;
 use log::debug;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
-use tokio::sync::Notify;
 use tokio::select;
+use tokio::sync::Notify;
 
 pub async fn handle_tcp_connection(
     mut r: Box<dyn RunReadHalf>,
@@ -12,15 +12,12 @@ pub async fn handle_tcp_connection(
     addr: RunAddr,
     cache: Option<Vec<u8>>,
     client_stream: Box<dyn RunStream>,
-) -> Result<()>
-{
+) -> Result<()> {
     debug!("Post Handshake successful {:?}", addr);
     let (mut tcp_r, mut tcp_w) = client_stream.split();
     let shutdown_signal = Arc::new(Notify::new());
     if cache.is_some() {
-        tcp_w
-            .write(cache.unwrap().as_slice())
-            .await?;
+        tcp_w.write(cache.unwrap().as_slice()).await?;
     }
 
     debug!("start loop");
@@ -79,10 +76,16 @@ pub async fn handle_tcp_connection(
         shutdown_signal_writer_task.notify_waiters();
     });
     if let Err(e) = x.await {
-        debug!("Reader task (r -> tcp_w) panicked or was cancelled: {:?}", e);
+        debug!(
+            "Reader task (r -> tcp_w) panicked or was cancelled: {:?}",
+            e
+        );
     }
     if let Err(e) = y.await {
-        debug!("Writer task (tcp_r -> w) panicked or was cancelled: {:?}", e);
+        debug!(
+            "Writer task (tcp_r -> w) panicked or was cancelled: {:?}",
+            e
+        );
     }
     debug!("end loop");
     Ok(())

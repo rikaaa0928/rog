@@ -54,7 +54,6 @@ impl Object {
             spawn(async move {
                 match acc_stream {
                     RunAccStream::TCPStream(mut tcp_stream) => {
-                        
                         let addr_res = main_acceptor_clone.handshake(tcp_stream.as_mut()).await;
                         match addr_res {
                             Err(e) => {
@@ -97,7 +96,8 @@ impl Object {
 
                                     let connector_obj: Arc<Box<dyn RunConnector>>;
                                     {
-                                        let mut connector_cache_guard = connector_cache_clone.lock().await;
+                                        let mut connector_cache_guard =
+                                            connector_cache_clone.lock().await;
                                         if let Some(cached_connector) =
                                             connector_cache_guard.get(client_name.as_str())
                                         {
@@ -170,9 +170,14 @@ impl Object {
                                         return Ok(());
                                     }
                                     let (mut r, mut w) = tcp_stream.split();
-                                    if let Err(e) =
-                                        tcp::handle_tcp_connection(r, w, addr, payload_cache, client_stream)
-                                            .await
+                                    if let Err(e) = tcp::handle_tcp_connection(
+                                        r,
+                                        w,
+                                        addr,
+                                        payload_cache,
+                                        client_stream,
+                                    )
+                                    .await
                                     {
                                         error!("Error handling TCP connection: {}", e);
                                     }
@@ -183,9 +188,14 @@ impl Object {
                     }
                     RunAccStream::UDPSocket((r, w)) => {
                         // Pass the cloned cache to raw_udp handling
-                        if let Err(e) =
-                            raw_udp::handle_raw_udp(r, w, config_clone, router_clone, connector_cache_clone)
-                                .await
+                        if let Err(e) = raw_udp::handle_raw_udp(
+                            r,
+                            w,
+                            config_clone,
+                            router_clone,
+                            connector_cache_clone,
+                        )
+                        .await
                         {
                             error!("Error handling raw UDP: {}", e);
                         }

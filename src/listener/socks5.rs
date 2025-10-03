@@ -1,5 +1,5 @@
-use crate::def::{RunStream, RunWriteHalf};
 use crate::def::{RunAccStream, RunAcceptor, RunReadHalf};
+use crate::def::{RunStream, RunWriteHalf};
 use crate::util;
 use crate::util::RunAddr;
 use std::net::SocketAddr;
@@ -29,7 +29,7 @@ impl RunAcceptor for SocksRunAcceptor {
 
     async fn handshake(
         &self,
-        stream: &mut dyn RunStream
+        stream: &mut dyn RunStream,
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
         let hello = &util::socks5::client_hello::ClientHello::parse(stream).await?;
         if !hello.contains(util::socks5::NO_AUTH) {

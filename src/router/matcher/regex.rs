@@ -1,9 +1,8 @@
-use std::net::IpAddr;
-use regex::Regex;
 use ipnetwork::IpNetwork;
+use regex::Regex;
+use std::net::IpAddr;
 
 use crate::router::matcher::Matcher;
-
 
 pub(crate) fn regex_matcher_factory(lines: Vec<String>, _data: Vec<u8>) -> Box<dyn Matcher> {
     let mut inner: Vec<RegexLine> = Vec::with_capacity(lines.len());
@@ -40,12 +39,24 @@ struct RegexLine {
 
 fn parse_regex_line(line: &str) -> RegexLine {
     if let Ok(cidr) = line.parse::<IpNetwork>() {
-        return RegexLine { cidr: Some(cidr), regex: None, host: None };
+        return RegexLine {
+            cidr: Some(cidr),
+            regex: None,
+            host: None,
+        };
     }
     if let Ok(re) = Regex::new(line) {
-        return RegexLine { regex: Some(re), cidr: None, host: None };
+        return RegexLine {
+            regex: Some(re),
+            cidr: None,
+            host: None,
+        };
     }
-    RegexLine { host: Some(line.to_owned()), cidr: None, regex: None }
+    RegexLine {
+        host: Some(line.to_owned()),
+        cidr: None,
+        regex: None,
+    }
 }
 
 impl RegexLine {

@@ -1,4 +1,5 @@
 use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
+use crate::proto::v1::pb::{StreamReq, StreamRes};
 use crate::util::RunAddr;
 use futures::StreamExt;
 use std::io::ErrorKind;
@@ -6,10 +7,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
 use tonic::Streaming;
-use crate::proto::v1::pb::{StreamReq, StreamRes};
 
 pub struct GrpcClientReadHalf {
     reader: Arc<Mutex<Streaming<StreamRes>>>,
+    cache: Vec<u8>,
+    cache_pos: usize,
 }
 
 pub struct GrpcClientWriteHalf {
@@ -19,11 +21,28 @@ pub struct GrpcClientWriteHalf {
 pub struct GrpcClientRunStream {
     reader: Arc<Mutex<Streaming<StreamRes>>>,
     writer: Sender<StreamReq>,
+    cache: Vec<u8>,
+    cache_pos: usize,
 }
 
 #[async_trait::async_trait]
 impl RunReadHalf for GrpcClientReadHalf {
     async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.cache_pos < self.cache.len() {
+            let available = self.cache.len() - self.cache_pos;
+            let to_copy = available.min(buf.len());
+            buf[..to_copy].copy_from_slice(&self.cache[self.cache_pos..self.cache_pos + to_copy]);
+            self.cache_pos += to_copy;
+            if self.cache_pos >= self.cache.len() {
+                self.cache.clear();
+                self.cache_pos = 0;
+            }
+            return Ok(to_copy);
+        }
+
+        self.cache.clear();
+        self.cache_pos = 0;
+
         let res = self.reader.lock().await.next().await;
         if res.is_none() {
             return Err(std::io::Error::new(ErrorKind::Other, "no more data"));
@@ -31,13 +50,17 @@ impl RunReadHalf for GrpcClientReadHalf {
         let res = res.unwrap();
         match res {
             Ok(data) => {
-                let n = data.payload.len();
-                buf[..n].copy_from_slice(&data.payload);
-                Ok(n)
+                if data.payload.is_empty() {
+                    return Ok(0);
+                }
+                let to_copy = buf.len().min(data.payload.len());
+                buf[..to_copy].copy_from_slice(&data.payload[..to_copy]);
+                if data.payload.len() > to_copy {
+                    self.cache.extend_from_slice(&data.payload[to_copy..]);
+                }
+                Ok(to_copy)
             }
-            Err(e) => {
-                Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string()))
-            }
+            Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }
     }
 
@@ -56,12 +79,8 @@ impl RunWriteHalf for GrpcClientWriteHalf {
         let mut req = StreamReq::default();
         req.payload = Some(buf.to_vec());
         match self.writer.send(req).await {
-            Ok(_) => {
-                Ok(())
-            }
-            Err(e) => {
-                Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string()))
-            }
+            Ok(_) => Ok(()),
+            Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }
     }
 }
@@ -71,6 +90,8 @@ impl GrpcClientRunStream {
         Self {
             reader,
             writer,
+            cache: Vec::new(),
+            cache_pos: 0,
         }
     }
 }
@@ -78,12 +99,34 @@ impl GrpcClientRunStream {
 #[async_trait::async_trait]
 impl RunStream for GrpcClientRunStream {
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>) {
-        (Box::new(GrpcClientReadHalf { reader: Arc::clone(&self.reader) }), Box::new(GrpcClientWriteHalf {
-            writer: self.writer,
-        }))
+        (
+            Box::new(GrpcClientReadHalf {
+                reader: Arc::clone(&self.reader),
+                cache: Vec::new(),
+                cache_pos: 0,
+            }),
+            Box::new(GrpcClientWriteHalf {
+                writer: self.writer,
+            }),
+        )
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.cache_pos < self.cache.len() {
+            let available = self.cache.len() - self.cache_pos;
+            let to_copy = available.min(buf.len());
+            buf[..to_copy].copy_from_slice(&self.cache[self.cache_pos..self.cache_pos + to_copy]);
+            self.cache_pos += to_copy;
+            if self.cache_pos >= self.cache.len() {
+                self.cache.clear();
+                self.cache_pos = 0;
+            }
+            return Ok(to_copy);
+        }
+
+        self.cache.clear();
+        self.cache_pos = 0;
+
         let res = self.reader.lock().await.next().await;
         if res.is_none() {
             return Err(std::io::Error::new(ErrorKind::Other, "no more data"));
@@ -91,13 +134,17 @@ impl RunStream for GrpcClientRunStream {
         let res = res.unwrap();
         match res {
             Ok(data) => {
-                let n = data.payload.len();
-                buf[..n].copy_from_slice(&data.payload);
-                Ok(n)
+                if data.payload.is_empty() {
+                    return Ok(0);
+                }
+                let to_copy = buf.len().min(data.payload.len());
+                buf[..to_copy].copy_from_slice(&data.payload[..to_copy]);
+                if data.payload.len() > to_copy {
+                    self.cache.extend_from_slice(&data.payload[to_copy..]);
+                }
+                Ok(to_copy)
             }
-            Err(e) => {
-                Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string()))
-            }
+            Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }
     }
 
@@ -113,12 +160,8 @@ impl RunStream for GrpcClientRunStream {
         let mut req = StreamReq::default();
         req.payload = Some(buf.to_vec());
         match self.writer.send(req).await {
-            Ok(_) => {
-                Ok(())
-            }
-            Err(e) => {
-                Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string()))
-            }
+            Ok(_) => Ok(()),
+            Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }
     }
 }

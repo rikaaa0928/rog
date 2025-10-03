@@ -28,29 +28,24 @@ mod tests {
             let job = spawn(async move {
                 match s {
                     RunAccStream::TCPStream(mut s) => {
-
                         // let udp_tunnel=Arc::new(&connector).lock().await.udp_tunnel();
                         let addr_res = socks5.handshake(s.as_mut()).await;
                         match addr_res {
                             Err(e) => {
                                 println!("Handshake error: {}", e);
                             }
-                            Ok((addr,payload_cache)) => {
+                            Ok((addr, payload_cache)) => {
                                 let addr_ref = &addr;
                                 if addr_ref.udp {
                                     println!("udp? {:?}", addr_ref);
                                     let udp_socket_base_res = UdpSocket::bind("127.0.0.1:0").await;
                                     if udp_socket_base_res.is_err() {
-                                        socks5
-                                            .post_handshake(s.as_mut(), true, 0)
-                                            .await?;
+                                        socks5.post_handshake(s.as_mut(), true, 0).await?;
                                         return Err(udp_socket_base_res.err().unwrap());
                                     }
                                     let udp_socket_base = udp_socket_base_res?;
                                     let udp_port = udp_socket_base.local_addr()?.port();
-                                    socks5
-                                        .post_handshake(s.as_mut(), false, udp_port)
-                                        .await?;
+                                    socks5.post_handshake(s.as_mut(), false, udp_port).await?;
                                     // let confirm = util::socks5::confirm::Confirm::new(false, udp_port);
                                     // println!("post handshake {:?}", &confirm.to_bytes());
                                     // w.write(&confirm.to_bytes()).await?;
@@ -220,9 +215,7 @@ mod tests {
                                     error = true;
                                 }
                                 let client_stream = client_stream_res?;
-                                socks5
-                                    .post_handshake(s.as_mut(), error, 0)
-                                    .await?;
+                                socks5.post_handshake(s.as_mut(), error, 0).await?;
                                 let (mut tcp_r, mut tcp_w) = client_stream.split();
                                 let (reader_interrupter, mut reader_interrupt_receiver) =
                                     oneshot::channel();

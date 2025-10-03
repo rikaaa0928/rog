@@ -1,7 +1,9 @@
-use crate::def::{RouterSet, RunAcceptor, RunConnector, RunReadHalf, RunStream, RunWriteHalf, UDPPacket};
+use crate::connector;
+use crate::def::{
+    RouterSet, RunAcceptor, RunConnector, RunReadHalf, RunStream, RunWriteHalf, UDPPacket,
+};
 use crate::object::config::ObjectConfig;
 use crate::util::RunAddr;
-use crate::connector;
 use log::{debug, info, warn};
 use std::io::{Error, ErrorKind, Result};
 use std::net::SocketAddr;
@@ -27,8 +29,7 @@ pub async fn handle_udp_connection(
     }
     let udp_socket_base = udp_socket_base_res?;
     let udp_port = udp_socket_base.local_addr()?.port();
-    acc.post_handshake(stream.as_mut(), false, udp_port)
-        .await?;
+    acc.post_handshake(stream.as_mut(), false, udp_port).await?;
     let udp_socket_reader = Arc::new(udp_socket_base);
     let udp_socket_writer = Arc::clone(&udp_socket_reader);
     info!("provide {} for {:?}", &udp_port, &addr);

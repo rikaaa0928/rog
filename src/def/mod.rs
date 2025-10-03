@@ -45,18 +45,10 @@ pub trait RunAcceptor: Send + Sync {
     async fn accept(&self) -> Result<(RunAccStream, SocketAddr)>;
 
     // stream handshake
-    async fn handshake(
-        &self,
-        stream: &mut dyn RunStream,
-    ) -> Result<(RunAddr, Option<Vec<u8>>)>;
+    async fn handshake(&self, stream: &mut dyn RunStream) -> Result<(RunAddr, Option<Vec<u8>>)>;
 
     // stream post handshake
-    async fn post_handshake(
-        &self,
-        _: &mut dyn RunStream,
-        _: bool,
-        _: u16,
-    ) -> Result<()> {
+    async fn post_handshake(&self, _: &mut dyn RunStream, _: bool, _: u16) -> Result<()> {
         Ok(())
     }
 }

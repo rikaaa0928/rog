@@ -11,11 +11,11 @@ mod connector;
 mod def;
 mod listener;
 mod object;
+mod proto;
 mod router;
 mod stream;
 mod test;
 mod util;
-mod proto;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {

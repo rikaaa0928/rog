@@ -14,27 +14,46 @@ pub struct Request {
 }
 
 impl Request {
-    pub fn parse<'a>(stream: &'a mut dyn RunStream) -> Pin<Box<dyn Future<Output=std::io::Result<Self>> + Send + 'a>> {
+    pub fn parse<'a>(
+        stream: &'a mut dyn RunStream,
+    ) -> Pin<Box<dyn Future<Output = std::io::Result<Self>> + Send + 'a>> {
         Box::pin(async move {
             let mut buf = [0u8; 1];
             let _ = stream.read_exact(&mut buf).await?;
             let version = buf[0].clone();
             if version != 5 {
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, "invalid socks version"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "invalid socks version",
+                ));
             }
 
             let _ = stream.read_exact(&mut buf).await?;
             let cmd = buf[0].clone();
             if cmd != CMD_CONNECT && cmd != CMD_UDP {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid socks cmd, only CONNECT and UDP ASSOCIATE supported"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid socks cmd, only CONNECT and UDP ASSOCIATE supported",
+                ));
             }
             let _ = stream.read_exact(&mut buf).await?;
             let rsv = buf[0].clone();
             let _ = stream.read_exact(&mut buf).await?;
             let a_typ = buf[0].clone();
-            let a_len = if a_typ == 1 { 4 } else if a_typ == 4 { 16 } else if a_typ == 3 { 0 } else { -1 };
+            let a_len = if a_typ == 1 {
+                4
+            } else if a_typ == 4 {
+                16
+            } else if a_typ == 3 {
+                0
+            } else {
+                -1
+            };
             if a_len < 0 {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid addr type"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid addr type",
+                ));
             }
             let dst_addr = if a_len != 0 {
                 let mut t_dst_addr = vec![0u8; a_len as usize];

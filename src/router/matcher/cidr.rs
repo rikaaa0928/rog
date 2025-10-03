@@ -1,6 +1,6 @@
-use std::net::IpAddr;
+use crate::router::matcher::Matcher;
 use ipnetwork::IpNetwork;
-use crate::router::matcher::{ Matcher};
+use std::net::IpAddr;
 
 pub(crate) fn cidr_matcher_factory(lines: Vec<String>, _data: Vec<u8>) -> Box<dyn Matcher> {
     let mut inner: Vec<CidrLine> = Vec::with_capacity(lines.len());
@@ -10,9 +10,15 @@ pub(crate) fn cidr_matcher_factory(lines: Vec<String>, _data: Vec<u8>) -> Box<dy
             continue;
         }
         if let Ok(cidr) = trimmed_line.parse::<IpNetwork>() {
-            inner.push(CidrLine { cidr: Some(cidr), host: None });
+            inner.push(CidrLine {
+                cidr: Some(cidr),
+                host: None,
+            });
         } else {
-            inner.push(CidrLine { cidr: None, host: Some(trimmed_line.to_string()) });
+            inner.push(CidrLine {
+                cidr: None,
+                host: Some(trimmed_line.to_string()),
+            });
         }
     }
     Box::new(CIDRMatcher { lines: inner })

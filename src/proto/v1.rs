@@ -5,8 +5,6 @@ pub mod pb {
     tonic::include_proto!("moe.rikaaa0928.rog");
 }
 
-
-
 impl TryInto<UDPPacket> for UdpReq {
     type Error = ();
 

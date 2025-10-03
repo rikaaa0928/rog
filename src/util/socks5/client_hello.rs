@@ -10,13 +10,18 @@ pub struct ClientHello {
 }
 
 impl ClientHello {
-    pub fn parse<'a>(stream: &'a mut dyn RunStream) -> Pin<Box<dyn Future<Output=std::io::Result<Self>> + Send + 'a>> {
+    pub fn parse<'a>(
+        stream: &'a mut dyn RunStream,
+    ) -> Pin<Box<dyn Future<Output = std::io::Result<Self>> + Send + 'a>> {
         Box::pin(async move {
             let mut buf = vec![0u8; 1];
             let _ = stream.read_exact(&mut buf).await?;
             let version = buf[0].clone();
             if version != 5 {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid socks version"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid socks version",
+                ));
             }
             let _ = stream.read_exact(&mut buf).await?;
             let method_num = buf[0].clone();

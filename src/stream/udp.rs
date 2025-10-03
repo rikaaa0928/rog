@@ -29,7 +29,7 @@ impl RunUdpReader for UdpRunStream {
 
         let mut buf = [0u8; 65536];
         let (n, dst) = inner.recv_from(&mut buf).await?;
-        debug!("udp read from {:?} {:?} bytes: {:?}", &src,&dst, &buf[..n]);
+        debug!("udp read from {:?} {:?} bytes: {:?}", &src, &dst, &buf[..n]);
         Ok(UDPPacket {
             meta: UDPMeta {
                 dst_addr: dst.ip().to_string(),
@@ -44,7 +44,6 @@ impl RunUdpReader for UdpRunStream {
 
 #[async_trait::async_trait]
 impl RunUdpWriter for UdpRunStream {
-
     async fn write(&self, packet: UDPPacket) -> std::io::Result<()> {
         let inner = self.inner.clone();
         let dst_addr = packet.meta.dst_addr.clone();

@@ -80,7 +80,10 @@ impl RunConnector for GrpcRunConnector {
         )))
     }
 
-    async fn udp_tunnel(&self, src_addr: String) -> io::Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>> {
+    async fn udp_tunnel(
+        &self,
+        src_addr: String,
+    ) -> io::Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>> {
         let (tx, rx) = mpsc::channel::<UdpReq>(8);
         let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
         let rx = Request::new(rx);
@@ -89,15 +92,18 @@ impl RunConnector for GrpcRunConnector {
             return Err(io::Error::new(ErrorKind::Other, "grpc stream error"));
         }
         let resp = res.unwrap().into_inner();
-        Ok(Some((Box::new(GrpcUdpClientRunReader::new(
-            resp,
-            src_addr.clone(),
-            self.cfg.pw.as_ref().unwrap().clone(),
-        )),Box::new(GrpcUdpClientRunWriter::new(
-            tx,
-            src_addr,
-            self.cfg.pw.as_ref().unwrap().clone(),
-        )))))
+        Ok(Some((
+            Box::new(GrpcUdpClientRunReader::new(
+                resp,
+                src_addr.clone(),
+                self.cfg.pw.as_ref().unwrap().clone(),
+            )),
+            Box::new(GrpcUdpClientRunWriter::new(
+                tx,
+                src_addr,
+                self.cfg.pw.as_ref().unwrap().clone(),
+            )),
+        )))
     }
 }
 

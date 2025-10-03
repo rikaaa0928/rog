@@ -1,6 +1,4 @@
-use crate::def::{
-    RunUdpReader, RunUdpWriter, UDPPacket,
-};
+use crate::def::{RunUdpReader, RunUdpWriter, UDPPacket};
 use crate::proto::v1::pb::{UdpReq, UdpRes};
 use futures::StreamExt;
 use std::io::ErrorKind;

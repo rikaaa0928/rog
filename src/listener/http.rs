@@ -26,7 +26,7 @@ impl RunAcceptor for HttpRunAcceptor {
 
     async fn handshake(
         &self,
-        stream: &mut dyn RunStream
+        stream: &mut dyn RunStream,
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
         let mut buf = [0u8; 2048];
         let n = stream.read(&mut buf).await?;
@@ -54,7 +54,8 @@ impl RunAcceptor for HttpRunAcceptor {
         })?;
         if f_line.starts_with("CONNECT") {
             cache = None;
-            stream.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            stream
+                .write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 .await?;
             debug!("http HTTP/1.1 200 Connection Established\r\n\r\n");
         }

@@ -1,11 +1,11 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
 use crate::util::socks5::request::Request;
-use std::str;
 use crate::util::socks5::CMD_UDP;
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::str;
 
 pub(crate) mod socks5;
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct RunAddr {
     pub addr: String,
     pub port: u16,
@@ -40,12 +40,13 @@ impl TryFrom<&Request> for RunAddr {
                 Ok(ip.to_string())
             }
             // Domain name
-            3 => {
-                match str::from_utf8(&value.dst_addr) {
-                    Ok(domain) => Ok(domain.to_string()),
-                    Err(_) => Err(std::io::Error::new(std::io::ErrorKind::Other, "Not a domain"))
-                }
-            }
+            3 => match str::from_utf8(&value.dst_addr) {
+                Ok(domain) => Ok(domain.to_string()),
+                Err(_) => Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Not a domain",
+                )),
+            },
             // IPv6
             4 => {
                 if value.dst_addr.len() != 16 {
@@ -63,7 +64,10 @@ impl TryFrom<&Request> for RunAddr {
                 );
                 Ok(ip.to_string())
             }
-            _ => Err(std::io::Error::new(std::io::ErrorKind::Other, "a_type not found"))
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "a_type not found",
+            )),
         }?;
 
         Ok(Self {

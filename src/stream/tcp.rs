@@ -1,8 +1,8 @@
+use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
+use crate::util::RunAddr;
+use std::io::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
-use std::io::Result;
-use crate::util::RunAddr;
 
 pub struct TcpReadHalf {
     reader: tokio::net::tcp::OwnedReadHalf,
