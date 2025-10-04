@@ -1,4 +1,4 @@
-use crate::def::{RunReadHalf, RunStream};
+use crate::def::RunStream;
 use std::future::Future;
 use std::pin::Pin;
 

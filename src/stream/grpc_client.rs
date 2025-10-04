@@ -1,7 +1,7 @@
 use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
 use crate::proto::v1::pb::{StreamReq, StreamRes};
-use crate::util::RunAddr;
 use futures::StreamExt;
+use std::any::Any;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
@@ -64,13 +64,6 @@ impl RunReadHalf for GrpcClientReadHalf {
         }
     }
 
-    async fn read_exact(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-        Ok(0)
-    }
-
-    // async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
-    //     Ok(None)
-    // }
 }
 
 #[async_trait::async_trait]
@@ -148,12 +141,12 @@ impl RunStream for GrpcClientRunStream {
         }
     }
 
-    async fn read_exact(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-        Ok(0)
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
-    async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
-        Ok(None)
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 
     async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {

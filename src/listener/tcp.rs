@@ -1,4 +1,4 @@
-use crate::def::{RunAccStream, RunAcceptor, RunListener, RunReadHalf, RunStream, RunWriteHalf};
+use crate::def::{RunAccStream, RunAcceptor, RunListener, RunStream};
 use crate::stream::tcp::TcpRunStream;
 use crate::util::RunAddr;
 use std::net::SocketAddr;

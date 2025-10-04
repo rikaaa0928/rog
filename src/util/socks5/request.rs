@@ -1,4 +1,4 @@
-use crate::def::{RunReadHalf, RunStream};
+use crate::def::RunStream;
 use crate::util::socks5::{CMD_CONNECT, CMD_UDP};
 use std::future::Future;
 use std::pin::Pin;

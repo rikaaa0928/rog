@@ -1,5 +1,5 @@
 use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
-use crate::util::RunAddr;
+use std::any::Any;
 use std::io::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -24,14 +24,6 @@ impl RunReadHalf for TcpReadHalf {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         self.reader.read(buf).await
     }
-
-    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize> {
-        self.reader.read_exact(buf).await
-    }
-
-    // async fn handshake(&self) -> Result<Option<(RunAddr, String)>> {
-    //     Ok(None)
-    // }
 }
 
 // 为 TcpWriteHalf 实现 MyWriteHalf trait
@@ -64,12 +56,12 @@ impl RunStream for TcpRunStream {
         self.inner.read(buf).await
     }
 
-    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize> {
-        self.inner.read_exact(buf).await
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
-    async fn handshake(&self) -> Result<Option<(RunAddr, String)>> {
-        Ok(None)
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 
     async fn write(&mut self, buf: &[u8]) -> Result<()> {

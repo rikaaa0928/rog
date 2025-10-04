@@ -1,7 +1,5 @@
 use crate::connector;
-use crate::def::{
-    RouterSet, RunAcceptor, RunConnector, RunReadHalf, RunStream, RunWriteHalf, UDPPacket,
-};
+use crate::def::{RouterSet, RunAcceptor, RunStream, UDPPacket};
 use crate::object::config::ObjectConfig;
 use crate::util::RunAddr;
 use log::{debug, info, warn};

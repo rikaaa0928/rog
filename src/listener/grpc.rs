@@ -1,10 +1,8 @@
-use crate::def::{
-    RouterSet, RunAccStream, RunAcceptor, RunListener, RunReadHalf, RunStream, RunWriteHalf,
-};
+use crate::def::{RunAccStream, RunAcceptor, RunListener, RunStream};
 use crate::object::config::ObjectConfig;
 use crate::proto::v1::pb::rog_service_server::{RogService, RogServiceServer};
 use crate::proto::v1::pb::{StreamReq, StreamRes, UdpReq, UdpRes};
-use crate::stream::grpc_server::GrpcServerRunStream;
+use crate::stream::grpc_server::{self, GrpcServerRunStream};
 use crate::stream::grpc_udp_server::{GrpcUdpServerReadHalf, GrpcUdpServerWriteHalf};
 use crate::util::RunAddr;
 use futures::Stream;
@@ -279,6 +277,10 @@ impl RunAcceptor for GrpcRunListener {
         &self,
         stream: &mut dyn RunStream,
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
+        let stream = stream
+            .as_any_mut()
+            .downcast_mut::<grpc_server::GrpcServerRunStream>()
+            .unwrap();
         match stream.handshake().await? {
             Some((addr, auth)) => {
                 if auth != self.auth {

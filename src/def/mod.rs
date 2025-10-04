@@ -1,14 +1,28 @@
 pub mod config;
 
 use crate::util::RunAddr;
+use std::any::Any;
 use std::io::{Error, ErrorKind, Result};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 #[async_trait::async_trait]
 pub trait RunReadHalf: Send {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
-    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize>;
-    // async fn handshake(&self) -> Result<Option<(RunAddr, String)>>;
+    // async fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<usize> {
+    //     let mut n = 0;
+    //     while !buf.is_empty() {
+    //         let nn = self.read(buf).await?;
+    //         if nn == 0 {
+    //             break;
+    //         }
+    //         n += nn;
+    //         buf = &mut buf[nn..];
+    //     }
+    //     if n == 0 {
+    //         return Err(Error::new(ErrorKind::UnexpectedEof, "early eof"));
+    //     }
+    //     Ok(n)
+    // }
 }
 
 #[async_trait::async_trait]
@@ -18,10 +32,25 @@ pub trait RunWriteHalf: Send {
 
 #[async_trait::async_trait]
 pub trait RunStream: Send {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>);
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
-    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize>;
-    async fn handshake(&self) -> Result<Option<(RunAddr, String)>>;
+    async fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<usize> {
+        let mut n = 0;
+        while !buf.is_empty() {
+            let nn = self.read(buf).await?;
+            if nn == 0 {
+                break;
+            }
+            n += nn;
+            buf = &mut buf[nn..];
+        }
+        if n == 0 {
+            return Err(Error::new(ErrorKind::UnexpectedEof, "early eof"));
+        }
+        Ok(n)
+    }
     async fn write(&mut self, buf: &[u8]) -> Result<()>;
 }
 

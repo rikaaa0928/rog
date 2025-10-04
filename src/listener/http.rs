@@ -1,4 +1,4 @@
-use crate::def::{RunAccStream, RunAcceptor, RunReadHalf, RunStream, RunWriteHalf};
+use crate::def::{RunAccStream, RunAcceptor, RunStream};
 use crate::util::RunAddr;
 use log::debug;
 use std::io::ErrorKind;
