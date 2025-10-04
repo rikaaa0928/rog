@@ -2,12 +2,11 @@ use crate::def::{RouterSet, RunAccStream, RunConnector};
 use crate::object::config::ObjectConfig;
 use crate::{connector, listener};
 use log::{debug, error};
-use std::collections::HashMap; // New
+use std::collections::HashMap;
 use std::io;
 use std::io::Error;
 use std::sync::Arc;
 use tokio::spawn;
-use tokio::sync::Mutex; // Already present, but ensure it's used for cache
 
 pub mod config;
 pub mod raw_udp;
@@ -17,19 +16,24 @@ pub mod udp;
 pub struct Object {
     config: Arc<ObjectConfig>,
     router: Arc<dyn RouterSet>,
-    connector_cache: Arc<Mutex<HashMap<String, Arc<Box<dyn RunConnector>>>>>, // New field
 }
 
 impl Object {
     pub fn new(config: Arc<ObjectConfig>, router: Arc<dyn RouterSet>) -> Self {
-        Self {
-            config,
-            router,
-            connector_cache: Arc::new(Mutex::new(HashMap::new())), // Initialize cache
+        Self { config, router }
+    }
+
+    async fn init_connectors(&self) -> io::Result<HashMap<String, Arc<Box<dyn RunConnector>>>> {
+        let mut cache = HashMap::with_capacity(self.config.connector.len());
+        for (name, conn_conf) in &self.config.connector {
+            let connector = connector::create(conn_conf).await?;
+            cache.insert(name.clone(), Arc::new(connector));
         }
+        Ok(cache)
     }
 
     pub async fn start(&self) -> io::Result<()> {
+        let connector_cache_outer = Arc::new(self.init_connectors().await?);
         let config_outer = self.config.clone(); // Renamed for clarity
         let router_outer = self.router.clone(); // Renamed for clarity
         let acc = listener::create(&config_outer, router_outer.clone())
@@ -39,7 +43,6 @@ impl Object {
                 e
             })?;
         let main_acceptor = Arc::new(acc);
-        let connector_cache_outer = self.connector_cache.clone(); // Clone cache Arc for the loop
 
         loop {
             let (mut acc_stream, _) = main_acceptor.accept().await.map_err(|e| {
@@ -49,7 +52,7 @@ impl Object {
             let main_acceptor_clone = Arc::clone(&main_acceptor);
             let router_clone = Arc::clone(&router_outer);
             let config_clone = Arc::clone(&config_outer);
-            let connector_cache_clone = Arc::clone(&connector_cache_outer); // Clone cache Arc for the spawned task
+            let connector_cache_clone = Arc::clone(&connector_cache_outer);
 
             spawn(async move {
                 match acc_stream {
@@ -83,53 +86,20 @@ impl Object {
                                             addr_ref,
                                         )
                                         .await;
-                                    let conn_conf = match config_clone
-                                        .connector
-                                        .get(client_name.as_str())
-                                    {
-                                        Some(c) => c,
-                                        None => {
-                                            error!("Connector config '{}' not found", client_name);
-                                            return Ok(()); // Exit the task for this connection
-                                        }
-                                    };
-
-                                    let connector_obj: Arc<Box<dyn RunConnector>>;
-                                    {
-                                        let mut connector_cache_guard =
-                                            connector_cache_clone.lock().await;
-                                        if let Some(cached_connector) =
-                                            connector_cache_guard.get(client_name.as_str())
-                                        {
-                                            connector_obj = Arc::clone(cached_connector);
-                                            debug!(
-                                                "Reusing cached connector for client: {}",
-                                                client_name
-                                            );
-                                        } else {
-                                            debug!(
-                                                "Creating new connector for client: {}",
-                                                client_name
-                                            );
-                                            let new_connector =
-                                                match connector::create(conn_conf).await {
-                                                    Ok(c) => c,
-                                                    Err(e) => {
-                                                        error!(
-                                                            "Failed to create connector '{}': {}",
-                                                            client_name, e
-                                                        );
-                                                        return Ok(());
-                                                    }
-                                                };
-                                            let new_connector_arc = Arc::new(new_connector);
-                                            connector_cache_guard.insert(
-                                                client_name.clone(),
-                                                Arc::clone(&new_connector_arc),
-                                            );
-                                            connector_obj = new_connector_arc;
-                                        }
-                                    }
+                                    let connector_obj =
+                                        match connector_cache_clone.get(client_name.as_str()) {
+                                            Some(cached_connector) => {
+                                                debug!(
+                                                    "Reusing cached connector for client: {}",
+                                                    client_name
+                                                );
+                                                Arc::clone(cached_connector)
+                                            }
+                                            None => {
+                                                error!("Connector '{}' not preloaded", client_name);
+                                                return Ok(());
+                                            }
+                                        };
 
                                     debug!("Handshake successful {:?}", addr_ref);
                                     let client_stream_res = Arc::clone(&connector_obj)
