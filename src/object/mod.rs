@@ -57,12 +57,13 @@ impl Object {
             spawn(async move {
                 match acc_stream {
                     RunAccStream::TCPStream(mut tcp_stream) => {
-                        let addr_res = main_acceptor_clone.handshake(tcp_stream.as_mut()).await;
-                        match addr_res {
+                        let handshake_res =
+                            main_acceptor_clone.handshake(tcp_stream.as_mut()).await;
+                        match handshake_res {
                             Err(e) => {
                                 error!("Handshake error: {}", e);
                             }
-                            Ok((addr, payload_cache)) => {
+                            Ok((addr, payload_cache, state)) => {
                                 let addr_ref = &addr;
                                 if addr_ref.udp {
                                     // Assuming udp::handle_udp_connection might also need caching if it creates connectors.
@@ -121,9 +122,16 @@ impl Object {
                                                 addr_ref.endpoint(),
                                                 e
                                             );
+                                            let payload_len =
+                                                payload_cache.as_ref().map_or(0, |v| v.len());
                                             // We still need to run post_handshake to inform the client
                                             if let Err(e) = main_acceptor_clone
-                                                .post_handshake(tcp_stream.as_mut(), true, 0)
+                                                .post_handshake(
+                                                    tcp_stream.as_mut(),
+                                                    false,
+                                                    payload_len,
+                                                    state,
+                                                )
                                                 .await
                                             {
                                                 error!("Error in post_handshake after connection failure: {}", e);
@@ -132,8 +140,15 @@ impl Object {
                                         }
                                     };
 
+                                    let payload_len =
+                                        payload_cache.as_ref().map_or(0, |v| v.len());
                                     if let Err(e) = main_acceptor_clone
-                                        .post_handshake(tcp_stream.as_mut(), false, 0)
+                                        .post_handshake(
+                                            tcp_stream.as_mut(),
+                                            true,
+                                            payload_len,
+                                            state,
+                                        )
                                         .await
                                     {
                                         error!("Error in post_handshake: {}", e);

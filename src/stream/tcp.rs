@@ -52,6 +52,10 @@ impl RunStream for TcpRunStream {
         )
     }
 
+    async fn peek(&self, buf: &mut [u8]) -> Result<usize> {
+        self.inner.peek(buf).await
+    }
+
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         self.inner.read(buf).await
     }

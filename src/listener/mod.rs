@@ -1,4 +1,5 @@
 use crate::def::{RouterSet, RunAcceptor, RunListener};
+use crate::listener::auto::AutoRunAcceptor;
 use crate::listener::grpc::GrpcListener;
 use crate::listener::http::HttpRunAcceptor;
 use crate::listener::socks5::SocksRunAcceptor;
@@ -6,6 +7,7 @@ use crate::listener::tcp::TcpRunListener;
 use crate::object::config::ObjectConfig;
 use std::sync::Arc;
 
+pub(crate) mod auto;
 pub(crate) mod grpc;
 pub(crate) mod http;
 pub(crate) mod socks5;
@@ -34,6 +36,13 @@ pub async fn create(
                 .await?;
             let http = Box::new(HttpRunAcceptor::new(listener, None, None));
             Ok(http)
+        }
+        "auto" => {
+            let listener = TcpRunListener {}
+                .listen(cfg.listener.endpoint.as_str())
+                .await?;
+            let auto = Box::new(AutoRunAcceptor::new(listener));
+            Ok(auto)
         }
         _ => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

@@ -10,6 +10,8 @@ pub struct TcpRunAcceptor {
 
 pub struct TcpRunListener {}
 
+use std::any::Any;
+
 #[async_trait::async_trait]
 impl RunAcceptor for TcpRunAcceptor {
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
@@ -23,17 +25,26 @@ impl RunAcceptor for TcpRunAcceptor {
     async fn handshake(
         &self,
         _stream: &mut dyn RunStream,
-    ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
+    ) -> std::io::Result<(RunAddr, Option<Vec<u8>>, Box<dyn Any + Send>)> {
         Ok((
             RunAddr {
                 addr: "".to_string(),
                 port: 0,
-                // a_type: 0,
                 udp: false,
-                // cache: None,
             },
             None,
+            Box::new(()),
         ))
+    }
+
+    async fn post_handshake(
+        &self,
+        _stream: &mut dyn RunStream,
+        _success: bool,
+        _payload_len: usize,
+        _state: Box<dyn Any + Send>,
+    ) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

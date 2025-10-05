@@ -2,11 +2,11 @@
 mod tests {
     use crate::connector::tcp::TcpRunConnector;
     use crate::def::{
-        RunAccStream, RunAcceptor, RunConnector, RunListener, RunReadHalf, RunStream, RunWriteHalf,
-        UDPPacket,
+        RunAccStream, RunAcceptor, RunConnector, RunListener, RunStream, UDPPacket,
     };
     use crate::listener::socks5::SocksRunAcceptor;
     use crate::listener::tcp::TcpRunListener;
+    use std::any::Any;
     use std::io::{Error, ErrorKind, Result};
     use std::net::SocketAddr;
     use std::sync::Arc;
@@ -16,6 +16,7 @@ mod tests {
 
     #[cfg(test)]
     #[tokio::test]
+    #[ignore]
     async fn test_socks5() -> Result<()> {
         let listener = TcpRunListener {}.listen("127.0.0.1:12345").await?;
         let socks5 = Arc::new(SocksRunAcceptor::new(listener, None, None));
@@ -23,32 +24,37 @@ mod tests {
         loop {
             let connector = Arc::clone(&connector);
             let socks5 = Arc::clone(&socks5);
-            let (mut s, a) = socks5.accept().await?;
+            let (s, a) = socks5.accept().await?;
             println!("Accepted connection from {}", a);
             let job = spawn(async move {
                 match s {
                     RunAccStream::TCPStream(mut s) => {
-                        // let udp_tunnel=Arc::new(&connector).lock().await.udp_tunnel();
                         let addr_res = socks5.handshake(s.as_mut()).await;
                         match addr_res {
                             Err(e) => {
                                 println!("Handshake error: {}", e);
                             }
-                            Ok((addr, payload_cache)) => {
+                            Ok((addr, payload_cache, state)) => {
                                 let addr_ref = &addr;
                                 if addr_ref.udp {
                                     println!("udp? {:?}", addr_ref);
                                     let udp_socket_base_res = UdpSocket::bind("127.0.0.1:0").await;
                                     if udp_socket_base_res.is_err() {
-                                        socks5.post_handshake(s.as_mut(), true, 0).await?;
+                                        socks5
+                                            .post_handshake(s.as_mut(), false, 0, Box::new(()))
+                                            .await?;
                                         return Err(udp_socket_base_res.err().unwrap());
                                     }
                                     let udp_socket_base = udp_socket_base_res?;
                                     let udp_port = udp_socket_base.local_addr()?.port();
-                                    socks5.post_handshake(s.as_mut(), false, udp_port).await?;
-                                    // let confirm = util::socks5::confirm::Confirm::new(false, udp_port);
-                                    // println!("post handshake {:?}", &confirm.to_bytes());
-                                    // w.write(&confirm.to_bytes()).await?;
+                                    socks5
+                                        .post_handshake(
+                                            s.as_mut(),
+                                            true,
+                                            udp_port as usize,
+                                            Box::new(()),
+                                        )
+                                        .await?;
                                     let udp_socket_base = Arc::new(udp_socket_base);
                                     println!("provide {} for {:?}", &udp_port, addr_ref);
 
@@ -81,9 +87,7 @@ mod tests {
                                     }
                                     let (mut udp_tunnel_reader, udp_tunnel_writer) =
                                         udp_tunnel.unwrap();
-                                    //loop
                                     println!("udp loop start");
-                                    // let udp_tunnel = Arc::clone(&udp_tunnel_base);
                                     let udp_socket = Arc::clone(&udp_socket_base);
                                     let b: tokio::task::JoinHandle<Result<()>> = spawn(
                                         async move {
@@ -148,7 +152,6 @@ mod tests {
                                             Ok(())
                                         },
                                     );
-                                    // let udp_tunnel = Arc::clone(&udp_tunnel_base);
                                     let udp_socket = Arc::clone(&udp_socket_base);
                                     let c: tokio::task::JoinHandle<Result<()>> = spawn(
                                         async move {
@@ -210,12 +213,11 @@ mod tests {
                                     .await
                                     .connect(addr_ref.endpoint())
                                     .await;
-                                let mut error = false;
-                                if client_stream_res.is_err() {
-                                    error = true;
-                                }
+                                let error = client_stream_res.is_err();
                                 let client_stream = client_stream_res?;
-                                socks5.post_handshake(s.as_mut(), error, 0).await?;
+                                socks5
+                                    .post_handshake(s.as_mut(), !error, 0, state)
+                                    .await?;
                                 let (mut tcp_r, mut tcp_w) = client_stream.split();
                                 let (reader_interrupter, mut reader_interrupt_receiver) =
                                     oneshot::channel();
@@ -274,5 +276,143 @@ mod tests {
                 Ok::<(), Error>(())
             });
         }
+    }
+
+    use crate::listener::auto::AutoRunAcceptor;
+    use crate::util::socks5;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn test_auto_protocol_socks5() -> Result<()> {
+        let listener = TcpRunListener {}.listen("127.0.0.1:12346").await?;
+        let auto_acceptor = Arc::new(AutoRunAcceptor::new(listener));
+
+        let server_handle = {
+            let auto_acceptor = Arc::clone(&auto_acceptor);
+            spawn(async move {
+                let (acc_stream, _) = auto_acceptor.accept().await.unwrap();
+                match acc_stream {
+                    RunAccStream::TCPStream(mut stream) => {
+                        let (addr, _cache, state) =
+                            auto_acceptor.handshake(stream.as_mut()).await.unwrap();
+                        assert_eq!(addr.endpoint(), "www.google.com:80");
+
+                        auto_acceptor
+                            .post_handshake(stream.as_mut(), true, 0, state)
+                            .await
+                            .unwrap();
+
+                        let mut buf = [0; 1024];
+                        let n = stream.read(&mut buf).await.unwrap();
+                        stream.write(&buf[..n]).await.unwrap();
+                    }
+                    _ => panic!("Expected TCP stream"),
+                }
+            })
+        };
+
+        let client_handle = spawn(async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            let mut client = tokio::net::TcpStream::connect("127.0.0.1:12346")
+                .await
+                .unwrap();
+
+            // SOCKS5 Client Hello
+            let hello = vec![0x05, 0x01, 0x00];
+            client.write_all(&hello).await.unwrap();
+
+            let mut hello_reply_buf = [0; 2];
+            client.read_exact(&mut hello_reply_buf).await.unwrap();
+            assert_eq!(hello_reply_buf[0], 0x05);
+            assert_eq!(hello_reply_buf[1], socks5::NO_AUTH);
+
+            // SOCKS5 Request
+            let mut request = vec![0x05, 0x01, 0x00, 0x03];
+            let domain = "www.google.com";
+            request.push(domain.len() as u8);
+            request.extend_from_slice(domain.as_bytes());
+            request.extend_from_slice(&80u16.to_be_bytes());
+            client.write_all(&request).await.unwrap();
+
+            // SOCKS5 reply
+            let mut confirm_buf = [0; 10];
+            client.read_exact(&mut confirm_buf).await.unwrap();
+
+            // Send test data
+            client.write_all(b"hello").await.unwrap();
+
+            // Receive echo
+            let mut echo_buf = [0; 5];
+            client.read_exact(&mut echo_buf).await.unwrap();
+            assert_eq!(&echo_buf, b"hello");
+        });
+
+        timeout(Duration::from_secs(5), async {
+            let (server_res, client_res) = tokio::join!(server_handle, client_handle);
+            server_res.unwrap();
+            client_res.unwrap();
+        })
+        .await
+        .expect("Test timed out");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_auto_protocol_http() -> Result<()> {
+        let listener = TcpRunListener {}.listen("127.0.0.1:12347").await?;
+        let auto_acceptor = Arc::new(AutoRunAcceptor::new(listener));
+
+        let server_handle = {
+            let auto_acceptor = Arc::clone(&auto_acceptor);
+            spawn(async move {
+                let (acc_stream, _) = auto_acceptor.accept().await.unwrap();
+                match acc_stream {
+                    RunAccStream::TCPStream(mut stream) => {
+                        let (addr, cache, state) =
+                            auto_acceptor.handshake(stream.as_mut()).await.unwrap();
+                        assert_eq!(addr.endpoint(), "example.com:80");
+
+                        auto_acceptor
+                            .post_handshake(stream.as_mut(), true, 0, state)
+                            .await
+                            .unwrap();
+
+                        if let Some(data) = cache {
+                            stream.write(&data).await.unwrap();
+                        }
+                    }
+                    _ => panic!("Expected TCP stream"),
+                }
+            })
+        };
+
+        let client_handle = spawn(async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            let mut client = tokio::net::TcpStream::connect("127.0.0.1:12347")
+                .await
+                .unwrap();
+
+            let request = "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n";
+            client.write_all(request.as_bytes()).await.unwrap();
+
+            let mut echo_buf = [0; 1024];
+            let n = client.read(&mut echo_buf).await.unwrap();
+            assert_eq!(&echo_buf[..n], request.as_bytes());
+        });
+
+        timeout(Duration::from_secs(5), async {
+            let (server_res, client_res) = tokio::join!(server_handle, client_handle);
+            server_res.unwrap();
+            client_res.unwrap();
+        })
+        .await
+        .expect("Test timed out");
+
+        Ok(())
     }
 }

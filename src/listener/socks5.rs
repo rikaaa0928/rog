@@ -20,6 +20,8 @@ impl SocksRunAcceptor {
         SocksRunAcceptor { inner: a, user, pw }
     }
 }
+use std::any::Any;
+
 #[async_trait::async_trait]
 impl RunAcceptor for SocksRunAcceptor {
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
@@ -30,7 +32,7 @@ impl RunAcceptor for SocksRunAcceptor {
     async fn handshake(
         &self,
         stream: &mut dyn RunStream,
-    ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
+    ) -> std::io::Result<(RunAddr, Option<Vec<u8>>, Box<dyn Any + Send>)> {
         let hello = &util::socks5::client_hello::ClientHello::parse(stream).await?;
         if !hello.contains(util::socks5::NO_AUTH) {
             return Err(std::io::Error::new(
@@ -46,7 +48,7 @@ impl RunAcceptor for SocksRunAcceptor {
         let req = &util::socks5::request::Request::parse(stream).await?;
         let ret: std::io::Result<RunAddr> = req.try_into();
         match ret {
-            Ok(addr) => Ok((addr, None)),
+            Ok(addr) => Ok((addr, None, Box::new(()))),
             Err(e) => Err(e),
         }
     }
@@ -54,10 +56,11 @@ impl RunAcceptor for SocksRunAcceptor {
     async fn post_handshake(
         &self,
         stream: &mut dyn RunStream,
-        error: bool,
-        port: u16,
+        success: bool,
+        _payload_len: usize,
+        _state: Box<dyn Any + Send>,
     ) -> std::io::Result<()> {
-        let confirm = util::socks5::confirm::Confirm::new(error, port);
+        let confirm = util::socks5::confirm::Confirm::new(!success, 0);
         stream.write(&confirm.to_bytes()).await?;
         Ok(())
     }

@@ -17,6 +17,8 @@ impl HttpRunAcceptor {
         Self { inner: a, user, pw }
     }
 }
+use std::any::Any;
+
 #[async_trait::async_trait]
 impl RunAcceptor for HttpRunAcceptor {
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
@@ -27,7 +29,7 @@ impl RunAcceptor for HttpRunAcceptor {
     async fn handshake(
         &self,
         stream: &mut dyn RunStream,
-    ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
+    ) -> std::io::Result<(RunAddr, Option<Vec<u8>>, Box<dyn Any + Send>)> {
         let mut buf = [0u8; 2048];
         let n = stream.read(&mut buf).await?;
         let data = buf[0..n].to_vec();
@@ -35,7 +37,6 @@ impl RunAcceptor for HttpRunAcceptor {
         let str = String::from_utf8(data).map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
         let lines = str.split("\r\n").collect::<Vec<&str>>();
         let f_line = lines.first().ok_or_else(|| {
-            // 2. 使用 lines.first().ok_or_else 处理空数据
             std::io::Error::new(ErrorKind::InvalidData, "Empty request data")
         })?;
         let parts = f_line.split(" ").collect::<Vec<&str>>();
@@ -70,9 +71,19 @@ impl RunAcceptor for HttpRunAcceptor {
                     std::io::Error::new(ErrorKind::InvalidData, "URL has no port")
                 })?,
                 udp: false,
-                // cache,
             },
             cache,
+            Box::new(()),
         ))
+    }
+
+    async fn post_handshake(
+        &self,
+        _stream: &mut dyn RunStream,
+        _success: bool,
+        _payload_len: usize,
+        _state: Box<dyn Any + Send>,
+    ) -> std::io::Result<()> {
+        Ok(())
     }
 }

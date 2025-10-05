@@ -247,6 +247,8 @@ impl RunListener for GrpcListener {
     }
 }
 
+use std::any::Any;
+
 #[async_trait::async_trait]
 impl RunAcceptor for GrpcRunListener {
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
@@ -276,7 +278,7 @@ impl RunAcceptor for GrpcRunListener {
     async fn handshake(
         &self,
         stream: &mut dyn RunStream,
-    ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
+    ) -> std::io::Result<(RunAddr, Option<Vec<u8>>, Box<dyn Any + Send>)> {
         let stream = stream
             .as_any_mut()
             .downcast_mut::<grpc_server::GrpcServerRunStream>()
@@ -286,9 +288,19 @@ impl RunAcceptor for GrpcRunListener {
                 if auth != self.auth {
                     return Err(Error::new(ErrorKind::Other, "invalid auth"));
                 }
-                Ok((addr, None))
+                Ok((addr, None, Box::new(())))
             }
             None => Err(Error::new(ErrorKind::Other, "handshake failed")),
         }
+    }
+
+    async fn post_handshake(
+        &self,
+        _stream: &mut dyn RunStream,
+        _success: bool,
+        _payload_len: usize,
+        _state: Box<dyn Any + Send>,
+    ) -> std::io::Result<()> {
+        Ok(())
     }
 }

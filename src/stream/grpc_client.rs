@@ -91,6 +91,13 @@ impl GrpcClientRunStream {
 
 #[async_trait::async_trait]
 impl RunStream for GrpcClientRunStream {
+    async fn peek(&self, _buf: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "peek is not supported for GrpcClientRunStream",
+        ))
+    }
+
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>) {
         (
             Box::new(GrpcClientReadHalf {

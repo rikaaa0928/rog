@@ -10,6 +10,8 @@ use tokio::net::UdpSocket;
 use tokio::sync::Notify;
 use tokio::{select, spawn};
 
+use std::any::Any;
+
 pub async fn handle_udp_connection(
     mut stream: Box<dyn RunStream>,
     acc: Arc<Box<dyn RunAcceptor>>,
@@ -22,12 +24,14 @@ pub async fn handle_udp_connection(
     // let (mut r, mut w) = stream.split();
     let udp_socket_base_res = UdpSocket::bind("127.0.0.1:0").await;
     if udp_socket_base_res.is_err() {
-        acc.post_handshake(stream.as_mut(), true, 0).await?;
+        acc.post_handshake(stream.as_mut(), false, 0, Box::new(()))
+            .await?;
         return Err(udp_socket_base_res.err().unwrap());
     }
     let udp_socket_base = udp_socket_base_res?;
     let udp_port = udp_socket_base.local_addr()?.port();
-    acc.post_handshake(stream.as_mut(), false, udp_port).await?;
+    acc.post_handshake(stream.as_mut(), true, udp_port as usize, Box::new(()))
+        .await?;
     let udp_socket_reader = Arc::new(udp_socket_base);
     let udp_socket_writer = Arc::clone(&udp_socket_reader);
     info!("provide {} for {:?}", &udp_port, &addr);

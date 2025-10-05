@@ -35,6 +35,7 @@ pub trait RunStream: Send {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>);
+    async fn peek(&self, buf: &mut [u8]) -> Result<usize>;
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
     async fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<usize> {
         let mut n = 0;
@@ -74,12 +75,19 @@ pub trait RunAcceptor: Send + Sync {
     async fn accept(&self) -> Result<(RunAccStream, SocketAddr)>;
 
     // stream handshake
-    async fn handshake(&self, stream: &mut dyn RunStream) -> Result<(RunAddr, Option<Vec<u8>>)>;
+    async fn handshake(
+        &self,
+        stream: &mut dyn RunStream,
+    ) -> Result<(RunAddr, Option<Vec<u8>>, Box<dyn Any + Send>)>;
 
     // stream post handshake
-    async fn post_handshake(&self, _: &mut dyn RunStream, _: bool, _: u16) -> Result<()> {
-        Ok(())
-    }
+    async fn post_handshake(
+        &self,
+        stream: &mut dyn RunStream,
+        success: bool,
+        payload_len: usize,
+        state: Box<dyn Any + Send>,
+    ) -> Result<()>;
 }
 
 #[async_trait::async_trait]
