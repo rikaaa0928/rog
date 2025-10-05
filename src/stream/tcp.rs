@@ -68,7 +68,7 @@ impl RunStream for TcpRunStream {
         self.inner.read_exact(buf).await
     }
 
-    async fn handshake(&self) -> Result<Option<(RunAddr, String)>> {
+    async fn handshake(&mut self) -> Result<Option<(RunAddr, String)>> {
         Ok(None)
     }
 

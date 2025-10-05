@@ -21,7 +21,7 @@ pub trait RunStream: Send {
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>);
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
     async fn read_exact(&mut self, buf: &mut [u8]) -> Result<usize>;
-    async fn handshake(&self) -> Result<Option<(RunAddr, String)>>;
+    async fn handshake(&mut self) -> Result<Option<(RunAddr, String)>>;
     async fn write(&mut self, buf: &[u8]) -> Result<()>;
 }
 
@@ -42,6 +42,8 @@ pub trait RunConnector: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait RunAcceptor: Send + Sync {
+    fn box_clone(&self) -> Box<dyn RunAcceptor>;
+
     async fn accept(&self) -> Result<(RunAccStream, SocketAddr)>;
 
     // stream handshake

@@ -1,4 +1,5 @@
 use crate::def::{RouterSet, RunAcceptor, RunListener};
+use crate::listener::adaptive::AdaptiveRunAcceptor;
 use crate::listener::grpc::GrpcListener;
 use crate::listener::http::HttpRunAcceptor;
 use crate::listener::socks5::SocksRunAcceptor;
@@ -6,6 +7,7 @@ use crate::listener::tcp::TcpRunListener;
 use crate::object::config::ObjectConfig;
 use std::sync::Arc;
 
+pub(crate) mod adaptive;
 pub(crate) mod grpc;
 pub(crate) mod http;
 pub(crate) mod socks5;
@@ -16,6 +18,13 @@ pub async fn create(
     router: Arc<dyn RouterSet>,
 ) -> std::io::Result<Box<dyn RunAcceptor>> {
     match cfg.listener.proto.as_str() {
+        "adaptive" => {
+            let listener = TcpRunListener {}
+                .listen(cfg.listener.endpoint.as_str())
+                .await?;
+            let adaptive = Box::new(AdaptiveRunAcceptor::new(listener));
+            Ok(adaptive)
+        }
         "socks5" => {
             let listener = TcpRunListener {}
                 .listen(cfg.listener.endpoint.as_str())

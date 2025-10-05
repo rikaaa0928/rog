@@ -121,7 +121,7 @@ impl RunStream for GrpcServerRunStream {
         Ok(0)
     }
 
-    async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
+    async fn handshake(&mut self) -> std::io::Result<Option<(RunAddr, String)>> {
         let auth = self.reader.lock().await.next().await;
         match auth {
             Some(Ok(a)) => {

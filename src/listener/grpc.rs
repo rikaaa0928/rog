@@ -221,6 +221,16 @@ pub struct GrpcRunListener {
     auth: String,
 }
 
+impl Clone for GrpcRunListener {
+    fn clone(&self) -> Self {
+        Self {
+            receiver: self.receiver.clone(),
+            udp_receiver: self.udp_receiver.clone(),
+            auth: self.auth.clone(),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl RunListener for GrpcListener {
     async fn listen(&self, addr: &str) -> std::io::Result<Box<dyn RunAcceptor>> {
@@ -249,6 +259,10 @@ impl RunListener for GrpcListener {
 
 #[async_trait::async_trait]
 impl RunAcceptor for GrpcRunListener {
+    fn box_clone(&self) -> Box<dyn RunAcceptor> {
+        Box::new(self.clone())
+    }
+
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
         let mut receiver = self.receiver.lock().await;
         let mut udp_receiver = self.udp_receiver.lock().await;

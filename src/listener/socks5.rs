@@ -22,6 +22,14 @@ impl SocksRunAcceptor {
 }
 #[async_trait::async_trait]
 impl RunAcceptor for SocksRunAcceptor {
+    fn box_clone(&self) -> Box<dyn RunAcceptor> {
+        Box::new(Self {
+            inner: self.inner.box_clone(),
+            user: self.user.clone(),
+            pw: self.pw.clone(),
+        })
+    }
+
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
         let res = self.inner.accept().await;
         res

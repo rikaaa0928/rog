@@ -105,7 +105,7 @@ impl RunStream for GrpcClientRunStream {
         Ok(0)
     }
 
-    async fn handshake(&self) -> std::io::Result<Option<(RunAddr, String)>> {
+    async fn handshake(&mut self) -> std::io::Result<Option<(RunAddr, String)>> {
         Ok(None)
     }
 
