@@ -139,13 +139,14 @@ impl Object {
                                         error!("Error in post_handshake: {}", e);
                                         return Ok(());
                                     }
-                                    let (mut r, mut w) = tcp_stream.split();
+                                    // let (mut r, mut w) = tcp_stream.split();
                                     if let Err(e) = tcp::handle_tcp_connection(
-                                        r,
-                                        w,
+                                        // r,
+                                        // w,
                                         addr,
                                         payload_cache,
                                         client_stream,
+                                        tcp_stream,
                                     )
                                     .await
                                     {

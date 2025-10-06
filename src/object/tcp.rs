@@ -3,21 +3,24 @@ use crate::util::RunAddr;
 use log::debug;
 use std::io::{Error, ErrorKind, Result};
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::select;
 use tokio::sync::Notify;
 
 pub async fn handle_tcp_connection(
-    mut r: Box<dyn RunReadHalf>,
-    mut w: Box<dyn RunWriteHalf>,
+    // mut r: Box<dyn RunReadHalf>,
+    // mut w: Box<dyn RunWriteHalf>,
     addr: RunAddr,
     cache: Option<Vec<u8>>,
     client_stream: Box<dyn RunStream>,
+    server_stream: Box<dyn RunStream>,
 ) -> Result<()> {
     debug!("Post Handshake successful {:?}", addr);
     let (mut tcp_r, mut tcp_w) = client_stream.split();
+    let (mut r, mut w) = server_stream.split();
     let shutdown_signal = Arc::new(Notify::new());
     if cache.is_some() {
-        tcp_w.write(cache.unwrap().as_slice()).await?;
+        tcp_w.write_all(cache.unwrap().as_slice()).await?;
     }
 
     debug!("start loop");
@@ -38,7 +41,7 @@ pub async fn handle_tcp_connection(
                     break;
                 }
                 Ok(n) => {
-                    if let Err(e) = tcp_w.write(&buf[..n]).await {
+                    if let Err(e) = tcp_w.write_all(&buf[..n]).await {
                         debug!("Reader task (r -> tcp_w): tcp_w.write() error: {:?}", e);
                         break;
                     }
@@ -65,7 +68,7 @@ pub async fn handle_tcp_connection(
                     break;
                 }
                 Ok(n) => {
-                    if let Err(e) = w.write(&buf[..n]).await {
+                    if let Err(e) = w.write_all(&buf[..n]).await {
                         debug!("Writer task (tcp_r -> w): w.write() error: {:?}", e);
                         break;
                     }

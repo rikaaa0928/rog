@@ -4,37 +4,17 @@ use crate::util::RunAddr;
 use std::any::Any;
 use std::io::{Error, ErrorKind, Result};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use tokio::io::{AsyncRead, AsyncWrite};
 
-#[async_trait::async_trait]
-pub trait RunReadHalf: Send {
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
-    // async fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<usize> {
-    //     let mut n = 0;
-    //     while !buf.is_empty() {
-    //         let nn = self.read(buf).await?;
-    //         if nn == 0 {
-    //             break;
-    //         }
-    //         n += nn;
-    //         buf = &mut buf[nn..];
-    //     }
-    //     if n == 0 {
-    //         return Err(Error::new(ErrorKind::UnexpectedEof, "early eof"));
-    //     }
-    //     Ok(n)
-    // }
-}
+pub(crate) type RunReadHalf = dyn AsyncRead + Send + Unpin;
 
-#[async_trait::async_trait]
-pub trait RunWriteHalf: Send {
-    async fn write(&mut self, buf: &[u8]) -> Result<()>;
-}
+pub(crate) type RunWriteHalf = dyn AsyncWrite + Send + Unpin;
 
 #[async_trait::async_trait]
 pub trait RunStream: Send {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
-    fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>);
+    fn split(self: Box<Self>) -> (Box<RunReadHalf>, Box<RunWriteHalf>);
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
     async fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<usize> {
         let mut n = 0;
@@ -91,11 +71,6 @@ pub trait RouterSet: Send + Sync {
     async fn route(&self, l_name: &str, r_name: &str, addr: &RunAddr) -> String;
 }
 
-// #[async_trait::async_trait]
-// pub trait RunUdpStream: Send + Sync {
-//     async fn read(&self) -> Result<UDPPacket>;
-//     async fn write(&self, packet: UDPPacket) -> Result<()>;
-// }
 
 #[async_trait::async_trait]
 pub trait RunUdpReader: Send {
