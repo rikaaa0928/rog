@@ -14,7 +14,6 @@ mod object;
 mod proto;
 mod router;
 mod stream;
-mod test;
 mod util;
 
 #[tokio::main]

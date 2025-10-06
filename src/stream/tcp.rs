@@ -24,7 +24,7 @@ impl RunStream for TcpRunStream {
         (Box::new(reader), Box::new(writer))
     }
 
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+    async fn stream_read(&mut self, buf: &mut [u8]) -> Result<usize> {
         self.inner.read(buf).await
     }
 
@@ -36,7 +36,7 @@ impl RunStream for TcpRunStream {
         self
     }
 
-    async fn write(&mut self, buf: &[u8]) -> Result<()> {
+    async fn stream_write(&mut self, buf: &[u8]) -> Result<()> {
         self.inner.write_all(buf).await
     }
 }

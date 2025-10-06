@@ -42,7 +42,7 @@ impl RunAcceptor for SocksRunAcceptor {
             hello.version.clone(),
             util::socks5::NO_AUTH,
         );
-        stream.write(&hello_back.to_bytes()).await?;
+        stream.stream_write(&hello_back.to_bytes()).await?;
         let req = &util::socks5::request::Request::parse(stream).await?;
         let ret: std::io::Result<RunAddr> = req.try_into();
         match ret {
@@ -58,7 +58,7 @@ impl RunAcceptor for SocksRunAcceptor {
         port: u16,
     ) -> std::io::Result<()> {
         let confirm = util::socks5::confirm::Confirm::new(error, port);
-        stream.write(&confirm.to_bytes()).await?;
+        stream.stream_write(&confirm.to_bytes()).await?;
         Ok(())
     }
 }

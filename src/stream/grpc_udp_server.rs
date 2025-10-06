@@ -47,7 +47,7 @@ impl RunUdpReader for GrpcUdpServerReadHalf {
     //     }
     // }
 
-    async fn read(&mut self) -> std::io::Result<UDPPacket> {
+    async fn udp_read(&mut self) -> std::io::Result<UDPPacket> {
         let res = self.reader.next().await;
         if res.is_none() {
             return Err(std::io::Error::new(ErrorKind::Other, "no more data"));
@@ -79,7 +79,7 @@ impl RunUdpWriter for GrpcUdpServerWriteHalf {
     //     }
     // }
 
-    async fn write(&self, packet: UDPPacket) -> std::io::Result<()> {
+    async fn udp_write(&self, packet: UDPPacket) -> std::io::Result<()> {
         let res = packet.try_into().unwrap();
         match self.writer.send(Ok(res)).await {
             Ok(_) => Ok(()),

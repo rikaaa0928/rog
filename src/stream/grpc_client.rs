@@ -49,7 +49,10 @@ impl AsyncRead for GrpcClientReadHalf {
                         e.to_string(),
                     )))
                 }
-                Poll::Ready(None) => return Poll::Ready(Ok(())), // EOF
+                Poll::Ready(None) => return Poll::Ready(Err(std::io::Error::new(
+                    ErrorKind::Interrupted,
+                    "stream poll none",
+                ))),
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -110,7 +113,7 @@ impl RunStream for GrpcClientRunStream {
         )
     }
 
-    async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    async fn stream_read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if self.cache_pos < self.cache.len() {
             let available = self.cache.len() - self.cache_pos;
             let to_copy = available.min(buf.len());
@@ -155,7 +158,7 @@ impl RunStream for GrpcClientRunStream {
         self
     }
 
-    async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
+    async fn stream_write(&mut self, buf: &[u8]) -> std::io::Result<()> {
         let mut req = StreamReq::default();
         req.payload = Some(buf.to_vec());
         match self.writer.send(req).await {

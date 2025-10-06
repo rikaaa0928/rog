@@ -40,7 +40,7 @@ impl GrpcUdpClientRunWriter {
 
 #[async_trait::async_trait]
 impl RunUdpWriter for GrpcUdpClientRunWriter {
-    async fn write(&self, packet: UDPPacket) -> std::io::Result<()> {
+    async fn udp_write(&self, packet: UDPPacket) -> std::io::Result<()> {
         let req = UdpReq::from_packet(packet, self.auth.clone());
         debug!("grpc Sending UDP request {:?}", &req);
         match self.writer.send(req).await {
@@ -52,7 +52,7 @@ impl RunUdpWriter for GrpcUdpClientRunWriter {
 
 #[async_trait::async_trait]
 impl RunUdpReader for GrpcUdpClientRunReader {
-    async fn read(&mut self) -> std::io::Result<UDPPacket> {
+    async fn udp_read(&mut self) -> std::io::Result<UDPPacket> {
         match self.reader.next().await {
             Some(Err(e)) => Err(Error::new(std::io::ErrorKind::BrokenPipe, e.to_string())),
             Some(Ok(res)) => {

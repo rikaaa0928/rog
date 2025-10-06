@@ -44,7 +44,7 @@ pub async fn handle_udp_connection(
                     debug!("UDP TCP read loop (a) interrupted by shutdown signal.");
                     break;
                 }
-                read_res = stream.read_exact(&mut buf) => {
+                read_res = stream.stream_read_exact(&mut buf) => {
                     match read_res {
                         Err(e) => {
                             debug!("UDP TCP read error: {:?}", e);
@@ -108,7 +108,7 @@ pub async fn handle_udp_connection(
         ))
         .await?
         .unwrap();
-    let t_res = udp_tunnal_writer.write(udp_packet).await;
+    let t_res = udp_tunnal_writer.udp_write(udp_packet).await;
     if t_res.is_err() {
         warn!(
             "udp first packet tunnel write error {:?}",
@@ -190,7 +190,7 @@ pub async fn handle_udp_connection(
 
             debug!("udp server get udp_packet {:?}", &udp_packet);
             // let udp_tunnel_ref = udp_tunnel.as_ref().unwrap();
-            let res = udp_tunnal_writer.write(udp_packet).await;
+            let res = udp_tunnal_writer.udp_write(udp_packet).await;
             if res.is_err() {
                 warn!("udp loop b udp tunnel write error {:?}", res.err());
                 break;
@@ -217,7 +217,7 @@ pub async fn handle_udp_connection(
                     debug!("UDP loop c interrupted by shutdown signal.");
                     Err(Error::new(ErrorKind::Interrupted, "shutdown signaled"))
                 },
-                read_res = udp_tunnel_reader.read() => {
+                read_res = udp_tunnel_reader.udp_read() => {
                    Ok(read_res?)
                 }
             };

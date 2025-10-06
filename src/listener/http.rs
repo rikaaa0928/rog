@@ -29,7 +29,7 @@ impl RunAcceptor for HttpRunAcceptor {
         stream: &mut dyn RunStream,
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
         let mut buf = [0u8; 2048];
-        let n = stream.read(&mut buf).await?;
+        let n = stream.stream_read(&mut buf).await?;
         let data = buf[0..n].to_vec();
         let mut cache = Some(data.clone());
         let str = String::from_utf8(data).map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
@@ -55,7 +55,7 @@ impl RunAcceptor for HttpRunAcceptor {
         if f_line.starts_with("CONNECT") {
             cache = None;
             stream
-                .write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                .stream_write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 .await?;
             debug!("http HTTP/1.1 200 Connection Established\r\n\r\n");
         }

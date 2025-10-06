@@ -15,7 +15,7 @@ impl ClientHello {
     ) -> Pin<Box<dyn Future<Output = std::io::Result<Self>> + Send + 'a>> {
         Box::pin(async move {
             let mut buf = vec![0u8; 1];
-            let _ = stream.read_exact(&mut buf).await?;
+            let _ = stream.stream_read_exact(&mut buf).await?;
             let version = buf[0].clone();
             if version != 5 {
                 return Err(std::io::Error::new(
@@ -23,10 +23,10 @@ impl ClientHello {
                     "invalid socks version",
                 ));
             }
-            let _ = stream.read_exact(&mut buf).await?;
+            let _ = stream.stream_read_exact(&mut buf).await?;
             let method_num = buf[0].clone();
             let mut methods = vec![0u8; method_num as usize];
-            let _ = stream.read_exact(&mut methods).await?;
+            let _ = stream.stream_read_exact(&mut methods).await?;
             Ok(ClientHello {
                 version,
                 method_num,

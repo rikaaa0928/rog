@@ -22,7 +22,7 @@ impl UdpRunStream {
 // 为 MyUdpStream 实现 MyStream trait
 #[async_trait::async_trait]
 impl RunUdpReader for UdpRunStream {
-    async fn read(&mut self) -> std::io::Result<UDPPacket> {
+    async fn udp_read(&mut self) -> std::io::Result<UDPPacket> {
         let src_addr = self.src_addr.clone();
         let src: SocketAddr = src_addr.parse().unwrap();
         let inner = self.inner.clone();
@@ -44,7 +44,7 @@ impl RunUdpReader for UdpRunStream {
 
 #[async_trait::async_trait]
 impl RunUdpWriter for UdpRunStream {
-    async fn write(&self, packet: UDPPacket) -> std::io::Result<()> {
+    async fn udp_write(&self, packet: UDPPacket) -> std::io::Result<()> {
         let inner = self.inner.clone();
         let dst_addr = packet.meta.dst_addr.clone();
         let dst_port = packet.meta.dst_port;

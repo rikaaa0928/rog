@@ -15,11 +15,11 @@ pub trait RunStream: Send {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn split(self: Box<Self>) -> (Box<RunReadHalf>, Box<RunWriteHalf>);
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
-    async fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<usize> {
+    async fn stream_read(&mut self, buf: &mut [u8]) -> Result<usize>;
+    async fn stream_read_exact(&mut self, mut buf: &mut [u8]) -> Result<usize> {
         let mut n = 0;
         while !buf.is_empty() {
-            let nn = self.read(buf).await?;
+            let nn = self.stream_read(buf).await?;
             if nn == 0 {
                 break;
             }
@@ -31,7 +31,7 @@ pub trait RunStream: Send {
         }
         Ok(n)
     }
-    async fn write(&mut self, buf: &[u8]) -> Result<()>;
+    async fn stream_write(&mut self, buf: &[u8]) -> Result<()>;
 }
 
 pub enum RunAccStream {
@@ -74,12 +74,12 @@ pub trait RouterSet: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait RunUdpReader: Send {
-    async fn read(&mut self) -> Result<UDPPacket>;
+    async fn udp_read(&mut self) -> Result<UDPPacket>;
 }
 
 #[async_trait::async_trait]
 pub trait RunUdpWriter: Send {
-    async fn write(&self, packet: UDPPacket) -> Result<()>;
+    async fn udp_write(&self, packet: UDPPacket) -> Result<()>;
 }
 
 #[derive(Debug)]

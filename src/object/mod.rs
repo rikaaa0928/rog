@@ -33,7 +33,6 @@ impl Object {
     }
 
     pub async fn start(&self) -> io::Result<()> {
-        let connector_cache_outer = Arc::new(self.init_connectors().await?);
         let config_outer = self.config.clone(); // Renamed for clarity
         let router_outer = self.router.clone(); // Renamed for clarity
         let acc = listener::create(&config_outer, router_outer.clone())
@@ -43,6 +42,7 @@ impl Object {
                 e
             })?;
         let main_acceptor = Arc::new(acc);
+        let connector_cache_outer = Arc::new(self.init_connectors().await?);
 
         loop {
             let (mut acc_stream, _) = main_acceptor.accept().await.map_err(|e| {

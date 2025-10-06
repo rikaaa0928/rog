@@ -16,7 +16,7 @@ pub async fn handle_raw_udp(
     connector_cache: Arc<HashMap<String, Arc<Box<dyn RunConnector>>>>,
 ) -> Result<()> {
     debug!("raw udp, route based on the first packet");
-    let first_packet = r.read().await?;
+    let first_packet = r.udp_read().await?;
     let client_name = router
         .route(
             config.listener.name.as_str(),
@@ -54,7 +54,7 @@ pub async fn handle_raw_udp(
             )
         })?;
 
-    udp_writer.write(first_packet).await?;
+    udp_writer.udp_write(first_packet).await?;
 
     let shutdown_notifier = Arc::new(Notify::new());
 
@@ -70,7 +70,7 @@ pub async fn handle_raw_udp(
                     debug!("raw UDP loop b interrupted by shutdown signal.");
                     Err(Error::new(ErrorKind::Interrupted, "shutdown signaled"))
                 },
-                recv_res = r.read() => {
+                recv_res = r.udp_read() => {
                    recv_res
                 }
             };
@@ -94,7 +94,7 @@ pub async fn handle_raw_udp(
 
             debug!("raw udp server get udp_packet {:?}", &udp_packet);
             let udp_tunnel_ref = udp_writer.as_ref();
-            let res = udp_tunnel_ref.write(udp_packet).await;
+            let res = udp_tunnel_ref.udp_write(udp_packet).await;
             if res.is_err() {
                 warn!("raw udp loop b udp tunnel write error {:?}", res.err());
                 break;
@@ -114,7 +114,7 @@ pub async fn handle_raw_udp(
                     debug!("raw UDP loop c interrupted by shutdown signal.");
                     Err(Error::new(ErrorKind::Interrupted, "shutdown signaled"))
                 },
-                read_res = udp_reader.read() => {
+                read_res = udp_reader.udp_read() => {
                    Ok(read_res?)
                 }
             };
@@ -128,7 +128,7 @@ pub async fn handle_raw_udp(
                 (&udp_packet).meta.src_addr,
                 (&udp_packet).meta.src_port,
             );
-            w.write(udp_packet).await?;
+            w.udp_write(udp_packet).await?;
         }
         shutdown_notifier_for_c.notify_waiters();
         debug!("raw udp loop c done");
