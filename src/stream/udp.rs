@@ -29,7 +29,7 @@ impl RunUdpReader for UdpRunStream {
 
         let mut buf = [0u8; 65536];
         let (n, dst) = inner.recv_from(&mut buf).await?;
-        debug!("udp read from {:?} {:?} bytes: {:?}", &src, &dst, &buf[..n]);
+        debug!("udp read from {:?} {:?} bytes: {:?}", &src, &dst, &buf[..n].len());
         Ok(UDPPacket {
             meta: UDPMeta {
                 dst_addr: dst.ip().to_string(),
@@ -50,7 +50,7 @@ impl RunUdpWriter for UdpRunStream {
         let dst_port = packet.meta.dst_port;
         let data = packet.data.clone();
         let addr_str = format!("{}:{}", dst_addr, dst_port);
-        debug!("udp send {:?} to {:?}", &data.as_slice(), &addr_str);
+        debug!("udp send {:?} to {:?}", &data.as_slice().len(), &addr_str);
         inner.send_to(data.as_slice(), addr_str).await?;
         Ok(())
     }
