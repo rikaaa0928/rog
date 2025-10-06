@@ -5,6 +5,7 @@ use std::io::{Error, ErrorKind};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use log::debug;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
@@ -49,7 +50,9 @@ impl AsyncRead for GrpcClientReadHalf {
                         e.to_string(),
                     )))
                 }
-                Poll::Ready(None) => return return Poll::Pending,
+                Poll::Ready(None) => { 
+                    debug!("grpc_client_read_half poll none");
+                    return Poll::Pending}
                 Poll::Pending => return Poll::Pending,
             }
         }

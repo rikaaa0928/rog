@@ -1,6 +1,7 @@
 use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
 use crate::proto::v1::pb::{StreamReq, StreamRes};
 use crate::util::RunAddr;
+use log::debug;
 use std::any::Any;
 use std::io::{Error, ErrorKind};
 use std::pin::Pin;
@@ -9,8 +10,8 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
-use tonic::{Status, Streaming};
 use tonic::codegen::tokio_stream::{Stream, StreamExt};
+use tonic::{Status, Streaming};
 // pub mod pb {
 //     tonic::include_proto!("moe.rikaaa0928.rog");
 // }
@@ -34,8 +35,11 @@ pub struct GrpcServerRunStream {
 
 #[async_trait::async_trait]
 impl AsyncRead for GrpcServerReadHalf {
-
-    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
         if self.read_pos >= self.buffer.len() {
             let next_item = {
                 let mut reader_lock = self.reader.try_lock().unwrap();
@@ -54,7 +58,10 @@ impl AsyncRead for GrpcServerReadHalf {
                         e.to_string(),
                     )))
                 }
-                Poll::Ready(None) => return return Poll::Pending,
+                Poll::Ready(None) => {
+                    debug!("grpc_client_read_half poll none");
+                    return Poll::Pending;
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -70,14 +77,20 @@ impl AsyncRead for GrpcServerReadHalf {
 
 #[async_trait::async_trait]
 impl AsyncWrite for GrpcServerWriteHalf {
-
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, Error>> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, Error>> {
         let mut res = StreamRes::default();
         res.payload = buf.to_vec();
         match self.writer.try_send(Ok(res)) {
             Ok(_) => Poll::Ready(Ok(buf.len())),
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Poll::Pending,
-            Err(e) => Poll::Ready(Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string()))),
+            Err(e) => Poll::Ready(Err(std::io::Error::new(
+                ErrorKind::Interrupted,
+                e.to_string(),
+            ))),
         }
     }
 
