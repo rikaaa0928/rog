@@ -49,10 +49,7 @@ impl AsyncRead for GrpcClientReadHalf {
                         e.to_string(),
                     )))
                 }
-                Poll::Ready(None) => return Poll::Ready(Err(std::io::Error::new(
-                    ErrorKind::Interrupted,
-                    "stream poll none",
-                ))),
+                Poll::Ready(None) => return return Poll::Pending,
                 Poll::Pending => return Poll::Pending,
             }
         }
