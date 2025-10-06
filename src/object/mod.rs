@@ -33,7 +33,6 @@ impl Object {
     }
 
     pub async fn start(&self) -> io::Result<()> {
-        let connector_cache_outer = Arc::new(self.init_connectors().await?);
         let config_outer = self.config.clone(); // Renamed for clarity
         let router_outer = self.router.clone(); // Renamed for clarity
         let acc = listener::create(&config_outer, router_outer.clone())
@@ -43,7 +42,7 @@ impl Object {
                 e
             })?;
         let main_acceptor = Arc::new(acc);
-
+        let connector_cache_outer = Arc::new(self.init_connectors().await?);
         loop {
             let (mut acc_stream, _) = main_acceptor.accept().await.map_err(|e| {
                 error!("Failed to accept connection: {}", e);
@@ -139,13 +138,12 @@ impl Object {
                                         error!("Error in post_handshake: {}", e);
                                         return Ok(());
                                     }
-                                    let (mut r, mut w) = tcp_stream.split();
+                                    // let (mut r, mut w) = tcp_stream.split();
                                     if let Err(e) = tcp::handle_tcp_connection(
-                                        r,
-                                        w,
                                         addr,
                                         payload_cache,
                                         client_stream,
+                                        tcp_stream,
                                     )
                                     .await
                                     {
