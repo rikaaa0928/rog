@@ -1,4 +1,4 @@
-use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
+use crate::def::{RunReadHalf, RunStream, RunWriteHalf, StreamInfo};
 use crate::proto::v1::pb::{StreamReq, StreamRes};
 use crate::util::RunAddr;
 use futures::StreamExt;
@@ -28,6 +28,7 @@ pub struct GrpcServerRunStream {
     writer: Sender<Result<StreamRes, Status>>,
     cache: Vec<u8>,
     cache_pos: usize,
+    info: StreamInfo,
 }
 
 #[async_trait::async_trait]
@@ -97,6 +98,7 @@ impl GrpcServerRunStream {
             writer,
             cache: Vec::new(),
             cache_pos: 0,
+            info: StreamInfo::default(),
         }
     }
 
@@ -120,6 +122,14 @@ impl GrpcServerRunStream {
 
 #[async_trait::async_trait]
 impl RunStream for GrpcServerRunStream {
+    fn get_info(&self) -> &StreamInfo {
+        &self.info
+    }
+
+    fn set_info(&mut self, f: &mut dyn FnMut(&mut StreamInfo)) {
+        f(&mut self.info)
+    }
+
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>) {
         (
             Box::new(GrpcServerReadHalf {

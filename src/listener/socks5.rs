@@ -31,6 +31,7 @@ impl RunAcceptor for SocksRunAcceptor {
         &self,
         stream: &mut dyn RunStream,
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
+        stream.set_info(&mut |x| x.protocol_name = "socks5".to_string());
         let hello = &util::socks5::client_hello::ClientHello::parse(stream).await?;
         if !hello.contains(util::socks5::NO_AUTH) {
             return Err(std::io::Error::new(

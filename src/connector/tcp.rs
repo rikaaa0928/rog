@@ -24,7 +24,9 @@ impl RunConnector for TcpRunConnector {
                 return Err(e);
             }
         };
-        Ok(Box::new(TcpRunStream::new(tcp_stream)))
+        let mut stream = TcpRunStream::new(tcp_stream);
+        stream.set_info(&mut |x| x.protocol_name = "tcp".to_string());
+        Ok(Box::new(stream))
     }
 
     async fn udp_tunnel(

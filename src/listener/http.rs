@@ -28,6 +28,7 @@ impl RunAcceptor for HttpRunAcceptor {
         &self,
         stream: &mut dyn RunStream,
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
+        stream.set_info(&mut |x| x.protocol_name = "http".to_string());
         let mut buf = [0u8; 2048];
         let n = stream.read(&mut buf).await?;
         let data = buf[0..n].to_vec();

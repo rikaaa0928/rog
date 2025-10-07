@@ -5,6 +5,11 @@ use std::any::Any;
 use std::io::{Error, ErrorKind, Result};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
+#[derive(Debug, Clone, Default)]
+pub struct StreamInfo {
+    pub protocol_name: String,
+}
+
 #[async_trait::async_trait]
 pub trait RunReadHalf: Send {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
@@ -34,6 +39,8 @@ pub trait RunWriteHalf: Send {
 pub trait RunStream: Send {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn get_info(&self) -> &StreamInfo;
+    fn set_info(&mut self, f: &mut dyn FnMut(&mut StreamInfo));
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>);
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
     async fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<usize> {

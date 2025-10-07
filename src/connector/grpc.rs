@@ -74,10 +74,9 @@ impl RunConnector for GrpcRunConnector {
             ));
         }
 
-        Ok(Box::new(GrpcClientRunStream::new(
-            Arc::new(Mutex::new(resp)),
-            tx,
-        )))
+        let mut stream = GrpcClientRunStream::new(Arc::new(Mutex::new(resp)), tx);
+        stream.set_info(&mut |x| x.protocol_name = "grpc".to_string());
+        Ok(Box::new(stream))
     }
 
     async fn udp_tunnel(

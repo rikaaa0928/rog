@@ -277,6 +277,7 @@ impl RunAcceptor for GrpcRunListener {
         &self,
         stream: &mut dyn RunStream,
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
+        stream.set_info(&mut |x| x.protocol_name = "grpc".to_string());
         let stream = stream
             .as_any_mut()
             .downcast_mut::<grpc_server::GrpcServerRunStream>()

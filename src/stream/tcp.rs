@@ -1,4 +1,4 @@
-use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
+use crate::def::{RunReadHalf, RunStream, RunWriteHalf, StreamInfo};
 use std::any::Any;
 use std::io::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -16,6 +16,7 @@ pub struct TcpWriteHalf {
 // TcpStream 的包装
 pub struct TcpRunStream {
     inner: TcpStream,
+    info: StreamInfo,
 }
 
 // 为 TcpReadHalf 实现 MyReadHalf trait
@@ -37,13 +38,24 @@ impl RunWriteHalf for TcpWriteHalf {
 // 为 MyTcpStream 实现构造方法
 impl TcpRunStream {
     pub fn new(stream: TcpStream) -> Self {
-        Self { inner: stream }
+        Self {
+            inner: stream,
+            info: StreamInfo::default(),
+        }
     }
 }
 
 // 为 MyTcpStream 实现 MyStream trait
 #[async_trait::async_trait]
 impl RunStream for TcpRunStream {
+    fn get_info(&self) -> &StreamInfo {
+        &self.info
+    }
+
+    fn set_info(&mut self, f: &mut dyn FnMut(&mut StreamInfo)) {
+        f(&mut self.info)
+    }
+
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>) {
         let (reader, writer) = self.inner.into_split();
         (
