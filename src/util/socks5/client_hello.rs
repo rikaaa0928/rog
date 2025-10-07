@@ -35,6 +35,51 @@ impl ClientHello {
         })
     }
 
+    pub fn parse_bytes(data: &Vec<u8>) -> std::io::Result<(Self, usize)> {
+        let mut current = 0;
+        if data.len() < current + 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "no enough data",
+            ));
+        }
+        let mut buf = data[current..current + 1].to_vec();
+        current += 1;
+        let version = buf[0].clone();
+        if version != 5 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid socks version",
+            ));
+        }
+
+        if data.len() < current + 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "no enough data",
+            ));
+        }
+        buf = data[current..current + 1].to_vec();
+        current += 1;
+        let method_num = buf[0].clone();
+        if data.len() < current + method_num as usize {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "no enough data",
+            ));
+        }
+        let methods = data[current..current + method_num as usize].to_vec();
+        current += method_num as usize;
+        Ok((
+            ClientHello {
+                version,
+                method_num,
+                methods,
+            },
+            current,
+        ))
+    }
+
     pub fn contains(&self, method: u8) -> bool {
         self.methods.contains(&method)
     }

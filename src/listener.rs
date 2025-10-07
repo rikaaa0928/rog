@@ -1,5 +1,6 @@
 use crate::def::{RouterSet, RunAcceptor, RunListener};
 use crate::listener::grpc::GrpcListener;
+use crate::listener::htss5::Htss5RunAcceptor;
 use crate::listener::http::HttpRunAcceptor;
 use crate::listener::socks5::SocksRunAcceptor;
 use crate::listener::tcp::TcpRunListener;
@@ -7,6 +8,7 @@ use crate::object::config::ObjectConfig;
 use std::sync::Arc;
 
 pub(crate) mod grpc;
+pub(crate) mod htss5;
 pub(crate) mod http;
 pub(crate) mod socks5;
 pub(crate) mod tcp;
@@ -33,6 +35,13 @@ pub async fn create(
                 .listen(cfg.listener.endpoint.as_str())
                 .await?;
             let http = Box::new(HttpRunAcceptor::new(listener, None, None));
+            Ok(http)
+        }
+        "htss5" => {
+            let listener = TcpRunListener {}
+                .listen(cfg.listener.endpoint.as_str())
+                .await?;
+            let http = Box::new(Htss5RunAcceptor::new(listener, None, None));
             Ok(http)
         }
         _ => Err(std::io::Error::new(
