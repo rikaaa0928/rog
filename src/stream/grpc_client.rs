@@ -64,7 +64,6 @@ impl RunReadHalf for GrpcClientReadHalf {
             Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }
     }
-
 }
 
 #[async_trait::async_trait]

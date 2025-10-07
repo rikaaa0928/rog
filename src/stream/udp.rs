@@ -29,7 +29,12 @@ impl RunUdpReader for UdpRunStream {
 
         let mut buf = [0u8; 65536];
         let (n, dst) = inner.recv_from(&mut buf).await?;
-        debug!("udp read from {:?} {:?} bytes: {:?}", &src, &dst, &buf[..n].len());
+        debug!(
+            "udp read from {:?} {:?} bytes: {:?}",
+            &src,
+            &dst,
+            &buf[..n].len()
+        );
         Ok(UDPPacket {
             meta: UDPMeta {
                 dst_addr: dst.ip().to_string(),
