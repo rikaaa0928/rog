@@ -3,11 +3,13 @@ use crate::proto::v1::pb::rog_service_client::RogServiceClient;
 use crate::proto::v1::pb::{StreamReq, UdpReq};
 use crate::stream::grpc_client::GrpcClientRunStream;
 use crate::stream::grpc_udp_client::{GrpcUdpClientRunReader, GrpcUdpClientRunWriter};
-use log::error;
+use log::{error, info};
 use std::io;
 use std::io::ErrorKind;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
+use tokio::time::sleep;
 use tonic::codegen::tokio_stream;
 use tonic::Request;
 // pub mod pb {
@@ -25,22 +27,27 @@ impl GrpcRunConnector {
             error!("{}", err_msg);
             io::Error::new(ErrorKind::InvalidInput, err_msg)
         })?;
-
-        let client = match RogServiceClient::connect(endpoint.clone()).await {
-            Ok(c) => c,
-            Err(e) => {
-                error!(
-                    "gRPC connector failed to connect to endpoint '{}': {}",
-                    endpoint, e
-                );
-                return Err(io::Error::new(ErrorKind::Other, e));
+        let mut err = None;
+        for i in 1..=3 {
+            let client = RogServiceClient::connect(endpoint.clone()).await;
+            match client {
+                Ok(client) => {
+                    if err.is_some() {
+                        info!("grpc Connector {} is established after retry", endpoint);
+                    }
+                    return Ok(Self {
+                        client: Arc::new(Mutex::new(client)),
+                        cfg: cfg.clone(),
+                    });
+                }
+                Err(e) => {
+                    error!("grpc connection error: {}", e);
+                    err = Some(e);
+                    sleep(Duration::from_millis(i * 100)).await;
+                }
             }
-        };
-
-        Ok(Self {
-            client: Arc::new(Mutex::new(client)),
-            cfg: cfg.clone(),
-        })
+        }
+        Err(io::Error::new(ErrorKind::Other, err.unwrap()))
     }
 }
 
