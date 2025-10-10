@@ -1,4 +1,5 @@
 use crate::def::RunStream;
+use crate::util::socks5::parse_util::*;
 use crate::util::socks5::{CMD_CONNECT, CMD_UDP};
 use std::future::Future;
 use std::pin::Pin;
@@ -14,60 +15,94 @@ pub struct Request {
 }
 
 impl Request {
+    /// 验证命令类型
+    fn validate_cmd(cmd: u8) -> std::io::Result<()> {
+        if cmd != CMD_CONNECT && cmd != CMD_UDP {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid socks cmd, only CONNECT and UDP ASSOCIATE supported",
+            ));
+        }
+        Ok(())
+    }
+
+    /// 根据地址类型获取地址长度
+    fn get_addr_length(a_typ: u8) -> std::io::Result<i32> {
+        let a_len = match a_typ {
+            1 => 4,  // IPv4
+            4 => 16, // IPv6
+            3 => 0,  // 域名（需要读取长度字节）
+            _ => -1, // 无效类型
+        };
+
+        if a_len < 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid addr type",
+            ));
+        }
+
+        Ok(a_len)
+    }
+
+    /// 从流中读取目标地址
+    async fn read_dst_addr_from_stream(
+        stream: &mut dyn RunStream,
+        a_len: i32,
+    ) -> std::io::Result<Vec<u8>> {
+        if a_len != 0 {
+            // 固定长度地址（IPv4 或 IPv6）
+            read_bytes_from_stream(stream, a_len as usize).await
+        } else {
+            // 域名：先读取长度，再读取内容
+            let len = read_u8_from_stream(stream).await?;
+            read_bytes_from_stream(stream, len as usize).await
+        }
+    }
+
+    /// 从字节数组中读取目标地址
+    fn read_dst_addr_from_slice(
+        data: &[u8],
+        current: usize,
+        a_len: i32,
+    ) -> std::io::Result<(Vec<u8>, usize)> {
+        if a_len != 0 {
+            // 固定长度地址（IPv4 或 IPv6）
+            read_bytes_from_slice(data, current, a_len as usize)
+        } else {
+            // 域名：先读取长度，再读取内容
+            let (len, new_current) = read_u8_from_slice(data, current)?;
+            let (addr, final_current) = read_bytes_from_slice(data, new_current, len as usize)?;
+            Ok((addr, final_current))
+        }
+    }
+
     pub fn parse<'a>(
         stream: &'a mut dyn RunStream,
     ) -> Pin<Box<dyn Future<Output = std::io::Result<Self>> + Send + 'a>> {
         Box::pin(async move {
-            let mut buf = [0u8; 1];
-            let _ = stream.read_exact(&mut buf).await?;
-            let version = buf[0].clone();
-            if version != 5 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "invalid socks version",
-                ));
-            }
+            // 读取并验证版本号
+            let version = read_u8_from_stream(stream).await?;
+            validate_socks_version(version)?;
 
-            let _ = stream.read_exact(&mut buf).await?;
-            let cmd = buf[0].clone();
-            if cmd != CMD_CONNECT && cmd != CMD_UDP {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "invalid socks cmd, only CONNECT and UDP ASSOCIATE supported",
-                ));
-            }
-            let _ = stream.read_exact(&mut buf).await?;
-            let rsv = buf[0].clone();
-            let _ = stream.read_exact(&mut buf).await?;
-            let a_typ = buf[0].clone();
-            let a_len = if a_typ == 1 {
-                4
-            } else if a_typ == 4 {
-                16
-            } else if a_typ == 3 {
-                0
-            } else {
-                -1
-            };
-            if a_len < 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "invalid addr type",
-                ));
-            }
-            let dst_addr = if a_len != 0 {
-                let mut t_dst_addr = vec![0u8; a_len as usize];
-                let _ = stream.read_exact(&mut t_dst_addr).await?;
-                t_dst_addr
-            } else {
-                let _ = stream.read_exact(&mut buf).await?;
-                let len = buf[0].clone();
-                let mut t_dst_addr = vec![0u8; len as usize];
-                let _ = stream.read_exact(&mut t_dst_addr).await?;
-                t_dst_addr
-            };
-            let mut dst_port = [0u8; 2];
-            let _ = stream.read_exact(&mut dst_port).await?;
+            // 读取并验证命令
+            let cmd = read_u8_from_stream(stream).await?;
+            Self::validate_cmd(cmd)?;
+
+            // 读取保留字节
+            let rsv = read_u8_from_stream(stream).await?;
+
+            // 读取并验证地址类型
+            let a_typ = read_u8_from_stream(stream).await?;
+            let a_len = Self::get_addr_length(a_typ)?;
+
+            // 读取目标地址
+            let dst_addr = Self::read_dst_addr_from_stream(stream, a_len).await?;
+
+            // 读取目标端口
+            let port_bytes = read_bytes_from_stream(stream, 2).await?;
+            let dst_port = [port_bytes[0], port_bytes[1]];
+
             Ok(Self {
                 version,
                 cmd,
@@ -79,110 +114,37 @@ impl Request {
         })
     }
 
-    pub fn parse_bytes(data: &Vec<u8>) -> std::io::Result<(Self, usize)> {
+    pub fn parse_bytes(data: &[u8]) -> std::io::Result<(Self, usize)> {
         let mut current = 0;
-        if data.len() < current + 1 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "no enough data",
-            ));
-        }
-        let mut buf = data[current..current + 1].to_vec();
-        current += 1;
-        let version = buf[0].clone();
-        if version != 5 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "invalid socks version",
-            ));
-        }
-        if data.len() < current + 1 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "no enough data",
-            ));
-        }
-        buf = data[current..current + 1].to_vec();
-        current += 1;
-        let cmd = buf[0].clone();
-        if cmd != CMD_CONNECT && cmd != CMD_UDP {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid socks cmd, only CONNECT and UDP ASSOCIATE supported",
-            ));
-        }
-        if data.len() < current + 1 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "no enough data",
-            ));
-        }
-        buf = data[current..current + 1].to_vec();
-        current += 1;
-        let rsv = buf[0].clone();
-        if data.len() < current + 1 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "no enough data",
-            ));
-        }
-        buf = data[current..current + 1].to_vec();
-        current += 1;
-        let a_typ = buf[0].clone();
-        let a_len: i32 = if a_typ == 1 {
-            4
-        } else if a_typ == 4 {
-            16
-        } else if a_typ == 3 {
-            0
-        } else {
-            -1
-        };
-        if a_len < 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid addr type",
-            ));
-        }
-        let dst_addr = if a_len != 0 {
-            if data.len() < current + a_len as usize {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "no enough data",
-                ));
-            }
-            let t_dst_addr = data[current..current + a_len as usize].to_vec();
-            current += a_len as usize;
-            t_dst_addr
-        } else {
-            if data.len() < current + 1 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "no enough data",
-                ));
-            }
-            buf = data[current..current + 1].to_vec();
-            current += 1;
-            let len = buf[0].clone();
-            if data.len() < current + len as usize {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "no enough data",
-                ));
-            }
-            let t_dst_addr = data[current..current + len as usize].to_vec();
-            current += len as usize;
-            t_dst_addr
-        };
-        if data.len() < current + 2 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "no enough data",
-            ));
-        }
-        let dst_port = data[current..current + 2].to_vec();
-        let dst_port = [dst_port[0], dst_port[1]];
-        current += 2;
+
+        // 读取并验证版本号
+        let (version, new_current) = read_u8_from_slice(data, current)?;
+        current = new_current;
+        validate_socks_version(version)?;
+
+        // 读取并验证命令
+        let (cmd, new_current) = read_u8_from_slice(data, current)?;
+        current = new_current;
+        Self::validate_cmd(cmd)?;
+
+        // 读取保留字节
+        let (rsv, new_current) = read_u8_from_slice(data, current)?;
+        current = new_current;
+
+        // 读取并验证地址类型
+        let (a_typ, new_current) = read_u8_from_slice(data, current)?;
+        current = new_current;
+        let a_len = Self::get_addr_length(a_typ)?;
+
+        // 读取目标地址
+        let (dst_addr, new_current) = Self::read_dst_addr_from_slice(data, current, a_len)?;
+        current = new_current;
+
+        // 读取目标端口
+        let (port_bytes, new_current) = read_bytes_from_slice(data, current, 2)?;
+        current = new_current;
+        let dst_port = [port_bytes[0], port_bytes[1]];
+
         Ok((
             Self {
                 version,
