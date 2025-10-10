@@ -8,7 +8,7 @@ ARG TARGETPLATFORM
 # Create a directory for the binary
 WORKDIR /app
 
-#RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
 # Copy the pre-built binary from the build context into the image.
 # The file path in the context must match the TARGETPLATFORM.
