@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use hickory_resolver::name_server::TokioConnectionProvider;
 
 const CACHE_EXPIRATION: Duration = Duration::from_secs(3 * 60); // 3 minutes
 const NEGATIVE_CACHE_EXPIRATION: Duration = Duration::from_secs(1 * 60); // 1 minute
@@ -100,7 +101,10 @@ impl Resolver {
             trust_negative_responses: false,
             bind_addr: None,
         });
-        let async_resolver = TokioAsyncResolver::tokio(cfg, ResolverOpts::default());
+        let async_resolver = hickory_resolver::Resolver::builder_with_config(
+            cfg,
+            TokioConnectionProvider::default()
+        ).build();
         let response = async_resolver
             .lookup_ip(addr)
             .await
@@ -112,7 +116,7 @@ impl Resolver {
         &self,
         addr: &str,
     ) -> Result<Vec<IpAddr>, String> {
-        let async_resolver = AsyncResolver::tokio_from_system_conf().map_err(|e| e.to_string())?;
+        let async_resolver = hickory_resolver::Resolver::builder_tokio().unwrap().build();
         let response = async_resolver
             .lookup_ip(addr)
             .await

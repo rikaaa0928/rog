@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.35.1", features = ["full"] }
+tokio = { version = "1.35.1", features = ["rt", "rt-multi-thread", "net", "fs", "macros"] }
 log = "0.4.20"
 #anyhow = "1.0.79"
 #clap = { version = "4.4.18", features = ["derive", "cargo"] }
@@ -18,14 +18,18 @@ tonic-prost = "0.14.2"
 async-trait = "0.1.83"
 futures = "0.3.31"
 url = "2.5.3"
-reqwest = { version = "0.12.15", features = ["native-tls-vendored"] }
+reqwest = { version = "0.12.15", default-features = false, features = [] }
 ipnet = "2.11.0"
 regex = "1.11.1"
 ipnetwork = "0.21.1"
-hickory-resolver = { version = "0.25.0-alpha.4", features = ["dns-over-https-rustls"] }
+hickory-resolver = { version = "0.25.2", features = [] }
 #hickory-client = { version = "0.24.2", features = ["dns-over-rustls", "dns-over-https-rustls", "dns-over-https"] }
 #uuid = { version = "1.16.0", features = ["v4", "serde"] }
 #tokio-stream = "0.1.17"
 
 [build-dependencies]
 tonic-prost-build = "0.14.2"
+
+[profile.release]
+lto = true
+strip = "symbols"
