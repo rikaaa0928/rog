@@ -1,4 +1,4 @@
-use hickory_resolver::config::{NameServerConfig, ResolverConfig, ResolverOpts};
+use hickory_resolver::config::{NameServerConfig, ResolverConfig};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::proto::xfer::Protocol;
 use std::collections::HashMap;
@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 const CACHE_EXPIRATION: Duration = Duration::from_secs(3 * 60); // 3 minutes
-const NEGATIVE_CACHE_EXPIRATION: Duration = Duration::from_secs(1 * 60); // 1 minute
+const NEGATIVE_CACHE_EXPIRATION: Duration = Duration::from_secs(60); // 1 minute
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolveResult {

@@ -155,7 +155,7 @@ impl UDPPacket {
                 "udp parse packet too short",
             ));
         }
-        let frag = buf[2].clone();
+        let frag = buf[2];
         if frag != 0 {
             return Ok(UDPPacket {
                 meta: UDPMeta {
@@ -167,7 +167,7 @@ impl UDPPacket {
                 data: vec![],
             });
         }
-        let a_typ = buf[3].clone();
+        let a_typ = buf[3];
         let a_len: isize = if a_typ == 1 {
             4
         } else if a_typ == 4 {
@@ -199,7 +199,7 @@ impl UDPPacket {
             // IPv4
             1 => {
                 if dst_addr.len() != 4 {
-                    return Err(Error::new(ErrorKind::Other, "Not a ipv4"));
+                    return Err(Error::other("Not a ipv4"));
                 }
                 let ip = Ipv4Addr::new(dst_addr[0], dst_addr[1], dst_addr[2], dst_addr[3]);
                 Ok(ip.to_string())
@@ -207,12 +207,12 @@ impl UDPPacket {
             // Domain name
             3 => match std::str::from_utf8(&dst_addr) {
                 Ok(domain) => Ok(domain.to_string()),
-                Err(_) => Err(Error::new(ErrorKind::Other, "Not a domain")),
+                Err(_) => Err(Error::other("Not a domain")),
             },
             // IPv6
             4 => {
                 if dst_addr.len() != 16 {
-                    return Err(Error::new(ErrorKind::Other, "Not a ipv6"));
+                    return Err(Error::other("Not a ipv6"));
                 }
                 let ip = Ipv6Addr::new(
                     u16::from_be_bytes([dst_addr[0], dst_addr[1]]),
@@ -226,8 +226,7 @@ impl UDPPacket {
                 );
                 Ok(ip.to_string())
             }
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            _ => Err(std::io::Error::other(
                 "a_type not found",
             )),
         }?;

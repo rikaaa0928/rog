@@ -51,7 +51,7 @@ impl RunAcceptor for Htss5RunAcceptor {
                 ));
             }
             let hello_back = util::socks5::server_hello::ServerHello::new(
-                hello.version.clone(),
+                hello.version,
                 util::socks5::NO_AUTH,
             );
             stream.write(&hello_back.to_bytes()).await?;
@@ -61,7 +61,7 @@ impl RunAcceptor for Htss5RunAcceptor {
             let ret: std::io::Result<RunAddr> = (&req).try_into();
             data = data[readed..].to_vec();
             stream.set_info(&mut |x| x.protocol_name = "socks5".to_string());
-            let cache = if data.len() == 0 { None } else { Some(data) };
+            let cache = if data.is_empty() { None } else { Some(data) };
             match ret {
                 Ok(addr) => Ok((addr, cache)),
                 Err(e) => Err(e),
@@ -71,7 +71,7 @@ impl RunAcceptor for Htss5RunAcceptor {
             let data = buf[0..n].to_vec();
             let mut cache = Some(data.clone());
             let str =
-                String::from_utf8(data).map_err(|e| std::io::Error::new(ErrorKind::Other, e))?;
+                String::from_utf8(data).map_err(|e| std::io::Error::other(e))?;
             let lines = str.split("\r\n").collect::<Vec<&str>>();
             let f_line = lines.first().ok_or_else(|| {
                 // 2. 使用 lines.first().ok_or_else 处理空数据

@@ -29,7 +29,7 @@ impl TryFrom<&Request> for RunAddr {
             // IPv4
             1 => {
                 if value.dst_addr.len() != 4 {
-                    return Err(std::io::Error::new(std::io::ErrorKind::Other, "Not a ipv4"));
+                    return Err(std::io::Error::other("Not a ipv4"));
                 }
                 let ip = Ipv4Addr::new(
                     value.dst_addr[0],
@@ -42,15 +42,14 @@ impl TryFrom<&Request> for RunAddr {
             // Domain name
             3 => match str::from_utf8(&value.dst_addr) {
                 Ok(domain) => Ok(domain.to_string()),
-                Err(_) => Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                Err(_) => Err(std::io::Error::other(
                     "Not a domain",
                 )),
             },
             // IPv6
             4 => {
                 if value.dst_addr.len() != 16 {
-                    return Err(std::io::Error::new(std::io::ErrorKind::Other, "Not a ipv6"));
+                    return Err(std::io::Error::other("Not a ipv6"));
                 }
                 let ip = Ipv6Addr::new(
                     u16::from_be_bytes([value.dst_addr[0], value.dst_addr[1]]),
@@ -64,8 +63,7 @@ impl TryFrom<&Request> for RunAddr {
                 );
                 Ok(ip.to_string())
             }
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            _ => Err(std::io::Error::other(
                 "a_type not found",
             )),
         }?;

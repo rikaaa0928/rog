@@ -27,7 +27,7 @@ pub async fn handle_tcp_connection(
         loop {
             match select! {
                 tn = r.read(&mut buf) => tn,
-                _ = shutdown_signal_reader_task.notified() => Err(Error::new(ErrorKind::Other, "Interrupted by other task")),
+                _ = shutdown_signal_reader_task.notified() => Err(Error::other("Interrupted by other task")),
             } {
                 Err(e) => {
                     debug!("Reader task (r -> tcp_w) error: {:?}", e);
@@ -54,7 +54,7 @@ pub async fn handle_tcp_connection(
         loop {
             match select! {
                 tn = tcp_r.read(&mut buf) => tn,
-                _ = shutdown_signal_writer_task.notified() => Err(Error::new(ErrorKind::Other, "Interrupted by other task")),
+                _ = shutdown_signal_writer_task.notified() => Err(Error::other("Interrupted by other task")),
             } {
                 Err(e) => {
                     debug!("Writer task (tcp_r -> w) error: {:?}", e);

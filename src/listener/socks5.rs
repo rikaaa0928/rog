@@ -40,7 +40,7 @@ impl RunAcceptor for SocksRunAcceptor {
             ));
         }
         let hello_back = util::socks5::server_hello::ServerHello::new(
-            hello.version.clone(),
+            hello.version,
             util::socks5::NO_AUTH,
         );
         stream.write(&hello_back.to_bytes()).await?;

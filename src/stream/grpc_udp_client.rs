@@ -60,7 +60,7 @@ impl RunUdpReader for GrpcUdpClientRunReader {
                 debug!("grpc read UDP packet {:?}", &udp);
                 Ok(udp)
             }
-            None => Err(Error::new(std::io::ErrorKind::Other, "stream closed")),
+            None => Err(Error::other("stream closed")),
         }
     }
 }

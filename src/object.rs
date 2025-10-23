@@ -42,7 +42,7 @@ impl Object {
         let connector_cache_outer = self.connector_cache.clone(); // Clone cache Arc for the loop
 
         loop {
-            let (mut acc_stream, _) = main_acceptor.accept().await.map_err(|e| {
+            let (acc_stream, _) = main_acceptor.accept().await.map_err(|e| {
                 error!("Failed to accept connection: {}", e);
                 e
             })?;

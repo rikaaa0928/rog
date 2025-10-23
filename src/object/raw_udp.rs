@@ -23,8 +23,8 @@ pub async fn handle_raw_udp(
             config.listener.name.as_str(),
             config.listener.router.as_str(),
             &RunAddr {
-                addr: (&first_packet).meta.dst_addr.clone(),
-                port: (&first_packet).meta.dst_port,
+                addr: first_packet.meta.dst_addr.clone(),
+                port: first_packet.meta.dst_port,
                 udp: true, // Set to true for UDP context
                            // cache: None,
             },
@@ -56,13 +56,12 @@ pub async fn handle_raw_udp(
     let (mut udp_reader, udp_writer) = connector_obj
         .udp_tunnel(format!(
             "{}:{}",
-            (&first_packet).meta.src_addr,
-            (&first_packet).meta.src_port,
+            first_packet.meta.src_addr,
+            first_packet.meta.src_port,
         ))
         .await?
         .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::Other,
+            io::Error::other(
                 "UDP tunnel creation failed or not supported by connector",
             )
         })?;
@@ -94,13 +93,13 @@ pub async fn handle_raw_udp(
             let packet = res?;
             debug!(
                 "raw udp loop b read src_addr {:?} {} {:?} {}",
-                (&packet).meta.src_addr,
-                (&packet).meta.src_port,
-                (&packet).meta.dst_addr,
-                (&packet).meta.dst_port
+                packet.meta.src_addr,
+                packet.meta.src_port,
+                packet.meta.dst_addr,
+                packet.meta.dst_port
             );
             let udp_packet = packet;
-            if (&udp_packet).data.is_empty() {
+            if udp_packet.data.is_empty() {
                 warn!("raw udp drop");
                 continue;
             }
@@ -138,8 +137,8 @@ pub async fn handle_raw_udp(
             let udp_packet = res?;
             debug!(
                 "raw udp tunnel udp_packet read src {:?} {:?}",
-                (&udp_packet).meta.src_addr,
-                (&udp_packet).meta.src_port,
+                udp_packet.meta.src_addr,
+                udp_packet.meta.src_port,
             );
             w.write(udp_packet).await?;
         }

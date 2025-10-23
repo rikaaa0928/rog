@@ -32,8 +32,7 @@ async fn main() -> std::io::Result<()> {
     // 解析 TOML
     let cfg_res = toml::from_str::<Config>(&contents);
     if cfg_res.is_err() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             String::from("invalid config file: ") + cfg_res.err().unwrap().message(),
         ));
     }

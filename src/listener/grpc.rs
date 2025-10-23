@@ -255,7 +255,7 @@ impl RunAcceptor for GrpcRunListener {
         select! {
             r = udp_receiver.recv() => {
                 match r {
-                    None => Err(Error::new(ErrorKind::Other, "receiver closed")),
+                    None => Err(Error::other("receiver closed")),
                     Some((r,w,a)) => Ok(((RunAccStream::UDPSocket(
                         (
                             Box::new(GrpcUdpServerReadHalf::new(r,a)),
@@ -266,7 +266,7 @@ impl RunAcceptor for GrpcRunListener {
             }
             r = receiver.recv() => {
                 match r {
-                    None => Err(Error::new(ErrorKind::Other, "receiver closed")),
+                    None => Err(Error::other("receiver closed")),
                     Some(stream) => Ok((RunAccStream::TCPStream( Box::new(stream)), "127.0.0.1:2809".parse().unwrap())),
                 }
             }
@@ -285,11 +285,11 @@ impl RunAcceptor for GrpcRunListener {
         match stream.handshake().await? {
             Some((addr, auth)) => {
                 if auth != self.auth {
-                    return Err(Error::new(ErrorKind::Other, "invalid auth"));
+                    return Err(Error::other("invalid auth"));
                 }
                 Ok((addr, None))
             }
-            None => Err(Error::new(ErrorKind::Other, "handshake failed")),
+            None => Err(Error::other("handshake failed")),
         }
     }
 }

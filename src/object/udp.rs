@@ -81,7 +81,7 @@ pub async fn handle_udp_connection(
         &buf[..n]
     );
     let udp_packet = UDPPacket::parse(&buf[..n], src_addr)?;
-    if (&udp_packet).data.is_empty() {
+    if udp_packet.data.is_empty() {
         warn!("udp first packet drop");
         shutdown_notifier.notify_waiters();
         return Ok(());
@@ -91,8 +91,8 @@ pub async fn handle_udp_connection(
             config.listener.name.as_str(),
             config.listener.router.as_str(),
             &RunAddr {
-                addr: (&udp_packet).meta.dst_addr.clone(),
-                port: (&udp_packet).meta.dst_port,
+                addr: udp_packet.meta.dst_addr.clone(),
+                port: udp_packet.meta.dst_port,
                 udp: false,
                 // cache: None,
             },
@@ -103,8 +103,8 @@ pub async fn handle_udp_connection(
     let (mut udp_tunnel_reader, udp_tunnal_writer) = ctor
         .udp_tunnel(format!(
             "{}:{}",
-            (&udp_packet).meta.src_addr,
-            (&udp_packet).meta.src_port,
+            udp_packet.meta.src_addr,
+            udp_packet.meta.src_port,
         ))
         .await?
         .unwrap();
@@ -153,7 +153,7 @@ pub async fn handle_udp_connection(
                 &buf[..n]
             );
             let udp_packet = UDPPacket::parse(&buf[..n], src_addr)?;
-            if (&udp_packet).data.is_empty() {
+            if udp_packet.data.is_empty() {
                 warn!("udp drop");
                 continue;
             }

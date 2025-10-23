@@ -46,7 +46,7 @@ impl RunReadHalf for GrpcClientReadHalf {
 
         let res = self.reader.lock().await.next().await;
         if res.is_none() {
-            return Err(std::io::Error::new(ErrorKind::Other, "no more data"));
+            return Err(std::io::Error::other("no more data"));
         }
         let res = res.unwrap();
         match res {
@@ -130,7 +130,7 @@ impl RunStream for GrpcClientRunStream {
 
         let res = self.reader.lock().await.next().await;
         if res.is_none() {
-            return Err(std::io::Error::new(ErrorKind::Other, "no more data"));
+            return Err(std::io::Error::other("no more data"));
         }
         let res = res.unwrap();
         match res {

@@ -50,13 +50,13 @@ impl RunUdpReader for GrpcUdpServerReadHalf {
     async fn read(&mut self) -> std::io::Result<UDPPacket> {
         let res = self.reader.next().await;
         if res.is_none() {
-            return Err(std::io::Error::new(ErrorKind::Other, "no more data"));
+            return Err(std::io::Error::other("no more data"));
         }
         let res = res.unwrap();
         match res {
             Ok(data) => {
                 if self.auth != data.auth {
-                    return Err(std::io::Error::new(ErrorKind::Other, "auth mismatch"));
+                    return Err(std::io::Error::other("auth mismatch"));
                 }
                 // let n = data.payload.as_ref().unwrap().len();
                 // buf[..n].copy_from_slice(data.payload.as_ref().unwrap());

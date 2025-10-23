@@ -47,7 +47,7 @@ impl GrpcRunConnector {
                 }
             }
         }
-        Err(io::Error::new(ErrorKind::Other, err.unwrap()))
+        Err(io::Error::other(err.unwrap()))
     }
 }
 
@@ -63,7 +63,7 @@ impl RunConnector for GrpcRunConnector {
             Ok(r) => r.into_inner(),
             Err(e) => {
                 error!("gRPC connector failed to open stream: {}", e);
-                return Err(io::Error::new(ErrorKind::Other, e));
+                return Err(io::Error::other(e));
             }
         };
 
@@ -75,8 +75,7 @@ impl RunConnector for GrpcRunConnector {
         let res = t.send(auth).await;
         if let Err(e) = res {
             error!("gRPC connector failed to send auth request: {}", e);
-            return Err(io::Error::new(
-                ErrorKind::Other,
+            return Err(io::Error::other(
                 "failed to send auth request",
             ));
         }
@@ -95,7 +94,7 @@ impl RunConnector for GrpcRunConnector {
         let rx = Request::new(rx);
         let res = self.client.lock().await.udp(rx).await;
         if res.is_err() {
-            return Err(io::Error::new(ErrorKind::Other, "grpc stream error"));
+            return Err(io::Error::other("grpc stream error"));
         }
         let resp = res.unwrap().into_inner();
         Ok(Some((
