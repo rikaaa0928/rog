@@ -1,11 +1,12 @@
 #[cfg(test)]
 mod tests {
+    use crate::router::consts;
     use crate::router::matcher::{get_matcher_factory_fn, Matcher};
 
     #[test]
     fn test_cidr_matcher() {
         let lines = vec!["192.168.1.0/24".to_string(), "10.0.0.1/32".to_string()];
-        let factory = get_matcher_factory_fn("cicd").unwrap();
+        let factory = get_matcher_factory_fn(consts::FORMAT_CIDR).unwrap();
         let matcher = factory(lines, vec![]);
         assert!(matcher.match_host("192.168.1.1"));
         assert!(matcher.match_host("10.0.0.1"));

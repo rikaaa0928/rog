@@ -8,6 +8,7 @@ use crate::router::consts::FORMAT_LAN;
 use crate::router::matcher::{get_matcher_factory_fn, Matcher};
 use reqwest::Url;
 use serde::Deserialize;
+use crate::router::consts;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct InnerRouteData {
@@ -35,7 +36,7 @@ pub async fn load_route_data(data_cfg: &[config::RouteData]) -> HashMap<String, 
                 "192.168.0.0/16".to_string(),
                 "127.0.0.0/8".to_string(),
             ];
-            rd.format = "cicd".to_string();
+            rd.format = consts::FORMAT_CIDR.to_string();
         } else if rd_cfg.url.is_some() {
             if let Err(e) =
                 load_data_from_source(&mut rd, rd_cfg.url.as_ref().unwrap().as_str()).await
