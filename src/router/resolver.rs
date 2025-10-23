@@ -1,11 +1,10 @@
 use hickory_resolver::config::{NameServerConfig, ResolverConfig, ResolverOpts};
+use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::proto::xfer::Protocol;
-use hickory_resolver::{AsyncResolver, TokioAsyncResolver};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use hickory_resolver::name_server::TokioConnectionProvider;
 
 const CACHE_EXPIRATION: Duration = Duration::from_secs(3 * 60); // 3 minutes
 const NEGATIVE_CACHE_EXPIRATION: Duration = Duration::from_secs(1 * 60); // 1 minute
@@ -103,8 +102,9 @@ impl Resolver {
         });
         let async_resolver = hickory_resolver::Resolver::builder_with_config(
             cfg,
-            TokioConnectionProvider::default()
-        ).build();
+            TokioConnectionProvider::default(),
+        )
+        .build();
         let response = async_resolver
             .lookup_ip(addr)
             .await

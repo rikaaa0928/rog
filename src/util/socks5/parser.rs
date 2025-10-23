@@ -50,7 +50,10 @@ impl Socks5MessageParser for BytesParser<'_> {
     async fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
         let len = buf.len();
         if self.data.len() < self.cursor + len {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "no enough data"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "no enough data",
+            ));
         }
         buf.copy_from_slice(&self.data[self.cursor..self.cursor + len]);
         self.cursor += len;

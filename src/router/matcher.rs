@@ -16,7 +16,7 @@ pub type MatcherFactoryFn = fn(lines: Vec<String>, data: Vec<u8>) -> Box<dyn Mat
 pub fn get_matcher_factory_fn(name: &str) -> Option<MatcherFactoryFn> {
     match name {
         consts::FORMAT_CIDR => Some(cidr_matcher_factory),
-        consts::FORMAT_REGEX=> Some(regex_matcher_factory),
+        consts::FORMAT_REGEX => Some(regex_matcher_factory),
         _ => None,
     }
 }
