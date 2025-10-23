@@ -56,10 +56,7 @@ impl RunReadHalf for GrpcServerReadHalf {
         let res = res.unwrap();
         match res {
             Ok(data) => {
-                let payload = match data.payload {
-                    Some(p) => p,
-                    None => Vec::new(),
-                };
+                let payload = data.payload.unwrap();
                 if payload.is_empty() {
                     return Ok(0);
                 }
@@ -78,8 +75,7 @@ impl RunReadHalf for GrpcServerReadHalf {
 #[async_trait::async_trait]
 impl RunWriteHalf for GrpcServerWriteHalf {
     async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        let mut res = StreamRes::default();
-        res.payload = buf.to_vec();
+        let res = StreamRes { payload: buf.to_vec() };
         match self.writer.send(Ok(res)).await {
             Ok(_) => Ok(()),
             Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
@@ -165,10 +161,7 @@ impl RunStream for GrpcServerRunStream {
         let res = res.unwrap();
         match res {
             Ok(data) => {
-                let payload = match data.payload {
-                    Some(p) => p,
-                    None => Vec::new(),
-                };
+                let payload = data.payload.unwrap();
                 if payload.is_empty() {
                     return Ok(0);
                 }
@@ -181,10 +174,6 @@ impl RunStream for GrpcServerRunStream {
             }
             Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {

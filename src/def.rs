@@ -37,7 +37,6 @@ pub trait RunWriteHalf: Send {
 
 #[async_trait::async_trait]
 pub trait RunStream: Send {
-    fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn get_info(&self) -> &StreamInfo;
     fn set_info(&mut self, f: &mut dyn FnMut(&mut StreamInfo));

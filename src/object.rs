@@ -32,7 +32,7 @@ impl Object {
     pub async fn start(&self) -> io::Result<()> {
         let config_outer = self.config.clone(); // Renamed for clarity
         let router_outer = self.router.clone(); // Renamed for clarity
-        let acc = listener::create(&config_outer, router_outer.clone())
+        let acc = listener::create(&config_outer)
             .await
             .map_err(|e| {
                 error!("Failed to create listener: {}", e);

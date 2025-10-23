@@ -15,7 +15,6 @@ pub(crate) mod tcp;
 
 pub async fn create(
     cfg: &ObjectConfig,
-    router: Arc<dyn RouterSet>,
 ) -> std::io::Result<Box<dyn RunAcceptor>> {
     match cfg.listener.proto.as_str() {
         "socks5" => {

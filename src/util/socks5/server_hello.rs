@@ -8,9 +8,6 @@ impl ServerHello {
         ServerHello { version, method }
     }
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut res = Vec::new();
-        res.push(self.version);
-        res.push(self.method);
-        res
+        vec![self.version, self.method]
     }
 }

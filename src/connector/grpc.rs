@@ -68,10 +68,7 @@ impl RunConnector for GrpcRunConnector {
         };
 
         let t = tx.clone();
-        let mut auth = StreamReq::default();
-        auth.auth = self.cfg.pw.clone().unwrap();
-        auth.dst_port = Some(port as u32);
-        auth.dst_addr = Some(host);
+        let auth = StreamReq { auth: self.cfg.pw.clone().unwrap(), dst_port: Some(port as u32), dst_addr: Some(host), ..Default::default() };
         let res = t.send(auth).await;
         if let Err(e) = res {
             error!("gRPC connector failed to send auth request: {}", e);

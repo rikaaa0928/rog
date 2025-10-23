@@ -38,7 +38,7 @@ impl ClientHello {
         })
     }
 
-    pub fn parse_bytes(data: &Vec<u8>) -> io::Result<(Self, usize)> {
+    pub fn parse_bytes(data: &[u8]) -> io::Result<(Self, usize)> {
         let mut parser = BytesParser::new(data);
         let result = futures::executor::block_on(Self::parse_inner(&mut parser));
         result.map(|r| (r, parser.cursor))

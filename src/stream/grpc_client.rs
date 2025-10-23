@@ -69,8 +69,7 @@ impl RunReadHalf for GrpcClientReadHalf {
 #[async_trait::async_trait]
 impl RunWriteHalf for GrpcClientWriteHalf {
     async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        let mut req = StreamReq::default();
-        req.payload = Some(buf.to_vec());
+        let req = StreamReq { payload: Some(buf.to_vec()), ..Default::default() };
         match self.writer.send(req).await {
             Ok(_) => Ok(()),
             Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
@@ -147,10 +146,6 @@ impl RunStream for GrpcClientRunStream {
             }
             Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
         }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
