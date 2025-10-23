@@ -1,4 +1,4 @@
-use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
+use crate::def::RunStream;
 use crate::util::RunAddr;
 use log::debug;
 use std::io::{Error, Result};

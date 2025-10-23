@@ -153,8 +153,7 @@ impl RunStream for GrpcClientRunStream {
     }
 
     async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        let mut req = StreamReq::default();
-        req.payload = Some(buf.to_vec());
+        let req = StreamReq { payload: Some(buf.to_vec()), ..Default::default() };
         match self.writer.send(req).await {
             Ok(_) => Ok(()),
             Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),

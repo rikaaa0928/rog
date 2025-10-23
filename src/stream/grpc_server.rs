@@ -181,8 +181,7 @@ impl RunStream for GrpcServerRunStream {
     }
 
     async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        let mut res = StreamRes::default();
-        res.payload = buf.to_vec();
+        let res = StreamRes { payload: buf.to_vec() };
         match self.writer.send(Ok(res)).await {
             Ok(_) => Ok(()),
             Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),

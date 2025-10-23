@@ -1,11 +1,10 @@
-use crate::def::{RouterSet, RunAcceptor, RunListener};
+use crate::def::{RunAcceptor, RunListener};
 use crate::listener::grpc::GrpcListener;
 use crate::listener::htss5::Htss5RunAcceptor;
 use crate::listener::http::HttpRunAcceptor;
 use crate::listener::socks5::SocksRunAcceptor;
 use crate::listener::tcp::TcpRunListener;
 use crate::object::config::ObjectConfig;
-use std::sync::Arc;
 
 pub(crate) mod grpc;
 pub(crate) mod htss5;
