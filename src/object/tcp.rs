@@ -1,7 +1,7 @@
 use crate::def::{RunReadHalf, RunStream, RunWriteHalf};
 use crate::util::RunAddr;
 use log::debug;
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, Result};
 use std::sync::Arc;
 use tokio::select;
 use tokio::sync::Notify;

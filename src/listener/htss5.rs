@@ -71,7 +71,7 @@ impl RunAcceptor for Htss5RunAcceptor {
             let data = buf[0..n].to_vec();
             let mut cache = Some(data.clone());
             let str =
-                String::from_utf8(data).map_err(|e| std::io::Error::other(e))?;
+                String::from_utf8(data).map_err(std::io::Error::other)?;
             let lines = str.split("\r\n").collect::<Vec<&str>>();
             let f_line = lines.first().ok_or_else(|| {
                 // 2. 使用 lines.first().ok_or_else 处理空数据

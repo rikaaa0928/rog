@@ -6,7 +6,7 @@ use crate::stream::grpc_server::{self, GrpcServerRunStream};
 use crate::stream::grpc_udp_server::{GrpcUdpServerReadHalf, GrpcUdpServerWriteHalf};
 use crate::util::RunAddr;
 use futures::Stream;
-use std::io::{Error, ErrorKind};
+use std::io::Error;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
