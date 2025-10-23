@@ -11,7 +11,7 @@ use std::sync::Arc;
 pub struct DefaultBaseRouter {
     pub name: String,
     pub default_tag: String,
-    pub rules: Vec<config::RouteRule>,
+    pub rules: Vec<RouteRule>,
     pub data_map: Arc<HashMap<String, Box<dyn Matcher>>>,
     pub resolver: Arc<Resolver>,
 }
@@ -33,7 +33,7 @@ impl DefaultBaseRouter {
         }
     }
 
-    pub(crate) async fn route(&self, addr: &RunAddr) -> String {
+    pub(crate) async fn route(&self, addr: &RunAddr) -> (String, String) {
         for rule in &self.rules {
             let mut hosts = vec![addr.addr.clone().to_string()];
             if rule.domain_to_ip.is_some() && rule.domain_to_ip.unwrap() {
@@ -61,14 +61,14 @@ impl DefaultBaseRouter {
                         continue;
                     }
                     if data.match_host(host) {
-                        return rule.select.clone();
+                        return (rule.name.clone(), rule.select.clone());
                     }
                 } else {
                     warn!("Error: Route data '{}' not found in dataMap", rule.name);
                 }
             }
         }
-        self.default_tag.clone()
+        ("default".to_string(), self.default_tag.clone())
     }
 
     // pub(crate) fn route_old(&self, addr: &RunAddr) -> String {

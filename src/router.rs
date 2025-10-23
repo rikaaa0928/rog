@@ -25,8 +25,15 @@ pub struct DefaultRouter {
 impl def::RouterSet for DefaultRouter {
     async fn route(&self, l_name: &str, r_name: &str, addr: &RunAddr) -> String {
         if let Some(router) = self.router_map.get(r_name) {
-            let res = router.route(addr).await;
-            log::info!("Route {} {} {} -> {}", l_name, r_name, addr.addr, res);
+            let (match_name, res) = router.route(addr).await;
+            log::info!(
+                "Route listener: {} router: {} addr: {} match: {} -> {}",
+                l_name,
+                r_name,
+                addr.addr,
+                match_name,
+                res
+            );
             res
         } else {
             log::info!(
