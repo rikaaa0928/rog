@@ -2,6 +2,7 @@ use crate::connector::grpc::GrpcRunConnector;
 use crate::connector::tcp::TcpRunConnector;
 use crate::def::{config, RunConnector};
 
+pub(crate) mod block;
 pub(crate) mod grpc;
 pub(crate) mod tcp;
 
@@ -13,6 +14,10 @@ pub async fn create(cfg: &config::Connector) -> std::io::Result<Box<dyn RunConne
         }
         "grpc" => {
             let res = GrpcRunConnector::new(cfg).await?;
+            Ok(Box::new(res))
+        }
+        "block" => {
+            let res = crate::connector::block::BlockRunConnector::new();
             Ok(Box::new(res))
         }
         _ => Err(std::io::Error::new(
