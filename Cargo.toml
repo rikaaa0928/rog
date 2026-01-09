@@ -26,6 +26,8 @@ hickory-resolver = { version = "0.25.2", features = [] }
 #hickory-client = { version = "0.24.2", features = ["dns-over-rustls", "dns-over-https-rustls", "dns-over-https"] }
 #uuid = { version = "1.16.0", features = ["v4", "serde"] }
 #tokio-stream = "0.1.17"
+mimalloc = { version = "0.1", default-features = false }
+
 
 [build-dependencies]
 tonic-prost-build = "0.14.2"

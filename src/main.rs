@@ -7,6 +7,10 @@ use std::env;
 use std::sync::Arc;
 use tokio::{fs, spawn};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+
 mod connector;
 mod def;
 mod listener;
