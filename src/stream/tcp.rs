@@ -64,6 +64,10 @@ impl RunStream for TcpRunStream {
         )
     }
 
+    fn into_tcp_stream(self: Box<Self>) -> std::result::Result<tokio::net::TcpStream, Box<dyn RunStream>> {
+        Ok(self.inner)
+    }
+
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         self.inner.read(buf).await
     }

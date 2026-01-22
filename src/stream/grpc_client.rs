@@ -98,6 +98,10 @@ impl RunStream for GrpcClientRunStream {
     fn set_info(&mut self, f: &mut dyn FnMut(&mut StreamInfo)) {
         f(&mut self.info)
     }
+    fn into_tcp_stream(self: Box<Self>) -> std::result::Result<tokio::net::TcpStream, Box<dyn RunStream>> {
+        Err(self)
+    }
+
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>) {
         (
             Box::new(GrpcClientReadHalf {

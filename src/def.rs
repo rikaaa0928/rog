@@ -4,6 +4,7 @@ use crate::util::RunAddr;
 use std::any::Any;
 use std::io::{Error, ErrorKind, Result};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use tokio::net::TcpStream;
 
 #[derive(Debug, Clone, Default)]
 pub struct StreamInfo {
@@ -41,6 +42,7 @@ pub trait RunStream: Send {
     fn get_info(&self) -> &StreamInfo;
     fn set_info(&mut self, f: &mut dyn FnMut(&mut StreamInfo));
     fn split(self: Box<Self>) -> (Box<dyn RunReadHalf>, Box<dyn RunWriteHalf>);
+    fn into_tcp_stream(self: Box<Self>) -> std::result::Result<TcpStream, Box<dyn RunStream>>;
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
     async fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<usize> {
         let mut n = 0;
