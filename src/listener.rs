@@ -39,7 +39,12 @@ pub async fn create(
             let listener = TcpRunListener {}
                 .listen(cfg.listener.endpoint.as_str())
                 .await?;
-            let http = Box::new(Htss5RunAcceptor::new(listener, None, None));
+            let http = Box::new(Htss5RunAcceptor::new(
+                listener,
+                None,
+                None,
+                cfg.listener.ip_stats_interval,
+            ));
             Ok(http)
         }
         _ => Err(std::io::Error::new(

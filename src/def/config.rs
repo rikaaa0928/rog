@@ -32,6 +32,7 @@ pub struct Listener {
     pub pw: Option<String>,
     pub proto: String,
     pub router: String,
+    pub ip_stats_interval: Option<u64>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
