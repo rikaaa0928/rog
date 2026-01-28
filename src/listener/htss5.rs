@@ -1,7 +1,7 @@
 use crate::def::{RunAccStream, RunAcceptor, RunStream};
 use crate::util;
 use crate::util::RunAddr;
-use log::{debug, info};
+use log::{debug, info, trace};
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
@@ -128,6 +128,7 @@ impl RunAcceptor for Htss5RunAcceptor {
                 // 2. 使用 lines.first().ok_or_else 处理空数据
                 std::io::Error::new(ErrorKind::InvalidData, "Empty request data")
             })?;
+            trace!("http first line: {}", f_line);
             let parts = f_line.split(" ").collect::<Vec<&str>>();
             if parts.len() < 2 {
                 return Err(std::io::Error::new(
