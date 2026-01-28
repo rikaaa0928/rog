@@ -45,8 +45,20 @@ impl RunAcceptor for HttpRunAcceptor {
         let n = stream.read(&mut buf).await?;
         let data = buf[0..n].to_vec();
 
-        let mut cache = Some(data.clone());
-        let str = String::from_utf8(data).map_err(std::io::Error::other)?;
+        let (header_str, body_bytes) = if let Some(idx) = data
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+        {
+            let (h, b) = data.split_at(idx + 4);
+            let s = String::from_utf8(h.to_vec()).map_err(std::io::Error::other)?;
+            (s, Some(b.to_vec()))
+        } else {
+            let s = String::from_utf8(data.clone()).map_err(std::io::Error::other)?;
+            (s, None)
+        };
+
+        let mut cache = Some(data);
+        let str = header_str;
         let lines = str.split("\r\n").collect::<Vec<&str>>();
         let f_line = lines.first().ok_or_else(|| {
             // 2. 使用 lines.first().ok_or_else 处理空数据
@@ -88,9 +100,13 @@ impl RunAcceptor for HttpRunAcceptor {
             // Add Via header
             // Use str (which is valid String) instead of data (which was moved)
             if let Some(idx) = str.find("\r\n") {
-                 let (first_line, rest) = str.split_at(idx + 2); // +2 for \r\n
-                 let new_req = format!("{}Via: 1.1 {}\r\n{}", first_line, self.server_id, rest);
-                 cache = Some(new_req.into_bytes());
+                let (first_line, rest) = str.split_at(idx + 2); // +2 for \r\n
+                let new_header = format!("{}Via: 1.1 {}\r\n{}", first_line, self.server_id, rest);
+                let mut new_bytes = new_header.into_bytes();
+                if let Some(mut b) = body_bytes {
+                    new_bytes.append(&mut b);
+                }
+                cache = Some(new_bytes);
             }
         }
 
