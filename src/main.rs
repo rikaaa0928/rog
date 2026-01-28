@@ -50,11 +50,16 @@ async fn main() -> std::io::Result<()> {
     .await;
     let router = Arc::new(router);
     let mut fs = Vec::new();
+    let server_id = cfg
+        .server_id
+        .clone()
+        .unwrap_or(uuid::Uuid::new_v4().to_string());
     for l in cfg.clone().listener {
         let cfg = cfg.clone();
         let router = router.clone();
+        let server_id = server_id.clone();
         fs.push(spawn(async move {
-            let obj_conf = Arc::new(ObjectConfig::build(l.name.as_str(), &cfg));
+            let obj_conf = Arc::new(ObjectConfig::build(l.name.as_str(), &cfg, server_id));
             let obj = Object::new(obj_conf, router.clone());
             obj.start().await
         }));

@@ -32,7 +32,12 @@ pub async fn create(
             let listener = TcpRunListener {}
                 .listen(cfg.listener.endpoint.as_str())
                 .await?;
-            let http = Box::new(HttpRunAcceptor::new(listener, None, None));
+            let http = Box::new(HttpRunAcceptor::new(
+                listener,
+                None,
+                None,
+                cfg.server_id.clone(),
+            ));
             Ok(http)
         }
         "htss5" => {
@@ -44,6 +49,7 @@ pub async fn create(
                 None,
                 None,
                 cfg.listener.ip_stats_interval,
+                cfg.server_id.clone(),
             ));
             Ok(http)
         }

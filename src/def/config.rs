@@ -6,6 +6,7 @@ pub struct Config {
     pub router: Vec<Router>,
     pub data: Option<Vec<RouteData>>,
     pub connector: Vec<Connector>,
+    pub server_id: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

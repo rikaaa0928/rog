@@ -10,11 +10,22 @@ pub struct HttpRunAcceptor {
     inner: Box<dyn RunAcceptor>,
     user: Option<String>,
     pw: Option<String>,
+    server_id: String,
 }
 
 impl HttpRunAcceptor {
-    pub fn new(a: Box<dyn RunAcceptor>, user: Option<String>, pw: Option<String>) -> Self {
-        Self { inner: a, user, pw }
+    pub fn new(
+        a: Box<dyn RunAcceptor>,
+        user: Option<String>,
+        pw: Option<String>,
+        server_id: String,
+    ) -> Self {
+        Self {
+            inner: a,
+            user,
+            pw,
+            server_id,
+        }
     }
 }
 #[async_trait::async_trait]
@@ -29,9 +40,11 @@ impl RunAcceptor for HttpRunAcceptor {
         stream: &mut dyn RunStream,
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
         stream.set_info(&mut |x| x.protocol_name = "http".to_string());
+        
         let mut buf = [0u8; 2048];
         let n = stream.read(&mut buf).await?;
         let data = buf[0..n].to_vec();
+
         let mut cache = Some(data.clone());
         let str = String::from_utf8(data).map_err(std::io::Error::other)?;
         let lines = str.split("\r\n").collect::<Vec<&str>>();
@@ -60,6 +73,25 @@ impl RunAcceptor for HttpRunAcceptor {
                 .write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 .await?;
             debug!("http HTTP/1.1 200 Connection Established\r\n\r\n");
+        } else {
+            // Check loop
+            for line in &lines {
+                if line.to_lowercase().starts_with("via:") {
+                    if line.contains(&self.server_id) {
+                        return Err(std::io::Error::new(
+                            ErrorKind::Other,
+                            "Loop detected",
+                        ));
+                    }
+                }
+            }
+            // Add Via header
+            // Use str (which is valid String) instead of data (which was moved)
+            if let Some(idx) = str.find("\r\n") {
+                 let (first_line, rest) = str.split_at(idx + 2); // +2 for \r\n
+                 let new_req = format!("{}Via: 1.1 {}\r\n{}", first_line, self.server_id, rest);
+                 cache = Some(new_req.into_bytes());
+            }
         }
 
         Ok((

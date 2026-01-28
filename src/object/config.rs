@@ -6,10 +6,11 @@ use std::collections::HashMap;
 pub struct ObjectConfig {
     pub listener: config::Listener,
     pub connector: HashMap<String, config::Connector>,
+    pub server_id: String,
 }
 
 impl ObjectConfig {
-    pub fn build(name: &str, cfg: &config::Config) -> Self {
+    pub fn build(name: &str, cfg: &config::Config, server_id: String) -> Self {
         let mut this_cfg: Option<config::Listener> = None;
         for conf in &cfg.listener {
             if name == conf.name {
@@ -28,6 +29,7 @@ impl ObjectConfig {
         Self {
             listener,
             connector,
+            server_id,
         }
     }
 }
