@@ -1195,6 +1195,7 @@ dependencies = [
  "reqwest",
  "serde",
  "tokio",
+ "tokio-util",
  "toml",
  "tonic",
  "tonic-prost",
@@ -1558,6 +1559,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
