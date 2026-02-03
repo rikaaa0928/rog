@@ -26,9 +26,8 @@ impl BlockManager {
         self.taken_blocks.load(Ordering::Relaxed) < self.block_limit
     }
     pub fn take(&self) {
-        self.taken_blocks.fetch_add(1, Ordering::Relaxed);
+        let taken = self.taken_blocks.fetch_add(1, Ordering::Relaxed);
         let count = self.take_count.fetch_add(1, Ordering::Relaxed);
-        let taken = self.taken_blocks.load(Ordering::Relaxed);
         if count % 1000 == 0 {
             info!("BlockManager: take count {}, taken_blocks/block_limit: {}/{}", count, taken, self.block_limit);
         } else if count % 100 == 0 {
