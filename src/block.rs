@@ -3,10 +3,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::select;
 use tokio::sync::Notify;
+use log::{debug, info};
 
 pub struct BlockManager {
     block_limit: u64,
     taken_blocks: AtomicU64,
+    take_count: AtomicU64,
     notify: Notify,
 }
 
@@ -15,6 +17,7 @@ impl BlockManager {
         BlockManager {
             block_limit,
             taken_blocks: Default::default(),
+            take_count: Default::default(),
             notify: Notify::new(),
         }
     }
@@ -24,6 +27,13 @@ impl BlockManager {
     }
     pub fn take(&self) {
         self.taken_blocks.fetch_add(1, Ordering::Relaxed);
+        let count = self.take_count.fetch_add(1, Ordering::Relaxed);
+        let taken = self.taken_blocks.load(Ordering::Relaxed);
+        if count % 1000 == 0 {
+            info!("BlockManager: take count {}, taken_blocks/block_limit: {}/{}", count, taken, self.block_limit);
+        } else if count % 100 == 0 {
+            debug!("BlockManager: take count {}, taken_blocks/block_limit: {}/{}", count, taken, self.block_limit);
+        }
     }
     pub fn release(&self) {
         self.taken_blocks.fetch_sub(1, Ordering::Relaxed);
