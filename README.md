@@ -8,6 +8,8 @@ A flexible and powerful network proxy.
 - **Configurable routing:** Allows flexible routing rules based on various criteria.
 - **Asynchronous architecture:** Built with Tokio for high performance and non-blocking operations.
 - **Centralized configuration:** Configuration is managed through a TOML file.
+- **Memory Management:** Global buffer pool to limit memory usage, supporting percentage-based limits.
+- **Smart DNS:** Per-rule DNS server configuration for flexible name resolution.
 
 ## Getting Started
 
@@ -33,9 +35,20 @@ export ROG_CONFIG=/path/to/your/config.toml
 
 ### Configuration
 
-The configuration is managed through a TOML file. Here's an example structure:
+The configuration is managed through a TOML file.
+
+#### Global Configuration
+
+- `server_id`: (Optional) Unique identifier for this proxy instance.
+- `buffer_size`: (Optional) Global TCP buffer limit. Supports bytes (e.g., "64MB"), percentage of system memory (e.g., "50%"), or "off" to disable.
+
+Here's an example structure:
 
 ```toml
+# Global settings
+server_id = "my-proxy-01"
+buffer_size = "50%" # Use 50% of available memory for TCP buffers
+
 [[listener]]
 endpoint = "0.0.0.0:1080"
 name = "socks5_listener"
@@ -65,6 +78,7 @@ proto = "tcp"
 - `name`: A unique name for the listener.
 - `proto`: The protocol to use (e.g., "tcp", "http", "socks5", "grpc").
 - `router`: The name of the router to use for this listener.
+- `ip_stats_interval`: (Optional) Interval in seconds to log IP statistics.
 
 #### `router`
 
@@ -78,6 +92,7 @@ proto = "tcp"
 - `select`: The pattern to match against.
 - `exclude`: A list of patterns to exclude.
 - `domain_to_ip`: Whether to resolve the domain to an IP address.
+- `dns`: (Optional) Specific DNS server to use for this rule (e.g., "8.8.8.8:53").
 
 #### `data`
 
