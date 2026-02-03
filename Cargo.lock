@@ -1183,6 +1183,7 @@ name = "rog"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "env_logger",
  "futures",
  "hickory-resolver",

@@ -2,9 +2,10 @@ use crate::block::{BlockManager, DataBlock};
 use crate::consts::TCP_IO_BUFFER_SIZE;
 use crate::def::RunStream;
 use crate::util::RunAddr;
+use bytes::Bytes;
 use log::debug;
 use std::io::Result;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 
@@ -45,7 +46,7 @@ pub async fn handle_tcp_connection(
                                 break;
                             }
                             Ok(n) => {
-                                s2c_data_block.provide(&mut buf[..n]).await;
+                                s2c_data_block.provide(Bytes::copy_from_slice(&buf[..n])).await;
                             }
                         }
                     }
@@ -95,7 +96,7 @@ pub async fn handle_tcp_connection(
                                 break;
                             }
                             Ok(n) => {
-                                c2s_data_block.provide(&mut buf[..n]).await;
+                                c2s_data_block.provide(Bytes::copy_from_slice(&buf[..n])).await;
                             }
                         }
                     }

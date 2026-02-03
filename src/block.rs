@@ -34,9 +34,11 @@ impl BlockManager {
     }
 }
 
+use bytes::Bytes;
+
 pub struct DataBlock {
     block_manager: Arc<BlockManager>,
-    data: Mutex<VecDeque<Vec<u8>>>,
+    data: Mutex<VecDeque<Bytes>>,
     provide_notify: Notify,
     consume_notify: Notify,
 }
@@ -51,8 +53,8 @@ impl DataBlock {
         }
     }
 
-    pub async fn provide(&self, data: &[u8]) {
-        if self.inner_provide(data) {
+    pub async fn provide(&self, data: Bytes) {
+        if self.inner_provide(data.clone()) {
             return;
         }
         loop {
@@ -64,31 +66,31 @@ impl DataBlock {
 
                 },
             }
-            if self.inner_provide(data) {
+            if self.inner_provide(data.clone()) {
                 return;
             }
         }
     }
 
-    fn inner_provide(&self, data: &[u8]) -> bool {
+    fn inner_provide(&self, data: Bytes) -> bool {
         // 允许一定量的超出限制, 为空必定写入，防止阻塞流量
         if self.data.lock().unwrap().is_empty() {
             self.block_manager.take();
-            self.data.lock().unwrap().push_back(Vec::from(data));
+            self.data.lock().unwrap().push_back(data);
             self.provide_notify.notify_one();
             return true;
         }
         // 允许一定量的超出限制
         if self.block_manager.can_take() {
             self.block_manager.take();
-            self.data.lock().unwrap().push_back(Vec::from(data));
+            self.data.lock().unwrap().push_back(data);
             self.provide_notify.notify_one();
             return true;
         }
         false
     }
 
-    pub async fn consume(&self) -> Vec<u8> {
+    pub async fn consume(&self) -> Bytes {
         if self.data.lock().unwrap().is_empty() {
             loop {
                 self.provide_notify.notified().await;
