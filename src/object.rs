@@ -7,7 +7,9 @@ use std::io;
 use std::io::Error;
 use std::sync::Arc;
 use tokio::spawn;
-use tokio::sync::Mutex; // Already present, but ensure it's used for cache
+use tokio::sync::Mutex;
+use crate::block::BlockManager;
+// Already present, but ensure it's used for cache
 
 pub mod config;
 pub mod raw_udp;
@@ -18,14 +20,16 @@ pub struct Object {
     config: Arc<ObjectConfig>,
     router: Arc<dyn RouterSet>,
     connector_cache: Arc<Mutex<HashMap<String, Arc<Box<dyn RunConnector>>>>>, // New field
+    block_manager: Option<Arc<BlockManager>>,
 }
 
 impl Object {
-    pub fn new(config: Arc<ObjectConfig>, router: Arc<dyn RouterSet>) -> Self {
+    pub fn new(config: Arc<ObjectConfig>, router: Arc<dyn RouterSet>, block_manager: Option<Arc<BlockManager>>) -> Self {
         Self {
             config,
             router,
             connector_cache: Arc::new(Mutex::new(HashMap::new())), // Initialize cache
+            block_manager
         }
     }
 
@@ -50,7 +54,7 @@ impl Object {
             let router_clone = Arc::clone(&router_outer);
             let config_clone = Arc::clone(&config_outer);
             let connector_cache_clone = Arc::clone(&connector_cache_outer); // Clone cache Arc for the spawned task
-
+            let block_manager_clone = self.block_manager.clone();
             spawn(async move {
                 match acc_stream {
                     RunAccStream::TCPStream(mut tcp_stream) => {
@@ -175,6 +179,7 @@ impl Object {
                                         payload_cache,
                                         client_stream,
                                         tcp_stream,
+                                        block_manager_clone,
                                     )
                                     .await
                                     {

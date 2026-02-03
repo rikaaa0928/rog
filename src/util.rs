@@ -4,6 +4,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str;
 
 pub(crate) mod socks5;
+pub mod parse;
 
 #[derive(Debug, Clone)]
 pub struct RunAddr {

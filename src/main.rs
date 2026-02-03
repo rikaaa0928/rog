@@ -1,3 +1,5 @@
+use crate::block::BlockManager;
+use crate::consts::TCP_IO_BUFFER_SIZE;
 use crate::def::config::Config;
 use crate::object::config::ObjectConfig;
 use crate::object::Object;
@@ -10,8 +12,9 @@ use tokio::{fs, spawn};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-
+mod block;
 mod connector;
+mod consts;
 mod def;
 mod listener;
 mod object;
@@ -19,6 +22,8 @@ mod proto;
 mod router;
 mod stream;
 mod test;
+#[cfg(test)]
+mod test_tcp_buffer;
 mod util;
 
 #[tokio::main]
@@ -41,6 +46,25 @@ async fn main() -> std::io::Result<()> {
         ));
     }
     let cfg = cfg_res.unwrap();
+
+    let buffer_size = if let Some(n) = &cfg.buffer_size {
+        util::parse::parse_size(n)?
+    } else {
+        0
+    };
+
+    let block_manager = if buffer_size > 0 {
+        let block_number = buffer_size.div_ceil(TCP_IO_BUFFER_SIZE as u64);
+        log::info!(
+            "Global buffer pool size: {} bytes with {} block",
+            buffer_size,
+            block_number
+        );
+        Some(Arc::new(BlockManager::new(block_number)))
+    } else {
+        None
+    };
+
     let resolver = router::resolver::Resolver::new();
     let router = router::DefaultRouter::new(
         cfg.router.as_slice(),
@@ -58,9 +82,10 @@ async fn main() -> std::io::Result<()> {
         let cfg = cfg.clone();
         let router = router.clone();
         let server_id = server_id.clone();
+        let block_manager = block_manager.clone();
         fs.push(spawn(async move {
             let obj_conf = Arc::new(ObjectConfig::build(l.name.as_str(), &cfg, server_id));
-            let obj = Object::new(obj_conf, router.clone());
+            let obj = Object::new(obj_conf, router, block_manager);
             obj.start().await
         }));
     }

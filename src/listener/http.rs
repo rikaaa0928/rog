@@ -4,6 +4,7 @@ use log::{debug, trace};
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use url::Url;
+use crate::consts::TCP_IO_BUFFER_SIZE;
 
 #[allow(dead_code)]
 pub struct HttpRunAcceptor {
@@ -41,7 +42,7 @@ impl RunAcceptor for HttpRunAcceptor {
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
         stream.set_info(&mut |x| x.protocol_name = "http".to_string());
         
-        let mut buf = [0u8; 2048];
+        let mut buf = [0u8; TCP_IO_BUFFER_SIZE];
         let n = stream.read(&mut buf).await?;
         let data = buf[0..n].to_vec();
 
