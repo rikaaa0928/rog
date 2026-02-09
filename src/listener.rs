@@ -48,7 +48,6 @@ pub async fn create(
                 listener,
                 None,
                 None,
-                cfg.listener.ip_stats_interval,
                 cfg.server_id.clone(),
             ));
             Ok(http)

@@ -78,7 +78,6 @@ proto = "tcp"
 - `name`: A unique name for the listener.
 - `proto`: The protocol to use (e.g., "tcp", "http", "socks5", "grpc").
 - `router`: The name of the router to use for this listener.
-- `ip_stats_interval`: (Optional) Interval in seconds to log IP statistics.
 
 #### `router`
 

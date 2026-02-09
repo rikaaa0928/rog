@@ -16,7 +16,6 @@ pub struct Htss5RunAcceptor {
     inner: Box<dyn RunAcceptor>,
     user: Option<String>,
     pw: Option<String>,
-    ip_stats: Option<Arc<Mutex<HashMap<String, u64>>>>,
     server_id: String,
 }
 
@@ -25,43 +24,12 @@ impl Htss5RunAcceptor {
         a: Box<dyn RunAcceptor>,
         user: Option<String>,
         pw: Option<String>,
-        interval: Option<u64>,
         server_id: String,
     ) -> Self {
-        let ip_stats = if let Some(i) = interval {
-            if i > 0 {
-                let stats: Arc<Mutex<HashMap<String, u64>>> =
-                    Arc::new(Mutex::new(HashMap::new()));
-                let stats_clone = stats.clone();
-                tokio::spawn(async move {
-                    loop {
-                        sleep(Duration::from_secs(i)).await;
-                        let mut map = stats_clone.lock().unwrap();
-                        if map.is_empty() {
-                            continue;
-                        }
-                        let mut count_vec: Vec<_> = map.iter().collect();
-                        count_vec.sort_by(|a, b| b.1.cmp(a.1));
-                        info!("--- IP Stats ({i}s) ---");
-                        for (ip, count) in count_vec {
-                            info!("{}: {}", ip, count);
-                        }
-                        info!("---------------------");
-                        map.clear();
-                    }
-                });
-                Some(stats)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
         Self {
             inner: a,
             user,
             pw,
-            ip_stats,
             server_id,
         }
     }
@@ -70,13 +38,6 @@ impl Htss5RunAcceptor {
 impl RunAcceptor for Htss5RunAcceptor {
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
         let res = self.inner.accept().await;
-        if let Ok((_, addr)) = &res {
-            if let Some(stats) = &self.ip_stats {
-                let ip = addr.ip().to_string();
-                let mut map = stats.lock().unwrap();
-                *map.entry(ip).or_insert(0) += 1;
-            }
-        }
         res
     }
 

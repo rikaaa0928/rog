@@ -78,7 +78,6 @@ proto = "tcp"
 - `name`: 监听器的唯一名称。
 - `proto`: 使用的协议 (例如, "tcp", "http", "socks5", "grpc")。
 - `router`: 此监听器使用的路由器的名称。
-- `ip_stats_interval`: (可选) 记录 IP 统计信息的间隔（秒）。
 
 #### `router`
 
