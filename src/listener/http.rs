@@ -73,6 +73,12 @@ impl RunAcceptor for HttpRunAcceptor {
                 "invalid parts ".to_owned() + f_line,
             ));
         }
+        if parts[1].starts_with('/') {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "origin form request not allowed",
+            ));
+        }
         let mut dst = parts[1].to_string();
         if !dst.contains("://") {
             dst = format!("http://{}", dst)
@@ -89,13 +95,8 @@ impl RunAcceptor for HttpRunAcceptor {
         } else {
             // Check loop
             for line in &lines {
-                if line.to_lowercase().starts_with("via:") {
-                    if line.contains(&self.server_id) {
-                        return Err(std::io::Error::new(
-                            ErrorKind::Other,
-                            "Loop detected",
-                        ));
-                    }
+                if line.to_lowercase().starts_with("via:") && line.contains(&self.server_id) {
+                    return Err(std::io::Error::other("Loop detected"));
                 }
             }
             // Add Via header
