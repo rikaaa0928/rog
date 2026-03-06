@@ -1,4 +1,4 @@
-use crate::def::{config, RunConnector, RunStream, RunUdpReader, RunUdpWriter};
+use crate::def::{RunConnector, RunStream, RunUdpReader, RunUdpWriter, config};
 use crate::proto::v1::pb::rog_service_client::RogServiceClient;
 use crate::proto::v1::pb::{StreamReq, UdpReq};
 use crate::stream::grpc_client::GrpcClientRunStream;
@@ -8,10 +8,10 @@ use std::io;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::time::sleep;
-use tonic::codegen::tokio_stream;
 use tonic::Request;
+use tonic::codegen::tokio_stream;
 // pub mod pb {
 //     tonic::include_proto!("moe.rikaaa0928.rog");
 // }
@@ -68,17 +68,24 @@ impl RunConnector for GrpcRunConnector {
         };
 
         let t = tx.clone();
-        let auth = StreamReq { auth: self.cfg.pw.clone().unwrap(), dst_port: Some(port as u32), dst_addr: Some(host), ..Default::default() };
+        let auth = StreamReq {
+            auth: self.cfg.pw.clone().unwrap(),
+            dst_port: Some(port as u32),
+            dst_addr: Some(host.clone()),
+            ..Default::default()
+        };
         let res = t.send(auth).await;
         if let Err(e) = res {
             error!("gRPC connector failed to send auth request: {}", e);
-            return Err(io::Error::other(
-                "failed to send auth request",
-            ));
+            return Err(io::Error::other("failed to send auth request"));
         }
 
         let mut stream = GrpcClientRunStream::new(Arc::new(Mutex::new(resp)), tx);
-        stream.set_info(&mut |x| x.protocol_name = "grpc".to_string());
+        stream.set_info(&mut |x| {
+            x.protocol_name = "grpc".to_string();
+            x.dst_port = Some(port);
+            x.dst_addr = Some(host.to_string());
+        });
         Ok(Box::new(stream))
     }
 
@@ -109,7 +116,7 @@ impl RunConnector for GrpcRunConnector {
     }
 }
 
-fn parse_address(addr: &str) -> io::Result<(String, u16)> {
+pub(super) fn parse_address(addr: &str) -> io::Result<(String, u16)> {
     // 使用 rsplit_once 从右边分割,这样可以处理 IPv6 地址中的冒号
     let (host, port) = addr
         .rsplit_once(':')

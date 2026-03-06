@@ -56,14 +56,11 @@ pub async fn handle_raw_udp(
     let (mut udp_reader, udp_writer) = connector_obj
         .udp_tunnel(format!(
             "{}:{}",
-            first_packet.meta.src_addr,
-            first_packet.meta.src_port,
+            first_packet.meta.src_addr, first_packet.meta.src_port,
         ))
         .await?
         .ok_or_else(|| {
-            io::Error::other(
-                "UDP tunnel creation failed or not supported by connector",
-            )
+            io::Error::other("UDP tunnel creation failed or not supported by connector")
         })?;
 
     udp_writer.write(first_packet).await?;
@@ -138,8 +135,7 @@ pub async fn handle_raw_udp(
                 Ok(udp_packet) => {
                     debug!(
                         "raw udp tunnel udp_packet read src {:?} {:?}",
-                        udp_packet.meta.src_addr,
-                        udp_packet.meta.src_port,
+                        udp_packet.meta.src_addr, udp_packet.meta.src_port,
                     );
                     if let Err(e) = w.write(udp_packet).await {
                         warn!("raw udp loop c write error {:?}", e);

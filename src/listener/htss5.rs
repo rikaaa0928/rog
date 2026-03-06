@@ -1,3 +1,4 @@
+use crate::consts::TCP_IO_BUFFER_SIZE;
 use crate::def::{RunAccStream, RunAcceptor, RunStream};
 use crate::util;
 use crate::util::RunAddr;
@@ -9,7 +10,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::sleep;
 use url::Url;
-use crate::consts::TCP_IO_BUFFER_SIZE;
 
 #[allow(dead_code)]
 pub struct Htss5RunAcceptor {
@@ -66,10 +66,8 @@ impl RunAcceptor for Htss5RunAcceptor {
                     "no available authentication found",
                 ));
             }
-            let hello_back = util::socks5::server_hello::ServerHello::new(
-                hello.version,
-                util::socks5::NO_AUTH,
-            );
+            let hello_back =
+                util::socks5::server_hello::ServerHello::new(hello.version, util::socks5::NO_AUTH);
             stream.write(&hello_back.to_bytes()).await?;
             let n = stream.read(&mut buf).await?;
             data = buf[0..n].to_vec();
@@ -86,17 +84,15 @@ impl RunAcceptor for Htss5RunAcceptor {
             // http
             let data = buf[0..n].to_vec();
 
-            let (header_str, body_bytes) = if let Some(idx) = data
-                .windows(4)
-                .position(|window| window == b"\r\n\r\n")
-            {
-                let (h, b) = data.split_at(idx + 4);
-                let s = String::from_utf8(h.to_vec()).map_err(std::io::Error::other)?;
-                (s, Some(b.to_vec()))
-            } else {
-                let s = String::from_utf8(data.clone()).map_err(std::io::Error::other)?;
-                (s, None)
-            };
+            let (header_str, body_bytes) =
+                if let Some(idx) = data.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let (h, b) = data.split_at(idx + 4);
+                    let s = String::from_utf8(h.to_vec()).map_err(std::io::Error::other)?;
+                    (s, Some(b.to_vec()))
+                } else {
+                    let s = String::from_utf8(data.clone()).map_err(std::io::Error::other)?;
+                    (s, None)
+                };
 
             let mut cache = Some(data);
             let str = header_str;
@@ -143,7 +139,8 @@ impl RunAcceptor for Htss5RunAcceptor {
 
                 if let Some(idx) = str.find("\r\n") {
                     let (first_line, rest) = str.split_at(idx + 2); // +2 for \r\n
-                    let new_header = format!("{}Via: 1.1 {}\r\n{}", first_line, self.server_id, rest);
+                    let new_header =
+                        format!("{}Via: 1.1 {}\r\n{}", first_line, self.server_id, rest);
                     let mut new_bytes = new_header.into_bytes();
                     if let Some(mut b) = body_bytes {
                         new_bytes.append(&mut b);

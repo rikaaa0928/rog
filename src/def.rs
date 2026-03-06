@@ -8,6 +8,11 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 #[derive(Debug, Clone, Default)]
 pub struct StreamInfo {
     pub protocol_name: String,
+    pub src_addr: Option<String>,
+    pub src_port: Option<u16>,
+    pub dst_addr: Option<String>,
+    pub dst_port: Option<u16>,
+    pub udp: Option<bool>,
 }
 
 #[async_trait::async_trait]
@@ -225,9 +230,7 @@ impl UDPPacket {
                 );
                 Ok(ip.to_string())
             }
-            _ => Err(std::io::Error::other(
-                "a_type not found",
-            )),
+            _ => Err(std::io::Error::other("a_type not found")),
         }?;
 
         Ok(UDPPacket {

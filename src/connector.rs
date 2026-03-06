@@ -1,6 +1,6 @@
 use crate::connector::grpc::GrpcRunConnector;
 use crate::connector::tcp::TcpRunConnector;
-use crate::def::{config, RunConnector};
+use crate::def::{RunConnector, config};
 
 pub(crate) mod block;
 pub(crate) mod grpc;

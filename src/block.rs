@@ -1,9 +1,9 @@
+use log::{debug, info};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::select;
 use tokio::sync::Notify;
-use log::{debug, info};
 
 pub struct BlockManager {
     block_limit: u64,
@@ -29,9 +29,15 @@ impl BlockManager {
         let taken = self.taken_blocks.fetch_add(1, Ordering::Relaxed);
         let count = self.take_count.fetch_add(1, Ordering::Relaxed);
         if count % 1000 == 0 {
-            info!("BlockManager: take count {}, taken_blocks/block_limit: {}/{}", count, taken, self.block_limit);
+            info!(
+                "BlockManager: take count {}, taken_blocks/block_limit: {}/{}",
+                count, taken, self.block_limit
+            );
         } else if count % 100 == 0 {
-            debug!("BlockManager: take count {}, taken_blocks/block_limit: {}/{}", count, taken, self.block_limit);
+            debug!(
+                "BlockManager: take count {}, taken_blocks/block_limit: {}/{}",
+                count, taken, self.block_limit
+            );
         }
     }
     pub fn release(&self) {

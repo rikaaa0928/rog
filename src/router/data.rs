@@ -6,7 +6,7 @@ use std::str::FromStr;
 use crate::def::config;
 use crate::router::consts;
 use crate::router::consts::FORMAT_LAN;
-use crate::router::matcher::{get_matcher_factory_fn, Matcher};
+use crate::router::matcher::{Matcher, get_matcher_factory_fn};
 use reqwest::Url;
 use serde::Deserialize;
 

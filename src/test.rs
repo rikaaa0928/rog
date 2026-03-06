@@ -289,8 +289,8 @@ mod tests {
         let url = Url::parse(&dst).unwrap();
         assert_eq!(url.scheme(), "http");
         assert_eq!(url.host_str(), Some("version")); // "version" becomes the host!
-        assert_eq!(url.path(), "/");                 // Path becomes "/"
-        
+        assert_eq!(url.path(), "/"); // Path becomes "/"
+
         // This explains why "GET /version HTTP/1.1" -> "version" as address in the http/htss5 listener
         // when constructed as "http://" + path.
 

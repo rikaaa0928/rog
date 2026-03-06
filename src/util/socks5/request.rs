@@ -19,9 +19,7 @@ impl Request {
     async fn parse_inner<P: Socks5MessageParser + Send>(parser: &mut P) -> io::Result<Self> {
         let version = parser.read_u8().await?;
         if version != 5 {
-            return Err(io::Error::other(
-                "invalid socks version",
-            ));
+            return Err(io::Error::other("invalid socks version"));
         }
 
         let cmd = parser.read_u8().await?;

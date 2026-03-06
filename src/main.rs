@@ -1,8 +1,8 @@
 use crate::block::BlockManager;
 use crate::consts::TCP_IO_BUFFER_SIZE;
 use crate::def::config::Config;
-use crate::object::config::ObjectConfig;
 use crate::object::Object;
+use crate::object::config::ObjectConfig;
 use futures::future::select_all;
 use log::error;
 use std::env;
@@ -29,11 +29,15 @@ mod util;
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     if env::var("RUST_LOG").is_err() {
-        env::set_var("RUST_LOG", "info");
+        unsafe {
+            env::set_var("RUST_LOG", "info");
+        }
     }
     env_logger::init();
     if env::var("ROG_CONFIG").is_err() {
-        env::set_var("ROG_CONFIG", "/etc/rog/config.toml");
+        unsafe {
+            env::set_var("ROG_CONFIG", "/etc/rog/config.toml");
+        }
     }
 
     let contents = fs::read_to_string(env::var("ROG_CONFIG").unwrap()).await?;

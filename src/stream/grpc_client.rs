@@ -4,8 +4,8 @@ use futures::StreamExt;
 use std::any::Any;
 use std::io::ErrorKind;
 use std::sync::Arc;
-use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::Sender;
 use tonic::Streaming;
 
 pub struct GrpcClientReadHalf {
@@ -69,7 +69,10 @@ impl RunReadHalf for GrpcClientReadHalf {
 #[async_trait::async_trait]
 impl RunWriteHalf for GrpcClientWriteHalf {
     async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        let req = StreamReq { payload: Some(buf.to_vec()), ..Default::default() };
+        let req = StreamReq {
+            payload: Some(buf.to_vec()),
+            ..Default::default()
+        };
         match self.writer.send(req).await {
             Ok(_) => Ok(()),
             Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),
@@ -153,7 +156,10 @@ impl RunStream for GrpcClientRunStream {
     }
 
     async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        let req = StreamReq { payload: Some(buf.to_vec()), ..Default::default() };
+        let req = StreamReq {
+            payload: Some(buf.to_vec()),
+            ..Default::default()
+        };
         match self.writer.send(req).await {
             Ok(_) => Ok(()),
             Err(e) => Err(std::io::Error::new(ErrorKind::Interrupted, e.to_string())),

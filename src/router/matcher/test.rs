@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::router::consts;
-    use crate::router::matcher::{get_matcher_factory_fn, Matcher};
+    use crate::router::matcher::{Matcher, get_matcher_factory_fn};
 
     #[test]
     fn test_cidr_matcher() {

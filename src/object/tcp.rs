@@ -106,14 +106,14 @@ pub async fn handle_tcp_connection(
                     }
                 }
             }
-             debug!("Reader task client_reader finished, cancelling.");
+            debug!("Reader task client_reader finished, cancelling.");
             client_read_token.cancel();
         });
 
         // s write
         let server_write_token = cancel_token.clone();
         let server_writer_task = tokio::spawn(async move {
-             loop {
+            loop {
                 select! {
                     data = c2s_data_block_r.consume() =>{
                         if let Err(e) = server_w.write(&data).await {
@@ -127,7 +127,7 @@ pub async fn handle_tcp_connection(
                     }
                 }
             }
-             debug!("Writer task server_writer finished, cancelling.");
+            debug!("Writer task server_writer finished, cancelling.");
             server_write_token.cancel();
         });
 
@@ -206,16 +206,10 @@ pub async fn handle_tcp_connection(
     });
 
     if let Err(e) = s2c.await {
-        debug!(
-            "Reader task s2c panicked or was cancelled: {:?}",
-            e
-        );
+        debug!("Reader task s2c panicked or was cancelled: {:?}", e);
     }
     if let Err(e) = c2s.await {
-        debug!(
-            "Writer task c2s panicked or was cancelled: {:?}",
-            e
-        );
+        debug!("Writer task c2s panicked or was cancelled: {:?}", e);
     }
     debug!("end loop");
     Ok(())

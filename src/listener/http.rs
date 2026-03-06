@@ -1,10 +1,10 @@
+use crate::consts::TCP_IO_BUFFER_SIZE;
 use crate::def::{RunAccStream, RunAcceptor, RunStream};
 use crate::util::RunAddr;
 use log::{debug, trace};
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use url::Url;
-use crate::consts::TCP_IO_BUFFER_SIZE;
 
 #[allow(dead_code)]
 pub struct HttpRunAcceptor {
@@ -41,22 +41,20 @@ impl RunAcceptor for HttpRunAcceptor {
         stream: &mut dyn RunStream,
     ) -> std::io::Result<(RunAddr, Option<Vec<u8>>)> {
         stream.set_info(&mut |x| x.protocol_name = "http".to_string());
-        
+
         let mut buf = [0u8; TCP_IO_BUFFER_SIZE];
         let n = stream.read(&mut buf).await?;
         let data = buf[0..n].to_vec();
 
-        let (header_str, body_bytes) = if let Some(idx) = data
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-        {
-            let (h, b) = data.split_at(idx + 4);
-            let s = String::from_utf8(h.to_vec()).map_err(std::io::Error::other)?;
-            (s, Some(b.to_vec()))
-        } else {
-            let s = String::from_utf8(data.clone()).map_err(std::io::Error::other)?;
-            (s, None)
-        };
+        let (header_str, body_bytes) =
+            if let Some(idx) = data.windows(4).position(|window| window == b"\r\n\r\n") {
+                let (h, b) = data.split_at(idx + 4);
+                let s = String::from_utf8(h.to_vec()).map_err(std::io::Error::other)?;
+                (s, Some(b.to_vec()))
+            } else {
+                let s = String::from_utf8(data.clone()).map_err(std::io::Error::other)?;
+                (s, None)
+            };
 
         let mut cache = Some(data);
         let str = header_str;

@@ -1,16 +1,16 @@
 mod consts;
 mod data;
+mod default_router;
 mod matcher;
 pub(crate) mod resolver;
-mod default_router;
 mod test;
 
 use crate::def;
 use crate::def::config::{RouteData, Router};
 use crate::router::data::load_route_data;
+use crate::router::default_router::DefaultBaseRouter;
 use crate::router::matcher::Matcher;
 use crate::router::resolver::Resolver;
-use crate::router::default_router::DefaultBaseRouter;
 use crate::util::RunAddr;
 use std::collections::HashMap;
 use std::sync::Arc;

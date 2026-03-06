@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::{select, spawn};
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;

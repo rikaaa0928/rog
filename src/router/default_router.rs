@@ -1,6 +1,6 @@
 use crate::def::config::RouteRule;
-use crate::router::matcher::util::match_exclude;
 use crate::router::matcher::Matcher;
+use crate::router::matcher::util::match_exclude;
 use crate::router::resolver::Resolver;
 use crate::util::RunAddr;
 use log::warn;

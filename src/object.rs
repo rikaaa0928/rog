@@ -1,3 +1,4 @@
+use crate::block::BlockManager;
 use crate::def::{RouterSet, RunAccStream, RunConnector};
 use crate::object::config::ObjectConfig;
 use crate::{connector, listener};
@@ -8,7 +9,6 @@ use std::io::Error;
 use std::sync::Arc;
 use tokio::spawn;
 use tokio::sync::Mutex;
-use crate::block::BlockManager;
 // Already present, but ensure it's used for cache
 
 pub mod config;
@@ -24,24 +24,26 @@ pub struct Object {
 }
 
 impl Object {
-    pub fn new(config: Arc<ObjectConfig>, router: Arc<dyn RouterSet>, block_manager: Option<Arc<BlockManager>>) -> Self {
+    pub fn new(
+        config: Arc<ObjectConfig>,
+        router: Arc<dyn RouterSet>,
+        block_manager: Option<Arc<BlockManager>>,
+    ) -> Self {
         Self {
             config,
             router,
             connector_cache: Arc::new(Mutex::new(HashMap::new())), // Initialize cache
-            block_manager
+            block_manager,
         }
     }
 
     pub async fn start(&self) -> io::Result<()> {
         let config_outer = self.config.clone(); // Renamed for clarity
         let router_outer = self.router.clone(); // Renamed for clarity
-        let acc = listener::create(&config_outer)
-            .await
-            .map_err(|e| {
-                error!("Failed to create listener: {}", e);
-                e
-            })?;
+        let acc = listener::create(&config_outer).await.map_err(|e| {
+            error!("Failed to create listener: {}", e);
+            e
+        })?;
         let main_acceptor = Arc::new(acc);
         let connector_cache_outer = self.connector_cache.clone(); // Clone cache Arc for the loop
 
@@ -160,7 +162,10 @@ impl Object {
                                                 .post_handshake(tcp_stream.as_mut(), true, 0)
                                                 .await
                                             {
-                                                error!("Error in post_handshake after connection failure: {}", e);
+                                                error!(
+                                                    "Error in post_handshake after connection failure: {}",
+                                                    e
+                                                );
                                             }
                                             return Ok(());
                                         }

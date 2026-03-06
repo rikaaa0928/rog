@@ -101,8 +101,7 @@ pub async fn handle_udp_connection(
     let (mut udp_tunnel_reader, udp_tunnal_writer) = ctor
         .udp_tunnel(format!(
             "{}:{}",
-            udp_packet.meta.src_addr,
-            udp_packet.meta.src_port,
+            udp_packet.meta.src_addr, udp_packet.meta.src_port,
         ))
         .await?
         .unwrap();

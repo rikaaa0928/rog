@@ -39,10 +39,8 @@ impl RunAcceptor for SocksRunAcceptor {
                 "no available authentication found",
             ));
         }
-        let hello_back = util::socks5::server_hello::ServerHello::new(
-            hello.version,
-            util::socks5::NO_AUTH,
-        );
+        let hello_back =
+            util::socks5::server_hello::ServerHello::new(hello.version, util::socks5::NO_AUTH);
         stream.write(&hello_back.to_bytes()).await?;
         let req = &util::socks5::request::Request::parse(stream).await?;
         let ret: std::io::Result<RunAddr> = req.try_into();

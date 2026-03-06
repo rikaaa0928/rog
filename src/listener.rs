@@ -12,9 +12,7 @@ pub(crate) mod http;
 pub(crate) mod socks5;
 pub(crate) mod tcp;
 
-pub async fn create(
-    cfg: &ObjectConfig,
-) -> std::io::Result<Box<dyn RunAcceptor>> {
+pub async fn create(cfg: &ObjectConfig) -> std::io::Result<Box<dyn RunAcceptor>> {
     match cfg.listener.proto.as_str() {
         "socks5" => {
             let listener = TcpRunListener {}
