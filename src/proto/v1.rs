@@ -3,6 +3,7 @@ use crate::proto::v1::pb::{UdpReq, UdpRes};
 
 pub mod pb {
     tonic::include_proto!("moe.rikaaa0928.rog");
+    tonic::include_proto!("moe.rikaaa0928.rev_rog");
 }
 
 impl TryInto<UDPPacket> for UdpReq {

@@ -5,6 +5,7 @@ use crate::def::{RunConnector, config};
 pub(crate) mod block;
 pub(crate) mod grpc;
 pub(crate) mod tcp;
+pub(crate) mod rev_grpc;
 
 pub async fn create(cfg: &config::Connector) -> std::io::Result<Box<dyn RunConnector>> {
     match cfg.proto.as_str() {

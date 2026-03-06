@@ -1,0 +1,51 @@
+syntax = "proto3";
+package moe.rikaaa0928.rev_rog;
+
+message RevStreamReq {
+  string auth = 1;
+  optional bytes payload = 2;
+  optional string connID = 3;
+}
+
+message RevStreamRes {
+  bytes payload = 1;
+}
+
+message RevUdpReq {
+  string auth = 1;
+  optional bytes payload = 2;
+  optional AddrInfo addrInfo = 3;
+  optional string connID = 4;
+}
+
+message RevUdpRes {
+  bytes payload = 1;
+  optional AddrInfo addrInfo = 2;
+}
+
+message ManagerReq {
+  string auth = 1;
+  string tag = 2;
+  optional AddrInfo addrInfo = 3;
+  optional uint32 udp = 4;
+  optional string connID = 5;
+}
+
+message AddrInfo {
+  string dstAddr = 1;
+  uint32 dstPort = 2;
+  string srcAddr = 3;
+  uint32 srcPort = 4;
+}
+
+message ManagerRes {
+  string tag = 1;
+  optional AddrInfo addrInfo = 2;
+  optional uint32 udp = 3;
+}
+
+service RogReverseService {
+  rpc manager(stream ManagerReq) returns (stream ManagerRes) {}
+  rpc stream(stream RevStreamReq) returns (stream RevStreamRes) {}
+  rpc udp(stream RevUdpReq) returns (stream RevUdpRes) {}
+}
