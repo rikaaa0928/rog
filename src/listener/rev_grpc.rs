@@ -1,8 +1,9 @@
-use crate::def::{RunAccStream, RunAcceptor, RunListener, RunStream};
+use crate::def::{RunAccStream, RunAcceptor, RunListener, RunStream, RunUdpReader, RunUdpWriter};
 use crate::object::config::ObjectConfig;
 use crate::proto::v1::pb::rog_reverse_service_client::RogReverseServiceClient;
-use crate::proto::v1::pb::{ManagerReq, ManagerRes, RevStreamReq, RevUdpReq, RevUdpRes};
+use crate::proto::v1::pb::{ManagerReq, ManagerRes, RevStreamReq, RevUdpReq};
 use crate::stream::rev_grpc_client::RevGrpcClientRunStream;
+use crate::stream::rev_grpc_udp_client::{RevGrpcUdpClientReader, RevGrpcUdpClientWriter};
 use crate::util::RunAddr;
 use futures::StreamExt;
 use log::{debug, error, info, trace, warn};
@@ -11,18 +12,19 @@ use std::io::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::sleep;
 use tokio::{select, spawn};
+use tonic::Request;
 use tonic::codegen::tokio_stream;
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
-use tonic::{Request, Status, Streaming};
+use tonic::transport::{Channel, Endpoint};
 
 async fn handle_manage_req(
     req: ManagerRes,
     client: &mut RogReverseServiceClient<Channel>,
     tx: &mpsc::Sender<RevGrpcClientRunStream>,
+    udp_tx: &mpsc::Sender<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>,
     auth: &str,
 ) -> Result<(), ()> {
     if req.udp.unwrap() == 0 {
@@ -69,15 +71,39 @@ async fn handle_manage_req(
         }
     } else {
         // udp
+        let conn_id = req.conn_id.clone().unwrap_or_default();
         let (utx, urx) = mpsc::channel::<RevUdpReq>(8);
         let urx = tokio_stream::wrappers::ReceiverStream::new(urx);
         let urx = Request::new(urx);
+
+        // 先发送握手包（conn_id + auth）
+        if let Err(e) = utx
+            .send(RevUdpReq {
+                auth: auth.to_string(),
+                payload: None,
+                addr_info: None,
+                conn_id: Some(conn_id),
+            })
+            .await
+        {
+            error!("rev grpc udp initial auth send error {}", e);
+            return Ok(());
+        }
+
         match client.udp(urx).await {
-            Ok(_stream) => {
-                // todo: udp
+            Ok(stream) => {
+                let res_stream = stream.into_inner();
+                let reader =
+                    Box::new(RevGrpcUdpClientReader::new(res_stream)) as Box<dyn RunUdpReader>;
+                let writer = Box::new(RevGrpcUdpClientWriter::new(utx, auth.to_string()))
+                    as Box<dyn RunUdpWriter>;
+                if let Err(_) = udp_tx.send((reader, writer)).await {
+                    error!("rev grpc udp pair send error");
+                    return Err(());
+                }
             }
             Err(e) => {
-                error!("rev grpc udp stream send error {}", e);
+                error!("rev grpc udp stream open error {}", e);
                 return Ok(());
             }
         }
@@ -97,16 +123,7 @@ impl RevGrpcListener {
 
 pub struct RevGrpcRunListener {
     receiver: Arc<Mutex<Receiver<RevGrpcClientRunStream>>>,
-    udp_receiver: Arc<
-        Mutex<
-            Receiver<(
-                Streaming<RevUdpReq>,
-                Sender<Result<RevUdpRes, Status>>,
-                String,
-            )>,
-        >,
-    >,
-    auth: String,
+    udp_receiver: Arc<Mutex<Receiver<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>>>,
 }
 
 #[async_trait::async_trait]
@@ -173,7 +190,7 @@ impl RunListener for RevGrpcListener {
                                         Some(Ok(req)) => {
                                             // todo: param check
                                             debug!("manager manager stream got req {:?}", req);
-                                            if handle_manage_req(req, &mut client, &tx, &auth).await.is_err() {
+                                            if handle_manage_req(req, &mut client, &tx, &utx, &auth).await.is_err() {
                                                 break;
                                             }
                                         }
@@ -197,7 +214,6 @@ impl RunListener for RevGrpcListener {
         Ok(Box::new(RevGrpcRunListener {
             receiver: Arc::new(Mutex::new(rx)),
             udp_receiver: Arc::new(Mutex::new(urx)),
-            auth: self.cfg.listener.pw.clone().unwrap(),
         }))
     }
 }
@@ -206,24 +222,21 @@ impl RunListener for RevGrpcListener {
 impl RunAcceptor for RevGrpcRunListener {
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
         let mut receiver = self.receiver.lock().await;
-        // let mut udp_receiver = self.udp_receiver.lock().await;
+        let mut udp_receiver = self.udp_receiver.lock().await;
         select! {
-            // todo: udp
-            // r = udp_receiver.recv() => {
-            //     match r {
-            //         None => Err(Error::other("receiver closed")),
-            //         Some((r,w,a)) => Ok(((RunAccStream::UDPSocket(
-            //             (
-            //                 Box::new(GrpcUdpServerReadHalf::new(r,a)),
-            //                 Box::new(GrpcUdpServerWriteHalf::new(w))
-            //                 )
-            //         )), "127.0.9.28:2809".parse().unwrap())),
-            //     }
-            // }
+            r = udp_receiver.recv() => {
+                match r {
+                    None => Err(Error::other("udp receiver closed")),
+                    Some((reader, writer)) => Ok((
+                        RunAccStream::UDPSocket((reader, writer)),
+                        "127.0.9.28:2809".parse().unwrap(),
+                    )),
+                }
+            }
             r = receiver.recv() => {
                 match r {
                     None => Err(Error::other("receiver closed")),
-                    Some(stream) => Ok((RunAccStream::TCPStream( Box::new(stream)), "127.0.0.1:2809".parse().unwrap())),
+                    Some(stream) => Ok((RunAccStream::TCPStream(Box::new(stream)), "127.0.0.1:2809".parse().unwrap())),
                 }
             }
         }
