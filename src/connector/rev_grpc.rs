@@ -23,12 +23,15 @@ use tokio::time::timeout;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 // The state shared between the gRPC Server handlers and the RunConnector
 pub struct PendingConn {
     pub tx: oneshot::Sender<RevGrpcServerRunStream>,
     pub host: String,
     pub port: u16,
+    pub pw: Option<String>,
 }
 
 pub struct RevGrpcState {
@@ -45,6 +48,28 @@ impl RevGrpcState {
     }
 }
 
+static REV_GRPC_STATE: OnceLock<Arc<RevGrpcState>> = OnceLock::new();
+
+pub fn get_global_rev_grpc_state() -> Arc<RevGrpcState> {
+    REV_GRPC_STATE.get_or_init(|| Arc::new(RevGrpcState::new())).clone()
+}
+
+pub async fn start_reverse_server(endpoint: String, pw_map: HashMap<String, Option<String>>) {
+    let state = get_global_rev_grpc_state();
+    let rog = RevGrpcServer { pw_map, state };
+
+    spawn(async move {
+        match Server::builder()
+            .add_service(RogReverseServiceServer::new(rog))
+            .serve(endpoint.parse().unwrap())
+            .await
+        {
+            Ok(_) => info!("Reverse grpc server stopped"),
+            Err(e) => error!("Reverse grpc server err: {}", e),
+        }
+    });
+}
+
 pub struct RevGrpcRunConnector {
     cfg: config::Connector,
     state: Arc<RevGrpcState>,
@@ -52,28 +77,7 @@ pub struct RevGrpcRunConnector {
 
 impl RevGrpcRunConnector {
     pub async fn new(cfg: &config::Connector) -> io::Result<Self> {
-        let endpoint = cfg
-            .endpoint
-            .as_ref()
-            .ok_or_else(|| {
-                let err_msg = "gRPC connector config is missing 'endpoint'";
-                error!("{}", err_msg);
-                io::Error::new(ErrorKind::InvalidInput, err_msg)
-            })?
-            .to_owned();
-
-        let state = Arc::new(RevGrpcState::new());
-        let rog = RevGrpcServer {
-            cfg: cfg.clone(),
-            state: state.clone(),
-        };
-
-        spawn(async move {
-            let _ = Server::builder()
-                .add_service(RogReverseServiceServer::new(rog))
-                .serve(endpoint.parse().unwrap())
-                .await;
-        });
+        let state = get_global_rev_grpc_state();
 
         Ok(Self {
             cfg: cfg.clone(),
@@ -88,18 +92,17 @@ impl RunConnector for RevGrpcRunConnector {
         let (host, port) = parse_address(addr.as_str())?;
 
         let manager_tx = {
-            if self.state.managers.is_empty() {
-                return Err(io::Error::new(
-                    ErrorKind::NotConnected,
-                    "no reverse server connected",
-                ));
-            }
+            let tag = &self.cfg.name;
             self.state
                 .managers
-                .iter()
-                .next()
+                .get(tag)
                 .map(|m| m.value().clone())
-                .unwrap()
+                .ok_or_else(|| {
+                    io::Error::new(
+                        ErrorKind::NotConnected,
+                        format!("reverse client '{}' offline", tag),
+                    )
+                })?
         };
 
         let conn_id = uuid::Uuid::new_v4().to_string();
@@ -111,11 +114,11 @@ impl RunConnector for RevGrpcRunConnector {
                 tx,
                 host: host.clone(),
                 port: port as u16,
+                pw: self.cfg.pw.clone(),
             },
         );
 
         let req = ManagerRes {
-            tag: "".to_string(), // Tag can be ignored by Server, or filled if needed
             addr_info: Some(AddrInfo {
                 dst_addr: host,
                 dst_port: port as u32,
@@ -165,7 +168,7 @@ impl RunConnector for RevGrpcRunConnector {
 }
 
 struct RevGrpcServer {
-    cfg: Connector,
+    pw_map: HashMap<String, Option<String>>,
     state: Arc<RevGrpcState>,
 }
 
@@ -195,17 +198,17 @@ impl RogReverseService for RevGrpcServer {
             }
         };
 
-        if let Some(cfg_pw) = &self.cfg.pw {
-            if first_msg.auth != *cfg_pw {
+        if let Some(expected_pw) = self.pw_map.get(&first_msg.tag).and_then(|p| p.as_ref()) {
+            if first_msg.auth != *expected_pw {
                 return Err(Status::unauthenticated("invalid auth"));
             }
         }
 
         let tag = first_msg.tag.clone();
 
-        if !self.state.managers.is_empty() {
+        if self.state.managers.contains_key(&tag) {
             return Err(Status::already_exists(
-                "another server is already connected",
+                format!("client with tag '{}' is already connected", tag),
             ));
         }
 
@@ -239,18 +242,18 @@ impl RogReverseService for RevGrpcServer {
             Err(e) => return Err(e),
         };
 
-        if let Some(cfg_pw) = &self.cfg.pw {
-            if first_msg.auth != *cfg_pw {
-                return Err(Status::unauthenticated("invalid auth"));
-            }
-        }
-
         let conn_id = first_msg.conn_id.unwrap_or_default();
         if conn_id.is_empty() {
             return Err(Status::invalid_argument("missing conn_id"));
         }
 
         if let Some((_, pending)) = self.state.pending_streams.remove(&conn_id) {
+            if let Some(expected_pw) = pending.pw.as_ref() {
+                if first_msg.auth != *expected_pw {
+                    return Err(Status::unauthenticated("invalid auth"));
+                }
+            }
+
             let (tx, rx) = mpsc::channel::<Result<RevStreamRes, Status>>(32);
             let out_stream = ReceiverStream::new(rx);
 

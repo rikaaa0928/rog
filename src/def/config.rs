@@ -2,12 +2,18 @@ use serde::Deserialize;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Config {
+    pub reverse_server: Option<ReverseServer>,
     pub listener: Vec<Listener>,
     pub router: Vec<Router>,
     pub data: Option<Vec<RouteData>>,
     pub connector: Vec<Connector>,
     pub server_id: Option<String>,
     pub buffer_size: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct ReverseServer {
+    pub endpoint: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]

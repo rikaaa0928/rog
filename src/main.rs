@@ -77,6 +77,16 @@ async fn main() -> std::io::Result<()> {
     )
     .await;
     let router = Arc::new(router);
+    if let Some(rev_server) = cfg.reverse_server.clone() {
+        let pw_map: std::collections::HashMap<String, Option<String>> = cfg
+            .connector
+            .iter()
+            .filter(|c| c.proto == "rev_grpc")
+            .map(|c| (c.name.clone(), c.pw.clone()))
+            .collect();
+        crate::connector::rev_grpc::start_reverse_server(rev_server.endpoint, pw_map).await;
+    }
+
     let mut fs = Vec::new();
     let server_id = cfg
         .server_id
@@ -93,7 +103,12 @@ async fn main() -> std::io::Result<()> {
             obj.start().await
         }));
     }
-    let (a, _, _) = select_all(fs).await;
-    error!("error: {:?}", a);
+
+    if fs.is_empty() {
+        futures::future::pending::<()>().await;
+    } else {
+        let (a, _, _) = select_all(fs).await;
+        error!("error: {:?}", a);
+    }
     Ok(())
 }

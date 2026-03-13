@@ -39,10 +39,9 @@ message AddrInfo {
 }
 
 message ManagerRes {
-  string tag = 1;
-  optional AddrInfo addrInfo = 2;
-  optional uint32 udp = 3;
-  optional string connID = 4;
+  optional AddrInfo addrInfo = 1;
+  optional uint32 udp = 2;
+  optional string connID = 3;
 }
 
 service RogReverseService {
