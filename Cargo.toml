@@ -29,6 +29,8 @@ uuid = { version = "1.16.0", features = ["v4", "serde"] }
 #tokio-stream = "0.1.17"
 mimalloc = { version = "0.1", default-features = false }
 tokio-util = { version = "0.7", features = ["rt"] }
+dashmap = "6.1.0"
+tokio-stream = "0.1.18"
 
 
 [build-dependencies]

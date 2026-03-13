@@ -5,7 +5,7 @@ use crate::proto::v1::pb::{ManagerReq, ManagerRes, RevStreamReq, RevUdpReq, RevU
 use crate::stream::rev_grpc_client::RevGrpcClientRunStream;
 use crate::util::RunAddr;
 use futures::StreamExt;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use std::io;
 use std::io::Error;
 use std::net::SocketAddr;
@@ -16,50 +16,36 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::time::sleep;
 use tokio::{select, spawn};
 use tonic::codegen::tokio_stream;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Request, Status, Streaming};
 
 async fn handle_manage_req(
     req: ManagerRes,
     client: &mut RogReverseServiceClient<Channel>,
-    mtx: &mpsc::Sender<ManagerReq>,
     tx: &mpsc::Sender<RevGrpcClientRunStream>,
     auth: &str,
-    tag: &str,
 ) -> Result<(), ()> {
     if req.udp.unwrap() == 0 {
         // tcp
         let (stx, srx) = mpsc::channel::<RevStreamReq>(8);
         let srx = tokio_stream::wrappers::ReceiverStream::new(srx);
         let srx = Request::new(srx);
+
+        let uuid_str = req.conn_id.clone().unwrap_or_default();
+        if let Err(e) = stx
+            .send(RevStreamReq {
+                auth: auth.to_string(),
+                payload: None,
+                conn_id: Some(uuid_str),
+            })
+            .await
+        {
+            error!("rev grpc stream initial auth send error {}", e);
+            return Ok(());
+        }
+
         match client.stream(srx).await {
             Ok(stream) => {
-                let uuid_str = uuid::Uuid::new_v4().to_string();
-                if let Err(e) = mtx
-                    .send(ManagerReq {
-                        auth: auth.to_string(),
-                        tag: tag.to_string(),
-                        conn_id: Some(uuid_str.clone()),
-                        addr_info: req.addr_info.clone(),
-                        udp: Some(0),
-                    })
-                    .await
-                {
-                    error!("rev grpc manager send error {}", e);
-                    return Err(());
-                }
-                if let Err(e) = stx
-                    .send(RevStreamReq {
-                        auth: auth.to_string(),
-                        payload: None,
-                        conn_id: Some(uuid_str),
-                    })
-                    .await
-                {
-                    error!("rev grpc stream send error {}", e);
-                    return Err(());
-                }
-
                 let stream = stream.into_inner();
                 let mut new_stream = RevGrpcClientRunStream::new(Arc::new(Mutex::new(stream)), stx);
                 let addr_info = req.addr_info.clone().unwrap();
@@ -77,8 +63,8 @@ async fn handle_manage_req(
                 }
             }
             Err(e) => {
-                error!("rev grpc manager stream send error {}", e);
-                return Err(());
+                error!("rev grpc manager stream accept error {}", e);
+                return Ok(());
             }
         }
     } else {
@@ -92,7 +78,7 @@ async fn handle_manage_req(
             }
             Err(e) => {
                 error!("rev grpc udp stream send error {}", e);
-                return Err(());
+                return Ok(());
             }
         }
     }
@@ -140,11 +126,12 @@ impl RunListener for RevGrpcListener {
                     let t = endpoint.connect().await;
                     match t {
                         Ok(c) => {
+                            debug!("rev grpc server endpoint connected");
                             channel = c;
                             break;
                         }
-                        Err(_) => {
-                            debug!("rev grpc endpoint connect error");
+                        Err(e) => {
+                            trace!("rev grpc server endpoint connect error {:?}", e);
                             sleep(Duration::from_millis(300)).await;
                         }
                     }
@@ -155,25 +142,25 @@ impl RunListener for RevGrpcListener {
 
                 let mut client = RogReverseServiceClient::new(channel);
 
+                if let Err(e) = mtx
+                    .send(ManagerReq {
+                        auth: auth.clone(),
+                        tag: tag.clone(),
+                        addr_info: None,
+                        udp: None,
+                        conn_id: None,
+                    })
+                    .await
+                {
+                    error!("manager initial auth send error {}", e);
+                    sleep(Duration::from_millis(300)).await;
+                    continue;
+                }
+
                 let manager_stream = client.manager(mrx).await;
                 match manager_stream {
                     Ok(manager_stream) => {
-                        match mtx
-                            .send(ManagerReq {
-                                auth: auth.clone(),
-                                tag: tag.clone(),
-                                addr_info: None,
-                                udp: None,
-                                conn_id: None,
-                            })
-                            .await
-                        {
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("manager stream send error {}", e);
-                                continue;
-                            }
-                        }
+                        debug!("rev grpc manager stream created");
                         let mut manager_stream = manager_stream.into_inner();
                         loop {
                             select! {
@@ -185,7 +172,8 @@ impl RunListener for RevGrpcListener {
                                         }
                                         Some(Ok(req)) => {
                                             // todo: param check
-                                            if handle_manage_req(req, &mut client, &mtx, &tx, &auth, &tag).await.is_err() {
+                                            debug!("manager manager stream got req {:?}", req);
+                                            if handle_manage_req(req, &mut client, &tx, &auth).await.is_err() {
                                                 break;
                                             }
                                         }

@@ -105,22 +105,14 @@ impl RevGrpcServerRunStream {
         }
     }
 
-    pub async fn handshake(&mut self) -> std::io::Result<Option<(RunAddr, String)>> {
-        let auth = self.reader.lock().await.next().await;
-        match auth {
-            Some(Ok(a)) => {
-                let pw = a.auth;
-                let ra = RunAddr {
-                    addr: self.dst_addr.clone(),
-                    port: self.dst_port,
-                    udp: false,
-                };
-                Ok(Some((ra, pw)))
-            }
-            Some(Err(err)) => Err(std::io::Error::new(ErrorKind::Interrupted, err.to_string())),
-            None => Err(std::io::Error::new(ErrorKind::Interrupted, "interrupted")),
-        }
-    }
+    // pub async fn handshake(&mut self) -> std::io::Result<Option<(RunAddr, String)>> {
+    //     let ra = RunAddr {
+    //         addr: self.dst_addr.clone(),
+    //         port: self.dst_port,
+    //         udp: false,
+    //     };
+    //     Ok(Some((ra, "".to_string())))
+    // }
 }
 
 #[async_trait::async_trait]
