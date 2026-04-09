@@ -3,6 +3,7 @@ use crate::proto::v1::pb::rog_service_client::RogServiceClient;
 use crate::proto::v1::pb::{StreamReq, UdpReq};
 use crate::stream::grpc_client::GrpcClientRunStream;
 use crate::stream::grpc_udp_client::{GrpcUdpClientRunReader, GrpcUdpClientRunWriter};
+use crate::util::grpc_transport::connect_channel_without_proxy;
 use log::{error, info};
 use std::io;
 use std::io::ErrorKind;
@@ -12,6 +13,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::time::sleep;
 use tonic::Request;
 use tonic::codegen::tokio_stream;
+use tonic::transport::Endpoint;
 // pub mod pb {
 //     tonic::include_proto!("moe.rikaaa0928.rog");
 // }
@@ -29,7 +31,12 @@ impl GrpcRunConnector {
         })?;
         let mut err = None;
         for i in 1..=3 {
-            let client = RogServiceClient::connect(endpoint.clone()).await;
+            let client = match Endpoint::new(endpoint.clone()) {
+                Ok(endpoint) => connect_channel_without_proxy(endpoint)
+                    .await
+                    .map(RogServiceClient::new),
+                Err(e) => Err(e),
+            };
             match client {
                 Ok(client) => {
                     if err.is_some() {

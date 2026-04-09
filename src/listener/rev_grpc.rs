@@ -5,6 +5,7 @@ use crate::proto::v1::pb::{ManagerReq, ManagerRes, RevStreamReq, RevUdpReq};
 use crate::stream::rev_grpc_client::RevGrpcClientRunStream;
 use crate::stream::rev_grpc_udp_client::{RevGrpcUdpClientReader, RevGrpcUdpClientWriter};
 use crate::util::RunAddr;
+use crate::util::grpc_transport::connect_channel_without_proxy;
 use futures::StreamExt;
 use log::{debug, error, info, trace, warn};
 use std::io;
@@ -140,7 +141,7 @@ impl RunListener for RevGrpcListener {
             loop {
                 let channel;
                 loop {
-                    let t = endpoint.connect().await;
+                    let t = connect_channel_without_proxy(endpoint.clone()).await;
                     match t {
                         Ok(c) => {
                             debug!("rev grpc server endpoint connected");

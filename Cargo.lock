@@ -1208,6 +1208,7 @@ dependencies = [
  "env_logger",
  "futures",
  "hickory-resolver",
+ "hyper-util",
  "ipnet",
  "ipnetwork",
  "log",
@@ -1223,6 +1224,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "tower",
  "url",
  "uuid",
 ]
