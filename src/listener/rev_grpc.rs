@@ -1,3 +1,4 @@
+use crate::def::config::get_option_bool;
 use crate::def::{RunAccStream, RunAcceptor, RunListener, RunStream, RunUdpReader, RunUdpWriter};
 use crate::object::config::ObjectConfig;
 use crate::proto::v1::pb::rog_reverse_service_client::RogReverseServiceClient;
@@ -130,8 +131,17 @@ pub struct RevGrpcRunListener {
 #[async_trait::async_trait]
 impl RunListener for RevGrpcListener {
     async fn listen(&self, addr: &str) -> std::io::Result<Box<dyn RunAcceptor>> {
+        let keep_alive = get_option_bool(&self.cfg.listener.options, "keep_alive");
         let endpoint = Endpoint::new(addr.to_string())
             .map_err(|e| io::Error::other("rev grpc endpoint new error"))?;
+        let endpoint = if keep_alive {
+            endpoint
+                .http2_keep_alive_interval(Duration::from_secs(30))
+                .keep_alive_timeout(Duration::from_secs(10))
+                .keep_alive_while_idle(true)
+        } else {
+            endpoint
+        };
 
         let (tx, rx) = mpsc::channel(8);
         let (utx, urx) = mpsc::channel(8);

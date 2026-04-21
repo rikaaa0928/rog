@@ -1,4 +1,5 @@
 use crate::connector::grpc::parse_address;
+use crate::def::config::get_option_bool;
 use crate::def::{RunConnector, RunStream, RunUdpReader, RunUdpWriter, config};
 use crate::proto::v1::pb::rog_reverse_service_server::{
     RogReverseService, RogReverseServiceServer,
@@ -63,12 +64,23 @@ pub fn get_global_rev_grpc_state() -> Arc<RevGrpcState> {
         .clone()
 }
 
-pub async fn start_reverse_server(endpoint: String, pw_map: HashMap<String, Option<String>>) {
+pub async fn start_reverse_server(
+    endpoint: String,
+    pw_map: HashMap<String, Option<String>>,
+    options: &Option<HashMap<String, toml::Value>>,
+) {
     let state = get_global_rev_grpc_state();
     let rog = RevGrpcServer { pw_map, state };
+    let keep_alive = get_option_bool(options, "keep_alive");
 
     spawn(async move {
-        match Server::builder()
+        let mut builder = Server::builder();
+        if keep_alive {
+            builder = builder
+                .http2_keepalive_interval(Some(Duration::from_secs(30)))
+                .http2_keepalive_timeout(Some(Duration::from_secs(10)));
+        }
+        match builder
             .add_service(RogReverseServiceServer::new(rog))
             .serve(endpoint.parse().unwrap())
             .await

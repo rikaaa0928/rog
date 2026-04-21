@@ -1,3 +1,4 @@
+use crate::def::config::get_option_bool;
 use crate::def::{RunAccStream, RunAcceptor, RunListener, RunStream};
 use crate::object::config::ObjectConfig;
 use crate::proto::v1::pb::rog_service_server::{RogService, RogServiceServer};
@@ -10,6 +11,7 @@ use std::io::Error;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{Mutex, mpsc};
 use tokio::{select, spawn};
@@ -232,9 +234,16 @@ impl RunListener for GrpcListener {
             cfg: self.cfg.clone(),
             // router: self.router.clone(), // Removed
         };
+        let keep_alive = get_option_bool(&self.cfg.listener.options, "keep_alive");
         let addr = addr.to_owned();
         spawn(async move {
-            let _ = Server::builder()
+            let mut builder = Server::builder();
+            if keep_alive {
+                builder = builder
+                    .http2_keepalive_interval(Some(Duration::from_secs(30)))
+                    .http2_keepalive_timeout(Some(Duration::from_secs(10)));
+            }
+            let _ = builder
                 .add_service(RogServiceServer::new(rog))
                 .serve(addr.parse().unwrap())
                 .await;

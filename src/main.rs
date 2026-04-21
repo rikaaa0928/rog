@@ -84,7 +84,7 @@ async fn main() -> std::io::Result<()> {
             .filter(|c| c.proto == "rev_grpc")
             .map(|c| (c.name.clone(), c.pw.clone()))
             .collect();
-        crate::connector::rev_grpc::start_reverse_server(rev_server.endpoint, pw_map).await;
+        crate::connector::rev_grpc::start_reverse_server(rev_server.endpoint, pw_map, &rev_server.options).await;
     }
 
     let mut fs = Vec::new();

@@ -1,3 +1,4 @@
+use crate::def::config::get_option_bool;
 use crate::def::{RunConnector, RunStream, RunUdpReader, RunUdpWriter, config};
 use crate::proto::v1::pb::rog_service_client::RogServiceClient;
 use crate::proto::v1::pb::{StreamReq, UdpReq};
@@ -30,11 +31,22 @@ impl GrpcRunConnector {
             io::Error::new(ErrorKind::InvalidInput, err_msg)
         })?;
         let mut err = None;
+        let keep_alive = get_option_bool(&cfg.options, "keep_alive");
         for i in 1..=3 {
             let client = match Endpoint::new(endpoint.clone()) {
-                Ok(endpoint) => connect_channel_without_proxy(endpoint)
-                    .await
-                    .map(RogServiceClient::new),
+                Ok(endpoint) => {
+                    let endpoint = if keep_alive {
+                        endpoint
+                            .http2_keep_alive_interval(Duration::from_secs(30))
+                            .keep_alive_timeout(Duration::from_secs(10))
+                            .keep_alive_while_idle(true)
+                    } else {
+                        endpoint
+                    };
+                    connect_channel_without_proxy(endpoint)
+                        .await
+                        .map(RogServiceClient::new)
+                }
                 Err(e) => Err(e),
             };
             match client {
