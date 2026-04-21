@@ -1,13 +1,17 @@
 use crate::def::{RunUdpReader, RunUdpWriter, UDPMeta, UDPPacket};
 use log::debug;
-use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::io;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use tokio::net::UdpSocket;
+use tokio::net::{UdpSocket, lookup_host};
+use tokio::sync::Mutex;
 
 // UdpStream 的包装
 pub struct UdpRunStream {
     inner: Arc<UdpSocket>,
     src_addr: String,
+    resolved_addrs: Arc<Mutex<HashMap<String, SocketAddr>>>,
 }
 // 为 MyUdpStream 实现构造方法
 impl UdpRunStream {
@@ -15,7 +19,32 @@ impl UdpRunStream {
         Self {
             inner: stream,
             src_addr,
+            resolved_addrs: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    async fn resolve_dst_addr(&self, dst_addr: &str, dst_port: u16) -> io::Result<SocketAddr> {
+        let cache_key = format!("{}:{}", dst_addr, dst_port);
+        if let Some(addr) = self.resolved_addrs.lock().await.get(&cache_key).copied() {
+            return Ok(addr);
+        }
+
+        let addr = match dst_addr.parse::<IpAddr>() {
+            Ok(ip) => SocketAddr::new(ip, dst_port),
+            Err(_) => {
+                let prefers_ipv4 = self.inner.local_addr()?.is_ipv4();
+                let resolved: Vec<SocketAddr> = lookup_host((dst_addr, dst_port)).await?.collect();
+                resolved
+                    .iter()
+                    .copied()
+                    .find(|addr| addr.is_ipv4() == prefers_ipv4)
+                    .or_else(|| resolved.first().copied())
+                    .ok_or_else(|| io::Error::other("no resolved UDP destination address"))?
+            }
+        };
+
+        self.resolved_addrs.lock().await.insert(cache_key, addr);
+        Ok(addr)
     }
 }
 
@@ -54,9 +83,15 @@ impl RunUdpWriter for UdpRunStream {
         let dst_addr = packet.meta.dst_addr.clone();
         let dst_port = packet.meta.dst_port;
         let data = packet.data.clone();
-        let addr_str = format!("{}:{}", dst_addr, dst_port);
-        debug!("udp send {:?} to {:?}", &data.as_slice().len(), &addr_str);
-        inner.send_to(data.as_slice(), addr_str).await?;
+        let resolved_addr = self.resolve_dst_addr(&dst_addr, dst_port).await?;
+        debug!(
+            "udp send {:?} to {:?} (requested {}:{})",
+            &data.as_slice().len(),
+            &resolved_addr,
+            &dst_addr,
+            &dst_port
+        );
+        inner.send_to(data.as_slice(), resolved_addr).await?;
         Ok(())
     }
 }
