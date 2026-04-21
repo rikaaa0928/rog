@@ -3,9 +3,11 @@ use crate::util::socks5::request::Request;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str;
 
+pub(crate) mod crypto;
 pub(crate) mod grpc_transport;
 pub mod parse;
 pub(crate) mod socks5;
+pub(crate) mod tcp_frame;
 
 #[derive(Debug, Clone)]
 pub struct RunAddr {

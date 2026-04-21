@@ -2,6 +2,7 @@ use crate::def::{RunAcceptor, RunListener};
 use crate::listener::grpc::GrpcListener;
 use crate::listener::htss5::Htss5RunAcceptor;
 use crate::listener::http::HttpRunAcceptor;
+use crate::listener::pb_tcp::PbTcpListener;
 use crate::listener::rev_grpc::RevGrpcListener;
 use crate::listener::socks5::SocksRunAcceptor;
 use crate::listener::tcp::TcpRunListener;
@@ -10,6 +11,7 @@ use crate::object::config::ObjectConfig;
 pub(crate) mod grpc;
 pub(crate) mod htss5;
 pub(crate) mod http;
+pub(crate) mod pb_tcp;
 mod rev_grpc;
 pub(crate) mod socks5;
 pub(crate) mod tcp;
@@ -44,6 +46,11 @@ pub async fn create(cfg: &ObjectConfig) -> std::io::Result<Box<dyn RunAcceptor>>
                 cfg.server_id.clone(),
             ));
             Ok(http)
+        }
+        "pb_tcp" => {
+            let l = PbTcpListener::new(cfg.clone());
+            let acc = l.listen(cfg.listener.endpoint.as_str()).await?;
+            Ok(acc)
         }
         "htss5" => {
             let listener = TcpRunListener {}
