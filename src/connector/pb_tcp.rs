@@ -45,7 +45,7 @@ impl RunConnector for PbTcpRunConnector {
         };
         write_frame(&mut writer, &auth_req).await?;
 
-        let mut stream = PbTcpClientRunStream::new(reader, writer);
+        let mut stream = PbTcpClientRunStream::new(reader, writer, pw.clone(), port != 443);
         stream.set_info(&mut |x| {
             x.protocol_name = "pb_tcp".to_string();
             x.dst_port = Some(port);

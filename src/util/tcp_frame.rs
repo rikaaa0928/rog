@@ -1,5 +1,4 @@
-use aes_gcm::aead::OsRng;
-use aes_gcm::aead::rand_core::RngCore;
+use chacha20poly1305::aead::{OsRng, rand_core::RngCore};
 use prost::Message;
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

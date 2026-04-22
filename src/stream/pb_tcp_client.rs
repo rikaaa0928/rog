@@ -1,5 +1,6 @@
 use crate::def::{RunReadHalf, RunStream, RunWriteHalf, StreamInfo};
 use crate::proto::v1::pb::{StreamReq, StreamRes};
+use crate::util::crypto::{decrypt_bytes, encrypt_bytes};
 use crate::util::tcp_frame::{read_msg, write_frame};
 use std::any::Any;
 use std::sync::Arc;
@@ -10,10 +11,14 @@ pub struct PbTcpClientReadHalf {
     reader: Arc<Mutex<OwnedReadHalf>>,
     cache: Vec<u8>,
     cache_pos: usize,
+    pw: String,
+    encrypt: bool,
 }
 
 pub struct PbTcpClientWriteHalf {
     writer: Arc<Mutex<OwnedWriteHalf>>,
+    pw: String,
+    encrypt: bool,
 }
 
 pub struct PbTcpClientRunStream {
@@ -22,16 +27,20 @@ pub struct PbTcpClientRunStream {
     cache: Vec<u8>,
     cache_pos: usize,
     info: StreamInfo,
+    pw: String,
+    encrypt: bool,
 }
 
 impl PbTcpClientRunStream {
-    pub fn new(reader: OwnedReadHalf, writer: OwnedWriteHalf) -> Self {
+    pub fn new(reader: OwnedReadHalf, writer: OwnedWriteHalf, pw: String, encrypt: bool) -> Self {
         Self {
             reader: Arc::new(Mutex::new(reader)),
             writer: Arc::new(Mutex::new(writer)),
             cache: Vec::new(),
             cache_pos: 0,
             info: StreamInfo::default(),
+            pw,
+            encrypt,
         }
     }
 }
@@ -41,6 +50,8 @@ async fn read_payload(
     cache: &mut Vec<u8>,
     cache_pos: &mut usize,
     buf: &mut [u8],
+    pw: &str,
+    encrypt: bool,
 ) -> std::io::Result<usize> {
     if *cache_pos < cache.len() {
         let available = cache.len() - *cache_pos;
@@ -59,13 +70,19 @@ async fn read_payload(
 
     let mut r = reader.lock().await;
     let msg: StreamRes = read_msg(&mut *r).await?;
-    if msg.payload.is_empty() {
+    let mut payload = msg.payload;
+    if payload.is_empty() {
         return Ok(0);
     }
-    let to_copy = buf.len().min(msg.payload.len());
-    buf[..to_copy].copy_from_slice(&msg.payload[..to_copy]);
-    if msg.payload.len() > to_copy {
-        cache.extend_from_slice(&msg.payload[to_copy..]);
+    
+    if encrypt {
+        payload = decrypt_bytes(&payload, pw)?;
+    }
+
+    let to_copy = buf.len().min(payload.len());
+    buf[..to_copy].copy_from_slice(&payload[..to_copy]);
+    if payload.len() > to_copy {
+        cache.extend_from_slice(&payload[to_copy..]);
     }
     Ok(to_copy)
 }
@@ -73,15 +90,20 @@ async fn read_payload(
 #[async_trait::async_trait]
 impl RunReadHalf for PbTcpClientReadHalf {
     async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        read_payload(&self.reader, &mut self.cache, &mut self.cache_pos, buf).await
+        read_payload(&self.reader, &mut self.cache, &mut self.cache_pos, buf, &self.pw, self.encrypt).await
     }
 }
 
 #[async_trait::async_trait]
 impl RunWriteHalf for PbTcpClientWriteHalf {
     async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        let payload = if self.encrypt {
+            encrypt_bytes(buf, &self.pw)?
+        } else {
+            buf.to_vec()
+        };
         let req = StreamReq {
-            payload: Some(buf.to_vec()),
+            payload: Some(payload),
             ..Default::default()
         };
         let mut w = self.writer.lock().await;
@@ -105,15 +127,19 @@ impl RunStream for PbTcpClientRunStream {
                 reader: Arc::clone(&self.reader),
                 cache: Vec::new(),
                 cache_pos: 0,
+                pw: self.pw.clone(),
+                encrypt: self.encrypt,
             }),
             Box::new(PbTcpClientWriteHalf {
                 writer: Arc::clone(&self.writer),
+                pw: self.pw.clone(),
+                encrypt: self.encrypt,
             }),
         )
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        read_payload(&self.reader, &mut self.cache, &mut self.cache_pos, buf).await
+        read_payload(&self.reader, &mut self.cache, &mut self.cache_pos, buf, &self.pw, self.encrypt).await
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
@@ -121,8 +147,13 @@ impl RunStream for PbTcpClientRunStream {
     }
 
     async fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        let payload = if self.encrypt {
+            encrypt_bytes(buf, &self.pw)?
+        } else {
+            buf.to_vec()
+        };
         let req = StreamReq {
-            payload: Some(buf.to_vec()),
+            payload: Some(payload),
             ..Default::default()
         };
         let mut w = self.writer.lock().await;
