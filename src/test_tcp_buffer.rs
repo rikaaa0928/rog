@@ -66,6 +66,27 @@ mod tests {
         assert_eq!(bm.can_take(), true, "Taken should be 0");
     }
 
+    #[tokio::test]
+    async fn test_drop_releases_unconsumed_blocks() {
+        let bm = Arc::new(BlockManager::new(1));
+        let db = Arc::new(DataBlock::new(bm.clone()));
+
+        db.provide(Bytes::from_static(&[1])).await;
+        assert_eq!(
+            bm.can_take(),
+            false,
+            "One unconsumed block should fill the pool"
+        );
+
+        drop(db);
+
+        assert_eq!(
+            bm.can_take(),
+            true,
+            "Dropping DataBlock should release unconsumed blocks"
+        );
+    }
+
     async fn db_provide_helper(db: Arc<DataBlock>, data: Bytes) -> bool {
         // We use select with timeout to check if it blocks immediately,
         // but provide returns void (async).

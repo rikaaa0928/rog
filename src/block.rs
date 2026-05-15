@@ -124,3 +124,16 @@ impl DataBlock {
         }
     }
 }
+
+impl Drop for DataBlock {
+    fn drop(&mut self) {
+        let remaining_blocks = match self.data.get_mut() {
+            Ok(data) => data.len(),
+            Err(poisoned) => poisoned.into_inner().len(),
+        };
+
+        for _ in 0..remaining_blocks {
+            self.block_manager.release();
+        }
+    }
+}

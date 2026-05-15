@@ -46,7 +46,14 @@ pub async fn handle_tcp_connection(
                                 break;
                             }
                             Ok(n) => {
-                                s2c_data_block.provide(Bytes::copy_from_slice(&buf[..n])).await;
+                                let data = Bytes::copy_from_slice(&buf[..n]);
+                                select! {
+                                    _ = s2c_data_block.provide(data) => {}
+                                    _ = server_read_token.cancelled() => {
+                                        debug!("Reader task server_reader interrupted while waiting for buffer.");
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -76,6 +83,8 @@ pub async fn handle_tcp_connection(
                     }
                 }
             }
+            debug!("Writer task client_writer finished, cancelling.");
+            client_write_token.cancel();
         });
         // c read
         let c2s_data_block = Arc::new(DataBlock::new(block_manager.clone()));
@@ -96,7 +105,14 @@ pub async fn handle_tcp_connection(
                                 break;
                             }
                             Ok(n) => {
-                                c2s_data_block.provide(Bytes::copy_from_slice(&buf[..n])).await;
+                                let data = Bytes::copy_from_slice(&buf[..n]);
+                                select! {
+                                    _ = c2s_data_block.provide(data) => {}
+                                    _ = client_read_token.cancelled() => {
+                                        debug!("Reader task client_reader interrupted while waiting for buffer.");
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
