@@ -53,11 +53,13 @@ impl PbTcpServerRunStream {
             Some(ref enc) => decrypt_field(enc, pw)?,
             None => return Err(std::io::Error::other("missing dst_addr")),
         };
-        let dst_port = req.dst_port.ok_or_else(|| std::io::Error::other("missing dst_port"))?;
-        
+        let dst_port = req
+            .dst_port
+            .ok_or_else(|| std::io::Error::other("missing dst_port"))?;
+
         self.pw = pw.to_string();
         self.encrypt = dst_port != 443;
-        
+
         let ra = RunAddr {
             addr: dst_addr,
             port: dst_port as u16,
@@ -96,7 +98,7 @@ async fn read_payload(
     if payload.is_empty() {
         return Ok(0);
     }
-    
+
     if encrypt {
         payload = decrypt_bytes(&payload, pw)?;
     }
@@ -112,7 +114,15 @@ async fn read_payload(
 #[async_trait::async_trait]
 impl RunReadHalf for PbTcpServerReadHalf {
     async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        read_payload(&self.reader, &mut self.cache, &mut self.cache_pos, buf, &self.pw, self.encrypt).await
+        read_payload(
+            &self.reader,
+            &mut self.cache,
+            &mut self.cache_pos,
+            buf,
+            &self.pw,
+            self.encrypt,
+        )
+        .await
     }
 }
 
@@ -124,9 +134,7 @@ impl RunWriteHalf for PbTcpServerWriteHalf {
         } else {
             buf.to_vec()
         };
-        let res = StreamRes {
-            payload,
-        };
+        let res = StreamRes { payload };
         let mut w = self.writer.lock().await;
         write_frame(&mut *w, &res).await
     }
@@ -160,7 +168,15 @@ impl RunStream for PbTcpServerRunStream {
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        read_payload(&self.reader, &mut self.cache, &mut self.cache_pos, buf, &self.pw, self.encrypt).await
+        read_payload(
+            &self.reader,
+            &mut self.cache,
+            &mut self.cache_pos,
+            buf,
+            &self.pw,
+            self.encrypt,
+        )
+        .await
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
@@ -173,9 +189,7 @@ impl RunStream for PbTcpServerRunStream {
         } else {
             buf.to_vec()
         };
-        let res = StreamRes {
-            payload,
-        };
+        let res = StreamRes { payload };
         let mut w = self.writer.lock().await;
         write_frame(&mut *w, &res).await
     }

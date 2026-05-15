@@ -74,7 +74,7 @@ async fn read_payload(
     if payload.is_empty() {
         return Ok(0);
     }
-    
+
     if encrypt {
         payload = decrypt_bytes(&payload, pw)?;
     }
@@ -90,7 +90,15 @@ async fn read_payload(
 #[async_trait::async_trait]
 impl RunReadHalf for PbTcpClientReadHalf {
     async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        read_payload(&self.reader, &mut self.cache, &mut self.cache_pos, buf, &self.pw, self.encrypt).await
+        read_payload(
+            &self.reader,
+            &mut self.cache,
+            &mut self.cache_pos,
+            buf,
+            &self.pw,
+            self.encrypt,
+        )
+        .await
     }
 }
 
@@ -139,7 +147,15 @@ impl RunStream for PbTcpClientRunStream {
     }
 
     async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        read_payload(&self.reader, &mut self.cache, &mut self.cache_pos, buf, &self.pw, self.encrypt).await
+        read_payload(
+            &self.reader,
+            &mut self.cache,
+            &mut self.cache_pos,
+            buf,
+            &self.pw,
+            self.encrypt,
+        )
+        .await
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {

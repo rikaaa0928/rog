@@ -1,7 +1,7 @@
-use chacha20poly1305::aead::{Aead, OsRng};
-use chacha20poly1305::{ChaCha20Poly1305, KeyInit, AeadCore};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use chacha20poly1305::aead::{Aead, OsRng};
+use chacha20poly1305::{AeadCore, ChaCha20Poly1305, KeyInit};
 use sha2::{Digest, Sha256};
 use std::io;
 
