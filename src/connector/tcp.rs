@@ -34,9 +34,7 @@ impl RunConnector for TcpRunConnector {
         src_addr: String,
     ) -> Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>> {
         let inner = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
-        Ok(Some((
-            Box::new(UdpRunStream::new(inner.clone(), src_addr.clone())),
-            Box::new(UdpRunStream::new(inner, src_addr)),
-        )))
+        let (reader, writer) = UdpRunStream::new_pair(inner, src_addr);
+        Ok(Some((Box::new(reader), Box::new(writer))))
     }
 }
