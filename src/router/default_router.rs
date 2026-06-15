@@ -1,6 +1,6 @@
 use crate::def::config::RouteRule;
 use crate::router::matcher::Matcher;
-use crate::router::matcher::util::match_exclude;
+use crate::router::matcher::util::ExcludeMatcher;
 use crate::router::resolver::Resolver;
 use crate::util::RunAddr;
 use log::warn;
@@ -8,11 +8,31 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct DefaultBaseRouter {
-    pub name: String,
-    pub default_tag: String,
-    pub rules: Vec<RouteRule>,
-    pub data_map: Arc<HashMap<String, Box<dyn Matcher>>>,
-    pub resolver: Arc<Resolver>,
+    name: String,
+    default_tag: String,
+    rules: Vec<CompiledRouteRule>,
+    data_map: Arc<HashMap<String, Box<dyn Matcher>>>,
+    resolver: Arc<Resolver>,
+}
+
+struct CompiledRouteRule {
+    name: String,
+    select: String,
+    domain_to_ip: bool,
+    dns: Option<String>,
+    exclude: ExcludeMatcher,
+}
+
+impl CompiledRouteRule {
+    fn new(rule: RouteRule) -> Self {
+        Self {
+            name: rule.name,
+            select: rule.select,
+            domain_to_ip: rule.domain_to_ip.unwrap_or(false),
+            dns: rule.dns,
+            exclude: ExcludeMatcher::new(&rule.exclude),
+        }
+    }
 }
 
 impl DefaultBaseRouter {
@@ -23,6 +43,7 @@ impl DefaultBaseRouter {
         data_map: Arc<HashMap<String, Box<dyn Matcher>>>,
         resolver: Arc<Resolver>,
     ) -> Self {
+        let rules = rules.into_iter().map(CompiledRouteRule::new).collect();
         DefaultBaseRouter {
             name,
             default_tag,
@@ -35,12 +56,9 @@ impl DefaultBaseRouter {
     pub(crate) async fn route(&self, addr: &RunAddr) -> (String, String) {
         for rule in &self.rules {
             let mut hosts = vec![addr.addr.clone().to_string()];
-            if rule.domain_to_ip.is_some() && rule.domain_to_ip.unwrap() {
-                match self
-                    .resolver
-                    .resolve_ip(addr.addr.as_str(), rule.dns.as_ref().unwrap())
-                    .await
-                {
+            if rule.domain_to_ip {
+                let dns = rule.dns.as_deref().unwrap_or("");
+                match self.resolver.resolve_ip(addr.addr.as_str(), dns).await {
                     Ok(ips) => {
                         for ip in ips {
                             let ip_str = ip.to_string();
@@ -56,14 +74,17 @@ impl DefaultBaseRouter {
             }
             for host in &hosts {
                 if let Some(data) = self.data_map.get(&rule.name) {
-                    if match_exclude(host, &rule.exclude) {
+                    if rule.exclude.is_match(host) {
                         continue;
                     }
                     if data.match_host(host) {
                         return (rule.name.clone(), rule.select.clone());
                     }
                 } else {
-                    warn!("Error: Route data '{}' not found in dataMap", rule.name);
+                    warn!(
+                        "Error: Route data '{}' not found in router '{}' dataMap",
+                        rule.name, self.name
+                    );
                 }
             }
         }

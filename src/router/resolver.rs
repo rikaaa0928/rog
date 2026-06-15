@@ -2,12 +2,25 @@ use hickory_resolver::config::{NameServerConfig, ResolverConfig};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::proto::xfer::Protocol;
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use url::Url;
 
+#[cfg(not(test))]
 const CACHE_EXPIRATION: Duration = Duration::from_secs(3 * 60); // 3 minutes
+#[cfg(test)]
+const CACHE_EXPIRATION: Duration = Duration::from_millis(50);
+
+#[cfg(not(test))]
 const NEGATIVE_CACHE_EXPIRATION: Duration = Duration::from_secs(60); // 1 minute
+#[cfg(test)]
+const NEGATIVE_CACHE_EXPIRATION: Duration = Duration::from_millis(50);
+
+#[cfg(not(test))]
+const CACHE_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+#[cfg(test)]
+const CACHE_CLEANUP_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolveResult {
@@ -30,7 +43,7 @@ impl Resolver {
     }
 
     async fn start_cache_cleanup(self: Arc<Self>) {
-        let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+        let mut interval = tokio::time::interval(CACHE_CLEANUP_INTERVAL);
         loop {
             interval.tick().await;
             self.cleanup_cache();
@@ -58,7 +71,7 @@ impl Resolver {
 
         let result = if dns_config.is_empty() {
             self.resolve_ip_with_default_dns(addr).await
-        } else if dns_config.starts_with("doh://") {
+        } else if dns_config.starts_with("doh://") || dns_config.starts_with("https://") {
             self.resolve_ip_with_doh(addr, dns_config).await
         } else {
             self.resolve_ip_with_specific_dns(addr, dns_config).await
@@ -129,9 +142,57 @@ impl Resolver {
         addr: &str,
         dns_addr: &str,
     ) -> Result<Vec<IpAddr>, String> {
-        // let dns_addr = dns_addr.strip_prefix("doh://").unwrap_or(dns_addr);
-        // todo: doh
-        let server_addr = self.resolve_ip_with_default_dns(addr).await;
-        server_addr
+        let (host, endpoint, port) = parse_doh_config(dns_addr)?;
+        let socket_addr = if let Ok(ip) = host.parse::<IpAddr>() {
+            SocketAddr::new(ip, port)
+        } else {
+            let ips = self.resolve_ip_with_default_dns(&host).await?;
+            let ip = ips
+                .into_iter()
+                .next()
+                .ok_or_else(|| format!("no IP found for DoH server: {}", host))?;
+            SocketAddr::new(ip, port)
+        };
+
+        let mut cfg = ResolverConfig::new();
+        cfg.add_name_server(NameServerConfig {
+            socket_addr,
+            protocol: Protocol::Https,
+            tls_dns_name: Some(host),
+            http_endpoint: Some(endpoint),
+            trust_negative_responses: false,
+            bind_addr: None,
+        });
+        let async_resolver = hickory_resolver::Resolver::builder_with_config(
+            cfg,
+            TokioConnectionProvider::default(),
+        )
+        .build();
+        let response = async_resolver
+            .lookup_ip(addr)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(response.iter().collect())
     }
+}
+
+fn parse_doh_config(dns_addr: &str) -> Result<(String, String, u16), String> {
+    let url = if let Some(rest) = dns_addr.strip_prefix("doh://") {
+        Url::parse(&format!("https://{}", rest))
+    } else {
+        Url::parse(dns_addr)
+    }
+    .map_err(|e| format!("invalid DoH URL '{}': {}", dns_addr, e))?;
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| format!("invalid DoH URL '{}': missing host", dns_addr))?
+        .to_string();
+    let port = url.port_or_known_default().unwrap_or(443);
+    let endpoint = if url.path().is_empty() || url.path() == "/" {
+        "/dns-query".to_string()
+    } else {
+        url.path().to_string()
+    };
+    Ok((host, endpoint, port))
 }

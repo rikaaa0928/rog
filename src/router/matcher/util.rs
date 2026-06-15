@@ -1,45 +1,56 @@
-use crate::router::consts::FORMAT_REGEX;
+use regex::Regex;
+use std::net::IpAddr;
 
-pub fn match_ip_or_cidr(host: &str, rule: &str) -> bool {
-    if rule.contains('/') {
-        if let Ok(network) = rule.parse::<ipnet::IpNet>() {
-            if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-                return network.contains(&ip);
-            }
-        }
-    } else if let Ok(_ip) = rule.parse::<std::net::IpAddr>() {
-        return host == rule;
-    }
-    false
+pub struct ExcludeMatcher {
+    rules: Vec<ExcludeRule>,
 }
 
-pub fn match_exclude(host: &str, excludes: &[String]) -> bool {
-    for exclude in excludes {
-        if match_ip_or_cidr(host, exclude) {
-            return true;
-        } else if let Ok(re) = regex::Regex::new(exclude) {
-            if re.is_match(host) {
-                return true;
-            }
-        }
-    }
-    false
+enum ExcludeRule {
+    Ip(IpAddr),
+    Cidr(ipnet::IpNet),
+    Regex(Regex),
 }
 
-pub fn match_route_data(host: &str, data: &[String], format: &str) -> Option<String> {
-    for item in data {
-        if match_ip_or_cidr(host, item) {
-            return Some(item.clone());
+impl ExcludeMatcher {
+    pub fn new(excludes: &[String]) -> Self {
+        let mut rules = Vec::with_capacity(excludes.len());
+        for exclude in excludes {
+            if exclude.contains('/') {
+                if let Ok(network) = exclude.parse::<ipnet::IpNet>() {
+                    rules.push(ExcludeRule::Cidr(network));
+                }
+            } else if let Ok(ip) = exclude.parse::<IpAddr>() {
+                rules.push(ExcludeRule::Ip(ip));
+            } else if let Ok(re) = Regex::new(exclude) {
+                rules.push(ExcludeRule::Regex(re));
+            }
         }
-        if format == FORMAT_REGEX {
-            if let Ok(re) = regex::Regex::new(item) {
-                if re.is_match(host) {
-                    return Some(item.clone());
+        Self { rules }
+    }
+
+    pub fn is_match(&self, host: &str) -> bool {
+        let ip = host.parse::<IpAddr>().ok();
+        for rule in &self.rules {
+            match rule {
+                ExcludeRule::Ip(rule_ip) => {
+                    if ip.as_ref() == Some(rule_ip) {
+                        return true;
+                    }
+                }
+                ExcludeRule::Cidr(network) => {
+                    if let Some(ip) = ip {
+                        if network.contains(&ip) {
+                            return true;
+                        }
+                    }
+                }
+                ExcludeRule::Regex(re) => {
+                    if re.is_match(host) {
+                        return true;
+                    }
                 }
             }
-        } else if item == host {
-            return Some(item.clone());
         }
+        false
     }
-    None
 }
