@@ -5,6 +5,7 @@ use crate::object::Object;
 use crate::object::config::ObjectConfig;
 use futures::future::select_all;
 use log::error;
+use proxy_observe::ObserveRegistry;
 use std::env;
 use std::sync::Arc;
 use tokio::{fs, spawn};
@@ -77,6 +78,15 @@ async fn main() -> std::io::Result<()> {
     )
     .await;
     let router = Arc::new(router);
+    let observe_registry = ObserveRegistry::new();
+    spawn(observe_registry.sampler_task());
+    if let Some(listen_addr) = proxy_observe::env_listen_addr() {
+        spawn(proxy_observe::api::serve(
+            observe_registry.clone(),
+            listen_addr,
+        ));
+    }
+
     if let Some(rev_server) = cfg.reverse_server.clone() {
         let pw_map: std::collections::HashMap<String, Option<String>> = cfg
             .connector
@@ -102,9 +112,10 @@ async fn main() -> std::io::Result<()> {
         let router = router.clone();
         let server_id = server_id.clone();
         let block_manager = block_manager.clone();
+        let observe_registry = observe_registry.clone();
         fs.push(spawn(async move {
             let obj_conf = Arc::new(ObjectConfig::build(l.name.as_str(), &cfg, server_id));
-            let obj = Object::new(obj_conf, router, block_manager);
+            let obj = Object::new(obj_conf, router, block_manager, observe_registry);
             obj.start().await
         }));
     }

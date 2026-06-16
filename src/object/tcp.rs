@@ -4,6 +4,7 @@ use crate::def::RunStream;
 use crate::util::RunAddr;
 use bytes::Bytes;
 use log::debug;
+use proxy_observe::ObserveConnection;
 use std::io::Result;
 use std::sync::Arc;
 use tokio::select;
@@ -15,6 +16,7 @@ pub async fn handle_tcp_connection(
     client_stream: Box<dyn RunStream>,
     server_stream: Box<dyn RunStream>,
     block_manager: Option<Arc<BlockManager>>,
+    observe: Option<ObserveConnection>,
 ) -> Result<()> {
     debug!("Post Handshake successful {:?}", addr);
     let (mut client_r, mut client_w) = client_stream.split();
@@ -23,6 +25,9 @@ pub async fn handle_tcp_connection(
 
     if let Some(c) = cache {
         client_w.write(c.as_slice()).await?;
+        if let Some(observe) = &observe {
+            observe.add_tx(c.len() as u64);
+        }
     }
 
     debug!("start loop");
@@ -68,14 +73,18 @@ pub async fn handle_tcp_connection(
         });
         // c write
         let client_write_token = cancel_token.clone();
+        let observe_tx = observe.clone();
         let client_writer_task = tokio::spawn(async move {
             loop {
                 select! {
                     data = s2c_data_block_r.consume() =>{
                         if let Err(e) = client_w.write(&data).await {
                                 debug!("Reader task client_writer: w.write() error: {:?}", e);
-                                break;
-                            }
+                                 break;
+                             }
+                        if let Some(observe) = &observe_tx {
+                            observe.add_tx(data.len() as u64);
+                        }
                     }
                     _ = client_write_token.cancelled() => {
                         debug!("Writer task client_writer interrupted by cancellation.");
@@ -128,14 +137,18 @@ pub async fn handle_tcp_connection(
 
         // s write
         let server_write_token = cancel_token.clone();
+        let observe_rx = observe.clone();
         let server_writer_task = tokio::spawn(async move {
             loop {
                 select! {
                     data = c2s_data_block_r.consume() =>{
                         if let Err(e) = server_w.write(&data).await {
                                 debug!("Reader task server_writer: w.write() error: {:?}", e);
-                                break;
-                            }
+                                 break;
+                             }
+                        if let Some(observe) = &observe_rx {
+                            observe.add_rx(data.len() as u64);
+                        }
                     }
                      _ = server_write_token.cancelled() => {
                         debug!("Writer task server_writer interrupted by cancellation.");
@@ -156,6 +169,7 @@ pub async fn handle_tcp_connection(
         return Ok(());
     }
     let token_reader = cancel_token.clone();
+    let observe_tx = observe.clone();
     let s2c = tokio::spawn(async move {
         let mut buf = [0u8; TCP_IO_BUFFER_SIZE];
         loop {
@@ -175,6 +189,9 @@ pub async fn handle_tcp_connection(
                                 debug!("Reader task s2c: w.write() error: {:?}", e);
                                 break;
                             }
+                            if let Some(observe) = &observe_tx {
+                                observe.add_tx(n as u64);
+                            }
                         }
                     }
                 }
@@ -189,6 +206,7 @@ pub async fn handle_tcp_connection(
     });
 
     let token_writer = cancel_token.clone();
+    let observe_rx = observe.clone();
     let c2s = tokio::spawn(async move {
         let mut buf = [0u8; TCP_IO_BUFFER_SIZE];
         loop {
@@ -207,6 +225,9 @@ pub async fn handle_tcp_connection(
                             if let Err(e) = server_w.write(&buf[..n]).await {
                                 debug!("Writer task c2s: w.write() error: {:?}", e);
                                 break;
+                            }
+                            if let Some(observe) = &observe_rx {
+                                observe.add_rx(n as u64);
                             }
                         }
                     }

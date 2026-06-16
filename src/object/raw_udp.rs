@@ -1,8 +1,10 @@
 use crate::connector;
 use crate::def::{RouterSet, RunConnector, RunUdpReader, RunUdpWriter, UDPPacket};
 use crate::object::config::ObjectConfig;
+use crate::object::udp_endpoint_for_observe;
 use crate::util::RunAddr;
 use log::{debug, warn};
+use proxy_observe::{ConnectionMeta, ObserveRegistry};
 use std::collections::HashMap;
 use std::io::{self, Result};
 use std::sync::Arc;
@@ -16,6 +18,7 @@ pub async fn handle_raw_udp(
     config: Arc<ObjectConfig>,
     router: Arc<dyn RouterSet>,
     connector_cache: Arc<Mutex<HashMap<String, Arc<Box<dyn RunConnector>>>>>,
+    observe_registry: ObserveRegistry,
 ) -> Result<()> {
     debug!("raw udp, route based on the first packet");
     let first_packet = r.read().await?;
@@ -53,6 +56,22 @@ pub async fn handle_raw_udp(
         }
     }
 
+    let observe = observe_registry.open(ConnectionMeta {
+        service: "rog".to_string(),
+        network: "udp".to_string(),
+        listener: config.listener.name.clone(),
+        router: Some(config.listener.router.clone()),
+        route: Some(client_name.clone()),
+        inbound: Some(config.listener.name.clone()),
+        outbound: Some(client_name.clone()),
+        source: udp_endpoint_for_observe(&first_packet.meta.src_addr, first_packet.meta.src_port),
+        destination: udp_endpoint_for_observe(
+            &first_packet.meta.dst_addr,
+            first_packet.meta.dst_port,
+        ),
+        site: None,
+    });
+
     let (mut udp_reader, udp_writer) = connector_obj
         .udp_tunnel(format!(
             "{}:{}",
@@ -63,13 +82,16 @@ pub async fn handle_raw_udp(
             io::Error::other("UDP tunnel creation failed or not supported by connector")
         })?;
 
+    let first_packet_len = first_packet.data.len() as u64;
     udp_writer.write(first_packet).await?;
+    observe.add_tx(first_packet_len);
 
     let cancel_token = CancellationToken::new();
 
     debug!("raw udp loop start");
 
     let token_b = cancel_token.clone();
+    let observe_tx = observe.clone();
     let b: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         loop {
             let res: Result<UDPPacket> = select! {
@@ -101,11 +123,13 @@ pub async fn handle_raw_udp(
                     }
 
                     debug!("raw udp server get udp_packet {:?}", &packet);
+                    let packet_len = packet.data.len() as u64;
                     let udp_tunnel_ref = udp_writer.as_ref();
                     if let Err(e) = udp_tunnel_ref.write(packet).await {
                         warn!("raw udp loop b udp tunnel write error {:?}", e);
                         break;
                     }
+                    observe_tx.add_tx(packet_len);
                 }
             }
         }
@@ -115,6 +139,7 @@ pub async fn handle_raw_udp(
     });
 
     let token_c = cancel_token.clone();
+    let observe_rx = observe.clone();
     let c: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         loop {
             let res: Result<UDPPacket> = select! {
@@ -133,6 +158,7 @@ pub async fn handle_raw_udp(
                     break;
                 }
                 Ok(udp_packet) => {
+                    let packet_len = udp_packet.data.len() as u64;
                     debug!(
                         "raw udp tunnel udp_packet read src {:?} {:?}",
                         udp_packet.meta.src_addr, udp_packet.meta.src_port,
@@ -141,6 +167,7 @@ pub async fn handle_raw_udp(
                         warn!("raw udp loop c write error {:?}", e);
                         break;
                     }
+                    observe_rx.add_rx(packet_len);
                 }
             }
         }

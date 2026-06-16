@@ -3,6 +3,7 @@ use crate::def::{RouterSet, RunAccStream, RunConnector};
 use crate::object::config::ObjectConfig;
 use crate::{connector, listener};
 use log::{debug, error};
+use proxy_observe::{ConnectionMeta, ObserveRegistry};
 use std::collections::HashMap;
 use std::io;
 use std::io::Error;
@@ -21,6 +22,7 @@ pub struct Object {
     router: Arc<dyn RouterSet>,
     connector_cache: Arc<Mutex<HashMap<String, Arc<Box<dyn RunConnector>>>>>, // New field
     block_manager: Option<Arc<BlockManager>>,
+    observe_registry: ObserveRegistry,
 }
 
 impl Object {
@@ -28,12 +30,14 @@ impl Object {
         config: Arc<ObjectConfig>,
         router: Arc<dyn RouterSet>,
         block_manager: Option<Arc<BlockManager>>,
+        observe_registry: ObserveRegistry,
     ) -> Self {
         Self {
             config,
             router,
             connector_cache: Arc::new(Mutex::new(HashMap::new())), // Initialize cache
             block_manager,
+            observe_registry,
         }
     }
 
@@ -48,7 +52,7 @@ impl Object {
         let connector_cache_outer = self.connector_cache.clone(); // Clone cache Arc for the loop
 
         loop {
-            let (acc_stream, _) = main_acceptor.accept().await.map_err(|e| {
+            let (acc_stream, peer_addr) = main_acceptor.accept().await.map_err(|e| {
                 error!("Failed to accept connection: {}", e);
                 e
             })?;
@@ -57,6 +61,7 @@ impl Object {
             let config_clone = Arc::clone(&config_outer);
             let connector_cache_clone = Arc::clone(&connector_cache_outer); // Clone cache Arc for the spawned task
             let block_manager_clone = self.block_manager.clone();
+            let observe_registry_clone = self.observe_registry.clone();
             spawn(async move {
                 match acc_stream {
                     RunAccStream::TCPStream(mut tcp_stream) => {
@@ -76,6 +81,7 @@ impl Object {
                                         config_clone.clone(), // Pass cloned config
                                         router_clone.clone(), // Pass cloned router
                                         addr,
+                                        observe_registry_clone.clone(),
                                     )
                                     .await
                                     {
@@ -179,12 +185,25 @@ impl Object {
                                         return Ok(());
                                     }
                                     // let (mut r, mut w) = tcp_stream.split();
+                                    let observe = observe_registry_clone.open(ConnectionMeta {
+                                        service: "rog".to_string(),
+                                        network: "tcp".to_string(),
+                                        listener: config_clone.listener.name.clone(),
+                                        router: Some(config_clone.listener.router.clone()),
+                                        route: Some(client_name.clone()),
+                                        inbound: Some(config_clone.listener.name.clone()),
+                                        outbound: Some(client_name.clone()),
+                                        source: peer_addr.to_string(),
+                                        destination: endpoint_for_observe(addr_ref),
+                                        site: None,
+                                    });
                                     if let Err(e) = tcp::handle_tcp_connection(
                                         addr,
                                         payload_cache,
                                         client_stream,
                                         tcp_stream,
                                         block_manager_clone,
+                                        Some(observe),
                                     )
                                     .await
                                     {
@@ -203,6 +222,7 @@ impl Object {
                             config_clone,
                             router_clone,
                             connector_cache_clone,
+                            observe_registry_clone,
                         )
                         .await
                         {
@@ -217,5 +237,21 @@ impl Object {
         // If the server is meant to run indefinitely, this Ok(()) might be removed or placed after a loop break condition.
         // For now, keeping it as it was, assuming there's a broader context for server shutdown.
         // Ok(())
+    }
+}
+
+fn endpoint_for_observe(addr: &crate::util::RunAddr) -> String {
+    if addr.addr.contains(':') {
+        format!("[{}]:{}", addr.addr, addr.port)
+    } else {
+        addr.endpoint()
+    }
+}
+
+pub(crate) fn udp_endpoint_for_observe(addr: &str, port: u16) -> String {
+    if addr.contains(':') {
+        format!("[{}]:{}", addr, port)
+    } else {
+        format!("{}:{}", addr, port)
     }
 }
