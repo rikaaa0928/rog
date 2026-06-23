@@ -1233,8 +1233,8 @@ dependencies = [
 
 [[package]]
 name = "proxy-observe"
-version = "0.1.0"
-source = "git+https://github.com/rikaaa0928/proxy-observe.git#01dd5c88bee61e5ed13b2edbe27516d34efae5df"
+version = "0.1.1"
+source = "git+https://github.com/rikaaa0928/proxy-observe.git?tag=v0.1.1#db62560fdf1cfd04ba4327111958080f7691bb58"
 dependencies = [
  "axum 0.7.9",
  "serde",

@@ -36,7 +36,7 @@ hyper-util = { version = "0.1.17", features = ["tokio"] }
 chacha20poly1305 = "0.10"
 sha2 = "0.10"
 base64 = "0.22"
-proxy-observe = { git = "https://github.com/rikaaa0928/proxy-observe.git" }
+proxy-observe = { git = "https://github.com/rikaaa0928/proxy-observe.git", tag = "v0.1.1" }
 
 
 [build-dependencies]
