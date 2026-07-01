@@ -1,4 +1,5 @@
 use crate::connector::grpc::GrpcRunConnector;
+use crate::connector::pb_http::PbHttpRunConnector;
 use crate::connector::pb_tcp::PbTcpRunConnector;
 use crate::connector::rev_grpc::RevGrpcRunConnector;
 use crate::connector::tcp::TcpRunConnector;
@@ -6,6 +7,7 @@ use crate::def::{RunConnector, config};
 
 pub(crate) mod block;
 pub(crate) mod grpc;
+pub(crate) mod pb_http;
 pub(crate) mod pb_tcp;
 pub(crate) mod rev_grpc;
 pub(crate) mod tcp;
@@ -26,6 +28,10 @@ pub async fn create(cfg: &config::Connector) -> std::io::Result<Box<dyn RunConne
         }
         "pb_tcp" => {
             let res = PbTcpRunConnector::new(cfg)?;
+            Ok(Box::new(res))
+        }
+        "pb_http" => {
+            let res = PbHttpRunConnector::new(cfg)?;
             Ok(Box::new(res))
         }
         "block" => {

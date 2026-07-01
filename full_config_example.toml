@@ -18,6 +18,59 @@ name = "proxy_outbound"
 proto = "socks5"
 endpoint = "127.0.0.1:1081" # 代理服务器地址
 
+# pb_http 服务端：rog 本身监听 h2c，前置 proxy 可负责 TLS/HTTP2/HTTP3 后转发到这里
+# [[listener]]
+# name = "pb_http_inbound"
+# endpoint = "127.0.0.1:18080"
+# proto = "pb_http"
+# router = "main_router"
+# pw = "change-me"
+# [listener.options]
+# path = "pb_http" # 实际路由为 /pb_http/stream 和 /pb_http/udp
+# h2_initial_stream_window_size = "1MB"
+# h2_initial_connection_window_size = "16MB"
+# h2_max_frame_size = "64KB"
+# h2_max_header_list_size = "16KB"
+# h2_max_concurrent_streams = 1024
+# h2_max_send_buffer_size = "1MB"
+# accept_channel_size = 64
+# send_chunk_size = "64KB"
+# max_message_size = "16MB"
+
+# pb_http 客户端：默认按 h3 -> h2 连接前置 proxy；也可设置 transport = "h2c" 直连 rog h2c
+# [[connector]]
+# name = "pb_http_outbound"
+# proto = "pb_http"
+# endpoint = "https://example.com:443"
+# pw = "change-me"
+# [connector.options]
+# path = "pb_http"
+# fallback_order = ["h3", "h2"]
+# # transport = "h2" # 如果设置 transport，则强制使用单一传输，不再 fallback
+# # tls_server_name = "example.com"
+# # tls_ca_cert_file = "/path/to/ca.pem" # 公共 CA 证书无需配置
+# # tls_insecure_skip_verify = false
+# h2_initial_stream_window_size = "1MB"
+# h2_initial_connection_window_size = "16MB"
+# h2_max_frame_size = "64KB"
+# h2_max_header_list_size = "16KB"
+# h2_max_concurrent_streams = 1024
+# h2_max_send_buffer_size = "1MB"
+# h3_max_field_section_size = "16KB"
+# h3_send_grease = true
+# h3_bind = "0.0.0.0:0"
+# quic_max_idle_timeout_ms = 30000
+# quic_keep_alive_interval_ms = 15000 # 0 表示关闭 keepalive
+# quic_initial_rtt_ms = 100
+# quic_stream_receive_window = "1MB"
+# quic_receive_window = "16MB"
+# quic_send_window = "16MB"
+# quic_max_concurrent_bidi_streams = 1024
+# quic_max_concurrent_uni_streams = 64
+# quic_send_fairness = true
+# send_chunk_size = "64KB"
+# max_message_size = "16MB"
+
 # 路由数据配置
 # 这些数据可以在路由规则中被引用
 [[data]]

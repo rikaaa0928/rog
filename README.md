@@ -4,7 +4,7 @@ A flexible and powerful network proxy.
 
 ## Features
 
-- **Multi-protocol support:** Supports various protocols including TCP, HTTP, SOCKS5, and gRPC.
+- **Multi-protocol support:** Supports various protocols including TCP, HTTP, SOCKS5, gRPC, pb_tcp, and pb_http(HTTP/2/HTTP/3 + protobuf).
 - **Configurable routing:** Allows flexible routing rules based on various criteria.
 - **Asynchronous architecture:** Built with Tokio for high performance and non-blocking operations.
 - **Centralized configuration:** Configuration is managed through a TOML file.
@@ -76,7 +76,7 @@ proto = "tcp"
 
 - `endpoint`: The address and port to listen on.
 - `name`: A unique name for the listener.
-- `proto`: The protocol to use (e.g., "tcp", "http", "socks5", "grpc").
+- `proto`: The protocol to use (e.g., "tcp", "http", "socks5", "grpc", "pb_tcp", "pb_http").
 - `router`: The name of the router to use for this listener.
 
 #### `router`
@@ -106,7 +106,15 @@ proto = "tcp"
 - `name`: A unique name for the connector.
 - `user`: Optional username for authentication.
 - `pw`: Optional password for authentication.
-- `proto`: The protocol of the connector (e.g., "tcp", "grpc").
+- `proto`: The protocol of the connector (e.g., "tcp", "grpc", "pb_tcp", "pb_http").
+
+#### `pb_http`
+
+`pb_http` carries protobuf messages over HTTP and keeps the same authentication and payload encryption semantics as `pb_tcp`. The rog server listens for cleartext HTTP/2 only (`h2c`) so it can sit behind a proxy that terminates TLS, HTTP/2, and HTTP/3. The client supports `h2c`, TLS HTTP/2 (`h2`), and HTTP/3 (`h3`); by default it tries `h3` then falls back to `h2`.
+
+Common options are `path` (default `pb_http`, producing `/<path>/stream` and `/<path>/udp`), `transport` (`h2c`, `h2`, or `h3` to force one client transport), `fallback_order` (for example `["h3", "h2"]`), `tls_server_name`, `tls_ca_cert_file`, and `tls_insecure_skip_verify`. TLS uses WebPKI roots by default; no certificate file is required for public CA certificates.
+
+Performance-related options include `h2_initial_stream_window_size`, `h2_initial_connection_window_size`, `h2_max_frame_size`, `h2_max_header_list_size`, `h2_max_concurrent_streams`, `h2_header_table_size`, `h2_max_send_buffer_size`, `h2_max_concurrent_reset_streams`, `h2_max_pending_accept_reset_streams`, `h2_reset_stream_duration_ms`, `h3_max_field_section_size`, `h3_send_grease`, `h3_bind`, `quic_max_idle_timeout_ms`, `quic_keep_alive_interval_ms`, `quic_initial_rtt_ms`, `quic_stream_receive_window`, `quic_receive_window`, `quic_send_window`, `quic_max_concurrent_bidi_streams`, `quic_max_concurrent_uni_streams`, `quic_send_fairness`, `send_chunk_size`, and `max_message_size`. Server listeners also support `accept_channel_size`.
 
 ## Usage
 

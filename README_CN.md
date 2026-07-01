@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **多协议支持:** 支持多种协议，包括 TCP、HTTP、SOCKS5 和 gRPC。
+- **多协议支持:** 支持多种协议，包括 TCP、HTTP、SOCKS5、gRPC、pb_tcp 和 pb_http(HTTP/2/HTTP/3 + protobuf)。
 - **可配置路由:** 允许基于各种标准进行灵活的路由规则配置。
 - **异步架构:** 使用 Tokio 构建，实现高性能和非阻塞操作。
 - **集中式配置:** 通过 TOML 文件管理配置。
@@ -76,7 +76,7 @@ proto = "tcp"
 
 - `endpoint`: 监听的地址和端口。
 - `name`: 监听器的唯一名称。
-- `proto`: 使用的协议 (例如, "tcp", "http", "socks5", "grpc")。
+- `proto`: 使用的协议 (例如, "tcp", "http", "socks5", "grpc", "pb_tcp", "pb_http")。
 - `router`: 此监听器使用的路由器的名称。
 
 #### `router`
@@ -106,7 +106,15 @@ proto = "tcp"
 - `name`: 连接器的唯一名称。
 - `user`: 用于身份验证的可选用户名。
 - `pw`: 用于身份验证的可选密码。
-- `proto`: 连接器的协议 (例如, "tcp", "grpc")。
+- `proto`: 连接器的协议 (例如, "tcp", "grpc", "pb_tcp", "pb_http")。
+
+#### `pb_http`
+
+`pb_http` 使用 HTTP 承载 protobuf 消息，认证和 payload 加密语义与 `pb_tcp` 一致。rog 服务端只监听明文 HTTP/2（`h2c`），适合放在负责 TLS、HTTP/2 和 HTTP/3 终止的前置 proxy 后面。客户端支持 `h2c`、TLS HTTP/2（`h2`）和 HTTP/3（`h3`），默认按 `h3`、`h2` 顺序 fallback。
+
+常用选项包括：`path`（默认 `pb_http`，生成 `/<path>/stream` 和 `/<path>/udp`）、`transport`（`h2c`、`h2` 或 `h3`，强制单一客户端传输）、`fallback_order`（例如 `["h3", "h2"]`）、`tls_server_name`、`tls_ca_cert_file`、`tls_insecure_skip_verify`。TLS 默认使用 WebPKI 根证书；如果证书来自公共 CA，不需要配置证书文件。
+
+可配置的性能相关选项包括：`h2_initial_stream_window_size`、`h2_initial_connection_window_size`、`h2_max_frame_size`、`h2_max_header_list_size`、`h2_max_concurrent_streams`、`h2_header_table_size`、`h2_max_send_buffer_size`、`h2_max_concurrent_reset_streams`、`h2_max_pending_accept_reset_streams`、`h2_reset_stream_duration_ms`、`h3_max_field_section_size`、`h3_send_grease`、`h3_bind`、`quic_max_idle_timeout_ms`、`quic_keep_alive_interval_ms`、`quic_initial_rtt_ms`、`quic_stream_receive_window`、`quic_receive_window`、`quic_send_window`、`quic_max_concurrent_bidi_streams`、`quic_max_concurrent_uni_streams`、`quic_send_fairness`、`send_chunk_size`、`max_message_size`。服务端额外支持 `accept_channel_size`。
 
 ## 用法
 
