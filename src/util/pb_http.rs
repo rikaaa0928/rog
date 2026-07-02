@@ -12,6 +12,7 @@ pub const DEFAULT_PATH: &str = "pb_http";
 
 pub type H3ClientSendStream = H3RequestStream<h3_quinn::SendStream<Bytes>, Bytes>;
 pub type H3ClientRecvStream = H3RequestStream<h3_quinn::RecvStream, Bytes>;
+pub type H3ClientRequestSender = h3::client::SendRequest<h3_quinn::OpenStreams, Bytes>;
 
 const DEFAULT_MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 const DEFAULT_INITIAL_STREAM_WINDOW_SIZE: u32 = 1024 * 1024;

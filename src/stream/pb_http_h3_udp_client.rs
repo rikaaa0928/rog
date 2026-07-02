@@ -2,7 +2,8 @@ use crate::def::{RunUdpReader, RunUdpWriter, UDPPacket};
 use crate::proto::v1::pb::{UdpReq, UdpRes};
 use crate::util::crypto::{decrypt_bytes, decrypt_field, encrypt_bytes, encrypt_field};
 use crate::util::pb_http::{
-    H3ClientRecvStream, H3ClientSendStream, PbHttpOptions, read_h3_message, send_h3_message,
+    H3ClientRecvStream, H3ClientRequestSender, H3ClientSendStream, PbHttpOptions, read_h3_message,
+    send_h3_message,
 };
 use bytes::BytesMut;
 use std::sync::Arc;
@@ -10,6 +11,7 @@ use tokio::sync::Mutex;
 
 pub struct PbHttpH3UdpClientWriter {
     writer: Arc<Mutex<H3ClientSendStream>>,
+    _request_sender: Arc<Mutex<Option<H3ClientRequestSender>>>,
     auth: String,
     pw: String,
     options: PbHttpOptions,
@@ -17,6 +19,7 @@ pub struct PbHttpH3UdpClientWriter {
 
 pub struct PbHttpH3UdpClientReader {
     reader: Arc<Mutex<H3ClientRecvStream>>,
+    _request_sender: Arc<Mutex<Option<H3ClientRequestSender>>>,
     frame_buf: BytesMut,
     pw: String,
     options: PbHttpOptions,
@@ -25,12 +28,14 @@ pub struct PbHttpH3UdpClientReader {
 impl PbHttpH3UdpClientWriter {
     pub fn new(
         writer: Arc<Mutex<H3ClientSendStream>>,
+        request_sender: Arc<Mutex<Option<H3ClientRequestSender>>>,
         auth: String,
         pw: String,
         options: PbHttpOptions,
     ) -> Self {
         Self {
             writer,
+            _request_sender: request_sender,
             auth,
             pw,
             options,
@@ -39,9 +44,15 @@ impl PbHttpH3UdpClientWriter {
 }
 
 impl PbHttpH3UdpClientReader {
-    pub fn new(reader: Arc<Mutex<H3ClientRecvStream>>, pw: String, options: PbHttpOptions) -> Self {
+    pub fn new(
+        reader: Arc<Mutex<H3ClientRecvStream>>,
+        request_sender: Arc<Mutex<Option<H3ClientRequestSender>>>,
+        pw: String,
+        options: PbHttpOptions,
+    ) -> Self {
         Self {
             reader,
+            _request_sender: request_sender,
             frame_buf: BytesMut::new(),
             pw,
             options,

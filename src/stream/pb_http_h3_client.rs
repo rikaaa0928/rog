@@ -2,7 +2,8 @@ use crate::def::{RunReadHalf, RunStream, RunWriteHalf, StreamInfo};
 use crate::proto::v1::pb::{StreamReq, StreamRes};
 use crate::util::crypto::{decrypt_bytes, encrypt_bytes};
 use crate::util::pb_http::{
-    H3ClientRecvStream, H3ClientSendStream, PbHttpOptions, read_h3_message, send_h3_message,
+    H3ClientRecvStream, H3ClientRequestSender, H3ClientSendStream, PbHttpOptions, read_h3_message,
+    send_h3_message,
 };
 use bytes::BytesMut;
 use std::any::Any;
@@ -11,6 +12,7 @@ use tokio::sync::Mutex;
 
 pub struct PbHttpH3ClientReadHalf {
     reader: Arc<Mutex<H3ClientRecvStream>>,
+    _request_sender: Arc<Mutex<Option<H3ClientRequestSender>>>,
     frame_buf: BytesMut,
     cache: Vec<u8>,
     cache_pos: usize,
@@ -21,6 +23,7 @@ pub struct PbHttpH3ClientReadHalf {
 
 pub struct PbHttpH3ClientWriteHalf {
     writer: Arc<Mutex<H3ClientSendStream>>,
+    _request_sender: Arc<Mutex<Option<H3ClientRequestSender>>>,
     pw: String,
     encrypt: bool,
     options: PbHttpOptions,
@@ -29,6 +32,7 @@ pub struct PbHttpH3ClientWriteHalf {
 pub struct PbHttpH3ClientRunStream {
     reader: Arc<Mutex<H3ClientRecvStream>>,
     writer: Arc<Mutex<H3ClientSendStream>>,
+    request_sender: Arc<Mutex<Option<H3ClientRequestSender>>>,
     frame_buf: BytesMut,
     cache: Vec<u8>,
     cache_pos: usize,
@@ -42,6 +46,7 @@ impl PbHttpH3ClientRunStream {
     pub fn new(
         reader: H3ClientRecvStream,
         writer: H3ClientSendStream,
+        request_sender: H3ClientRequestSender,
         pw: String,
         encrypt: bool,
         options: PbHttpOptions,
@@ -49,6 +54,7 @@ impl PbHttpH3ClientRunStream {
         Self {
             reader: Arc::new(Mutex::new(reader)),
             writer: Arc::new(Mutex::new(writer)),
+            request_sender: Arc::new(Mutex::new(Some(request_sender))),
             frame_buf: BytesMut::new(),
             cache: Vec::new(),
             cache_pos: 0,
@@ -166,6 +172,7 @@ impl RunStream for PbHttpH3ClientRunStream {
         (
             Box::new(PbHttpH3ClientReadHalf {
                 reader: Arc::clone(&self.reader),
+                _request_sender: Arc::clone(&self.request_sender),
                 frame_buf: BytesMut::new(),
                 cache: Vec::new(),
                 cache_pos: 0,
@@ -175,6 +182,7 @@ impl RunStream for PbHttpH3ClientRunStream {
             }),
             Box::new(PbHttpH3ClientWriteHalf {
                 writer: Arc::clone(&self.writer),
+                _request_sender: Arc::clone(&self.request_sender),
                 pw: self.pw.clone(),
                 encrypt: self.encrypt,
                 options: self.options.clone(),

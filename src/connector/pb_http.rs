@@ -7,8 +7,8 @@ use crate::stream::pb_http_h3_udp_client::{PbHttpH3UdpClientReader, PbHttpH3UdpC
 use crate::stream::pb_http_udp_client::{PbHttpUdpClientReader, PbHttpUdpClientWriter};
 use crate::util::crypto::encrypt_field;
 use crate::util::pb_http::{
-    CONTENT_TYPE_PROTOBUF, H3ClientRecvStream, H3ClientSendStream, PbHttpOptions, PbHttpTransport,
-    request_uri, send_h3_message, send_message,
+    CONTENT_TYPE_PROTOBUF, H3ClientRecvStream, H3ClientRequestSender, H3ClientSendStream,
+    PbHttpOptions, PbHttpTransport, request_uri, send_h3_message, send_message,
 };
 use base64::Engine;
 use bytes::Bytes;
@@ -37,6 +37,7 @@ enum PbHttpOpenedStream {
     H3 {
         reader: H3ClientRecvStream,
         writer: H3ClientSendStream,
+        request_sender: H3ClientRequestSender,
     },
 }
 
@@ -80,6 +81,39 @@ impl PbHttpRunConnector {
                 }
             }
         }
+        Err(last_err.unwrap_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "pb_http connector has no client transports",
+            )
+        }))
+    }
+
+    async fn open_stream_for_connect(
+        &self,
+        path: &str,
+        initial_req: &StreamReq,
+    ) -> io::Result<(PbHttpOpenedStream, bool)> {
+        let endpoint = self.cfg.endpoint.as_ref().unwrap();
+        let mut last_err = None;
+        for transport in &self.options.client_transports {
+            let opened = match transport {
+                PbHttpTransport::H3 => {
+                    self.open_h3_stream_with_initial(endpoint, path, Some(initial_req))
+                        .await
+                }
+                _ => self.open_stream_with_transport(*transport, path).await,
+            };
+
+            match opened {
+                Ok(stream) => return Ok((stream, *transport == PbHttpTransport::H3)),
+                Err(e) => {
+                    warn!("pb_http {} open {} failed: {}", transport.as_str(), path, e);
+                    last_err = Some(e);
+                }
+            }
+        }
+
         Err(last_err.unwrap_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -146,6 +180,15 @@ impl PbHttpRunConnector {
     }
 
     async fn open_h3_stream(&self, endpoint: &str, path: &str) -> io::Result<PbHttpOpenedStream> {
+        self.open_h3_stream_with_initial(endpoint, path, None).await
+    }
+
+    async fn open_h3_stream_with_initial(
+        &self,
+        endpoint: &str,
+        path: &str,
+        initial_req: Option<&StreamReq>,
+    ) -> io::Result<PbHttpOpenedStream> {
         let mut parts = parse_endpoint(endpoint, "https")?;
         apply_tls_server_name(&mut parts, &self.options);
         let remote_addr = resolve_quic_addr(&parts).await?;
@@ -186,11 +229,15 @@ impl PbHttpRunConnector {
             .header("content-type", CONTENT_TYPE_PROTOBUF)
             .body(())
             .map_err(io::Error::other)?;
-        let mut stream = sender
+        let stream = sender
             .send_request(request)
             .await
             .map_err(io::Error::other)?;
-        let response = stream.recv_response().await.map_err(io::Error::other)?;
+        let (mut writer, mut reader) = stream.split();
+        if let Some(initial_req) = initial_req {
+            send_h3_message(&mut writer, initial_req, self.options.send_chunk_size).await?;
+        }
+        let response = reader.recv_response().await.map_err(io::Error::other)?;
         if response.status() != StatusCode::OK {
             return Err(io::Error::other(format!(
                 "pb_http h3 server returned status {} for {}",
@@ -198,8 +245,11 @@ impl PbHttpRunConnector {
                 path
             )));
         }
-        let (writer, reader) = stream.split();
-        Ok(PbHttpOpenedStream::H3 { reader, writer })
+        Ok(PbHttpOpenedStream::H3 {
+            reader,
+            writer,
+            request_sender: sender,
+        })
     }
 }
 
@@ -246,11 +296,6 @@ impl RunConnector for PbHttpRunConnector {
         let pw = self.cfg.pw.as_ref().unwrap();
         let path = self.options.stream_path();
 
-        let opened = self.open_stream(&path).await.map_err(|e| {
-            error!("pb_http failed to open stream request: {}", e);
-            e
-        })?;
-
         let auth_req = StreamReq {
             auth: encrypt_field(pw, pw)?,
             dst_addr: Some(encrypt_field(&host, pw)?),
@@ -258,9 +303,19 @@ impl RunConnector for PbHttpRunConnector {
             ..Default::default()
         };
 
+        let (opened, initial_sent) = self
+            .open_stream_for_connect(&path, &auth_req)
+            .await
+            .map_err(|e| {
+                error!("pb_http failed to open stream request: {}", e);
+                e
+            })?;
+
         match opened {
             PbHttpOpenedStream::H2 { reader, mut writer } => {
-                send_message(&mut writer, &auth_req, self.options.send_chunk_size).await?;
+                if !initial_sent {
+                    send_message(&mut writer, &auth_req, self.options.send_chunk_size).await?;
+                }
                 let mut stream = PbHttpClientRunStream::new(
                     reader,
                     writer,
@@ -275,11 +330,18 @@ impl RunConnector for PbHttpRunConnector {
                 });
                 Ok(Box::new(stream))
             }
-            PbHttpOpenedStream::H3 { reader, mut writer } => {
-                send_h3_message(&mut writer, &auth_req, self.options.send_chunk_size).await?;
+            PbHttpOpenedStream::H3 {
+                reader,
+                mut writer,
+                request_sender,
+            } => {
+                if !initial_sent {
+                    send_h3_message(&mut writer, &auth_req, self.options.send_chunk_size).await?;
+                }
                 let mut stream = PbHttpH3ClientRunStream::new(
                     reader,
                     writer,
+                    request_sender,
                     pw.clone(),
                     port != 443,
                     self.options.clone(),
@@ -323,17 +385,24 @@ impl RunConnector for PbHttpRunConnector {
                     )) as Box<dyn RunUdpWriter>,
                 )))
             }
-            PbHttpOpenedStream::H3 { reader, writer } => {
+            PbHttpOpenedStream::H3 {
+                reader,
+                writer,
+                request_sender,
+            } => {
                 let reader = Arc::new(Mutex::new(reader));
                 let writer = Arc::new(Mutex::new(writer));
+                let request_sender = Arc::new(Mutex::new(Some(request_sender)));
                 Ok(Some((
                     Box::new(PbHttpH3UdpClientReader::new(
                         Arc::clone(&reader),
+                        Arc::clone(&request_sender),
                         pw.clone(),
                         self.options.clone(),
                     )) as Box<dyn RunUdpReader>,
                     Box::new(PbHttpH3UdpClientWriter::new(
                         Arc::clone(&writer),
+                        request_sender,
                         pw.clone(),
                         pw,
                         self.options.clone(),
