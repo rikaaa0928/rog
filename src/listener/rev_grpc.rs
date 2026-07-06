@@ -1,4 +1,3 @@
-use crate::def::config::get_option_bool;
 use crate::def::{RunAccStream, RunAcceptor, RunListener, RunStream, RunUdpReader, RunUdpWriter};
 use crate::object::config::ObjectConfig;
 use crate::proto::v1::pb::rog_reverse_service_client::RogReverseServiceClient;
@@ -6,7 +5,9 @@ use crate::proto::v1::pb::{ManagerReq, ManagerRes, RevStreamReq, RevUdpReq};
 use crate::stream::rev_grpc_client::RevGrpcClientRunStream;
 use crate::stream::rev_grpc_udp_client::{RevGrpcUdpClientReader, RevGrpcUdpClientWriter};
 use crate::util::RunAddr;
-use crate::util::grpc_transport::connect_channel_without_proxy;
+use crate::util::grpc_transport::{
+    GrpcTransportOptions, configure_endpoint, connect_channel_without_proxy,
+};
 use futures::StreamExt;
 use log::{debug, error, info, trace, warn};
 use std::io;
@@ -28,10 +29,11 @@ async fn handle_manage_req(
     tx: &mpsc::Sender<RevGrpcClientRunStream>,
     udp_tx: &mpsc::Sender<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>,
     auth: &str,
+    grpc_options: &GrpcTransportOptions,
 ) -> Result<(), ()> {
     if req.udp.unwrap() == 0 {
         // tcp
-        let (stx, srx) = mpsc::channel::<RevStreamReq>(8);
+        let (stx, srx) = mpsc::channel::<RevStreamReq>(grpc_options.stream_channel_size_or(8));
         let srx = tokio_stream::wrappers::ReceiverStream::new(srx);
         let srx = Request::new(srx);
 
@@ -74,7 +76,7 @@ async fn handle_manage_req(
     } else {
         // udp
         let conn_id = req.conn_id.clone().unwrap_or_default();
-        let (utx, urx) = mpsc::channel::<RevUdpReq>(8);
+        let (utx, urx) = mpsc::channel::<RevUdpReq>(grpc_options.stream_channel_size_or(8));
         let urx = tokio_stream::wrappers::ReceiverStream::new(urx);
         let urx = Request::new(urx);
 
@@ -131,20 +133,14 @@ pub struct RevGrpcRunListener {
 #[async_trait::async_trait]
 impl RunListener for RevGrpcListener {
     async fn listen(&self, addr: &str) -> std::io::Result<Box<dyn RunAcceptor>> {
-        let keep_alive = get_option_bool(&self.cfg.listener.options, "keep_alive");
+        let grpc_options = GrpcTransportOptions::from_options(&self.cfg.listener.options);
         let endpoint = Endpoint::new(addr.to_string())
             .map_err(|e| io::Error::other("rev grpc endpoint new error"))?;
-        let endpoint = if keep_alive {
-            endpoint
-                .http2_keep_alive_interval(Duration::from_secs(30))
-                .keep_alive_timeout(Duration::from_secs(10))
-                .keep_alive_while_idle(true)
-        } else {
-            endpoint
-        };
+        let endpoint = configure_endpoint(endpoint, &grpc_options);
 
-        let (tx, rx) = mpsc::channel(8);
-        let (utx, urx) = mpsc::channel(8);
+        let channel_size = grpc_options.stream_channel_size_or(8);
+        let (tx, rx) = mpsc::channel(channel_size);
+        let (utx, urx) = mpsc::channel(channel_size);
         let auth = self.cfg.listener.pw.clone().unwrap();
         let tag = self.cfg.listener.name.clone();
         spawn(async move {
@@ -164,11 +160,18 @@ impl RunListener for RevGrpcListener {
                         }
                     }
                 }
-                let (mtx, mrx) = mpsc::channel::<ManagerReq>(8);
+                let (mtx, mrx) =
+                    mpsc::channel::<ManagerReq>(grpc_options.stream_channel_size_or(8));
                 let mrx = tokio_stream::wrappers::ReceiverStream::new(mrx);
                 let mrx = Request::new(mrx);
 
                 let mut client = RogReverseServiceClient::new(channel);
+                if let Some(limit) = grpc_options.max_decoding_message_size {
+                    client = client.max_decoding_message_size(limit);
+                }
+                if let Some(limit) = grpc_options.max_encoding_message_size {
+                    client = client.max_encoding_message_size(limit);
+                }
 
                 if let Err(e) = mtx
                     .send(ManagerReq {
@@ -201,7 +204,7 @@ impl RunListener for RevGrpcListener {
                                         Some(Ok(req)) => {
                                             // todo: param check
                                             debug!("manager manager stream got req {:?}", req);
-                                            if handle_manage_req(req, &mut client, &tx, &utx, &auth).await.is_err() {
+                                            if handle_manage_req(req, &mut client, &tx, &utx, &auth, &grpc_options).await.is_err() {
                                                 break;
                                             }
                                         }

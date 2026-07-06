@@ -78,6 +78,7 @@ proto = "tcp"
 - `name`: A unique name for the listener.
 - `proto`: The protocol to use (e.g., "tcp", "http", "socks5", "grpc").
 - `router`: The name of the router to use for this listener.
+- `options`: Optional protocol parameters. `grpc`/`rev_grpc` support `keep_alive`, `keep_alive_interval_secs`, `keep_alive_timeout_secs`, `keep_alive_while_idle`, `connect_timeout_secs`, `tcp_nodelay`, `tcp_keepalive_secs`, `tcp_keepalive_interval_secs`, `tcp_keepalive_retries`, `initial_stream_window_size`, `initial_connection_window_size`, `stream_channel_size`, `channel_buffer_size`, `max_decoding_message_size`, `max_encoding_message_size`, `max_concurrent_streams`, `max_frame_size`, `concurrency_limit`, `concurrency_limit_per_connection`, and related gRPC transport settings.
 
 #### `router`
 
@@ -107,6 +108,7 @@ proto = "tcp"
 - `user`: Optional username for authentication.
 - `pw`: Optional password for authentication.
 - `proto`: The protocol of the connector (e.g., "tcp", "grpc").
+- `options`: Optional protocol parameters. `grpc` supports the same gRPC transport settings as listeners; see `full_config_example.toml` for recommended values.
 
 ## Usage
 

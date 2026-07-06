@@ -78,6 +78,7 @@ proto = "tcp"
 - `name`: 监听器的唯一名称。
 - `proto`: 使用的协议 (例如, "tcp", "http", "socks5", "grpc")。
 - `router`: 此监听器使用的路由器的名称。
+- `options`: 可选协议参数。`grpc`/`rev_grpc` 支持 `keep_alive`、`keep_alive_interval_secs`、`keep_alive_timeout_secs`、`keep_alive_while_idle`、`connect_timeout_secs`、`tcp_nodelay`、`tcp_keepalive_secs`、`tcp_keepalive_interval_secs`、`tcp_keepalive_retries`、`initial_stream_window_size`、`initial_connection_window_size`、`stream_channel_size`、`channel_buffer_size`、`max_decoding_message_size`、`max_encoding_message_size`、`max_concurrent_streams`、`max_frame_size`、`concurrency_limit`、`concurrency_limit_per_connection` 等。
 
 #### `router`
 
@@ -107,6 +108,7 @@ proto = "tcp"
 - `user`: 用于身份验证的可选用户名。
 - `pw`: 用于身份验证的可选密码。
 - `proto`: 连接器的协议 (例如, "tcp", "grpc")。
+- `options`: 可选协议参数。`grpc` 支持与 listener 相同的 gRPC transport 参数；常用推荐值见 `full_config_example.toml`。
 
 ## 用法
 

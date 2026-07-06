@@ -1,4 +1,3 @@
-use crate::def::config::get_option_bool;
 use crate::def::{RunAccStream, RunAcceptor, RunListener, RunStream};
 use crate::object::config::ObjectConfig;
 use crate::proto::v1::pb::rog_service_server::{RogService, RogServiceServer};
@@ -6,12 +5,12 @@ use crate::proto::v1::pb::{StreamReq, StreamRes, UdpReq, UdpRes};
 use crate::stream::grpc_server::{self, GrpcServerRunStream};
 use crate::stream::grpc_udp_server::{GrpcUdpServerReadHalf, GrpcUdpServerWriteHalf};
 use crate::util::RunAddr;
+use crate::util::grpc_transport::{GrpcTransportOptions, configure_server};
 use futures::Stream;
 use std::io::Error;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{Mutex, mpsc};
 use tokio::{select, spawn};
@@ -35,6 +34,7 @@ struct GrpcServer {
     sender: Sender<GrpcServerRunStream>,
     udp_sender: Sender<(Streaming<UdpReq>, Sender<Result<UdpRes, Status>>, String)>,
     cfg: ObjectConfig,
+    grpc_options: GrpcTransportOptions,
     // router: Arc<dyn RouterSet>, // Removed
 }
 type ResponseStream = Pin<Box<dyn Stream<Item = Result<StreamRes, Status>> + Send>>;
@@ -48,7 +48,7 @@ impl RogService for GrpcServer {
         &self,
         request: Request<Streaming<StreamReq>>,
     ) -> Result<Response<Self::streamStream>, Status> {
-        let (tx, rx) = mpsc::channel(8);
+        let (tx, rx) = mpsc::channel(self.grpc_options.stream_channel_size_or(8));
         let request = request.into_inner();
         let stream = GrpcServerRunStream::new(Arc::new(Mutex::new(request)), tx);
         match self.sender.send(stream).await {
@@ -64,7 +64,8 @@ impl RogService for GrpcServer {
         &self,
         request: Request<Streaming<UdpReq>>,
     ) -> Result<Response<Self::udpStream>, Status> {
-        let (tx, rx) = mpsc::channel::<Result<UdpRes, Status>>(8);
+        let (tx, rx) =
+            mpsc::channel::<Result<UdpRes, Status>>(self.grpc_options.stream_channel_size_or(8));
         let request = request.into_inner();
         let stream = (request, tx, self.cfg.listener.pw.clone().unwrap());
         match self.udp_sender.send(stream).await {
@@ -226,25 +227,29 @@ pub struct GrpcRunListener {
 #[async_trait::async_trait]
 impl RunListener for GrpcListener {
     async fn listen(&self, addr: &str) -> std::io::Result<Box<dyn RunAcceptor>> {
-        let (tx, rx) = mpsc::channel(8);
-        let (udp_tx, udp_rx) = mpsc::channel(8);
+        let grpc_options = GrpcTransportOptions::from_options(&self.cfg.listener.options);
+        let channel_size = grpc_options.stream_channel_size_or(8);
+        let (tx, rx) = mpsc::channel(channel_size);
+        let (udp_tx, udp_rx) = mpsc::channel(channel_size);
         let rog = GrpcServer {
             sender: tx,
             udp_sender: udp_tx,
             cfg: self.cfg.clone(),
+            grpc_options: grpc_options.clone(),
             // router: self.router.clone(), // Removed
         };
-        let keep_alive = get_option_bool(&self.cfg.listener.options, "keep_alive");
         let addr = addr.to_owned();
         spawn(async move {
-            let mut builder = Server::builder();
-            if keep_alive {
-                builder = builder
-                    .http2_keepalive_interval(Some(Duration::from_secs(30)))
-                    .http2_keepalive_timeout(Some(Duration::from_secs(10)));
+            let mut builder = configure_server(Server::builder(), &grpc_options);
+            let mut service = RogServiceServer::new(rog);
+            if let Some(limit) = grpc_options.max_decoding_message_size {
+                service = service.max_decoding_message_size(limit);
+            }
+            if let Some(limit) = grpc_options.max_encoding_message_size {
+                service = service.max_encoding_message_size(limit);
             }
             let _ = builder
-                .add_service(RogServiceServer::new(rog))
+                .add_service(service)
                 .serve(addr.parse().unwrap())
                 .await;
         });

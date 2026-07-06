@@ -1,5 +1,4 @@
 use crate::connector::grpc::parse_address;
-use crate::def::config::get_option_bool;
 use crate::def::{RunConnector, RunStream, RunUdpReader, RunUdpWriter, config};
 use crate::proto::v1::pb::rog_reverse_service_server::{
     RogReverseService, RogReverseServiceServer,
@@ -9,6 +8,7 @@ use crate::proto::v1::pb::{
 };
 use crate::stream::rev_grpc_server::RevGrpcServerRunStream;
 use crate::stream::rev_grpc_udp_server::{RevGrpcUdpServerReader, RevGrpcUdpServerWriter};
+use crate::util::grpc_transport::{GrpcTransportOptions, configure_server};
 use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use futures::Stream;
@@ -70,18 +70,24 @@ pub async fn start_reverse_server(
     options: &Option<HashMap<String, toml::Value>>,
 ) {
     let state = get_global_rev_grpc_state();
-    let rog = RevGrpcServer { pw_map, state };
-    let keep_alive = get_option_bool(options, "keep_alive");
+    let grpc_options = GrpcTransportOptions::from_options(options);
+    let rog = RevGrpcServer {
+        pw_map,
+        state,
+        grpc_options: grpc_options.clone(),
+    };
 
     spawn(async move {
-        let mut builder = Server::builder();
-        if keep_alive {
-            builder = builder
-                .http2_keepalive_interval(Some(Duration::from_secs(30)))
-                .http2_keepalive_timeout(Some(Duration::from_secs(10)));
+        let mut builder = configure_server(Server::builder(), &grpc_options);
+        let mut service = RogReverseServiceServer::new(rog);
+        if let Some(limit) = grpc_options.max_decoding_message_size {
+            service = service.max_decoding_message_size(limit);
+        }
+        if let Some(limit) = grpc_options.max_encoding_message_size {
+            service = service.max_encoding_message_size(limit);
         }
         match builder
-            .add_service(RogReverseServiceServer::new(rog))
+            .add_service(service)
             .serve(endpoint.parse().unwrap())
             .await
         {
@@ -243,6 +249,7 @@ impl RunConnector for RevGrpcRunConnector {
 struct RevGrpcServer {
     pw_map: HashMap<String, Option<String>>,
     state: Arc<RevGrpcState>,
+    grpc_options: GrpcTransportOptions,
 }
 
 type ResponseStream = Pin<Box<dyn Stream<Item = Result<RevStreamRes, Status>> + Send>>;
@@ -287,7 +294,7 @@ impl RogReverseService for RevGrpcServer {
                 )));
             }
             Entry::Vacant(entry) => {
-                let (tx, rx) = mpsc::channel(32);
+                let (tx, rx) = mpsc::channel(self.grpc_options.stream_channel_size_or(32));
                 entry.insert(tx);
                 rx
             }
@@ -332,7 +339,9 @@ impl RogReverseService for RevGrpcServer {
                 }
             }
 
-            let (tx, rx) = mpsc::channel::<Result<RevStreamRes, Status>>(32);
+            let (tx, rx) = mpsc::channel::<Result<RevStreamRes, Status>>(
+                self.grpc_options.stream_channel_size_or(32),
+            );
             let out_stream = ReceiverStream::new(rx);
 
             // Create RunStream wrapper
@@ -380,7 +389,9 @@ impl RogReverseService for RevGrpcServer {
                 }
             }
 
-            let (res_tx, res_rx) = mpsc::channel::<Result<RevUdpRes, Status>>(32);
+            let (res_tx, res_rx) = mpsc::channel::<Result<RevUdpRes, Status>>(
+                self.grpc_options.stream_channel_size_or(32),
+            );
             let out_stream = ReceiverStream::new(res_rx);
 
             let auth = first_msg.auth.clone();

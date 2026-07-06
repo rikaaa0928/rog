@@ -29,6 +29,11 @@ mod util;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    if env::args().skip(1).any(|arg| arg == "--version" || arg == "-V") {
+        println!("rog {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     if env::var("RUST_LOG").is_err() {
         unsafe {
             env::set_var("RUST_LOG", "info");

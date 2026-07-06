@@ -1406,7 +1406,7 @@ dependencies = [
 
 [[package]]
 name = "rog"
-version = "0.1.0"
+version = "0.1.15"
 dependencies = [
  "async-trait",
  "base64",
@@ -1427,6 +1427,7 @@ dependencies = [
  "reqwest",
  "serde",
  "sha2",
+ "socket2 0.6.1",
  "tokio",
  "tokio-stream",
  "tokio-util",

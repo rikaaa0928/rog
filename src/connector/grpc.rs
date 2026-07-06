@@ -1,10 +1,11 @@
-use crate::def::config::get_option_bool;
 use crate::def::{RunConnector, RunStream, RunUdpReader, RunUdpWriter, config};
 use crate::proto::v1::pb::rog_service_client::RogServiceClient;
 use crate::proto::v1::pb::{StreamReq, UdpReq};
 use crate::stream::grpc_client::GrpcClientRunStream;
 use crate::stream::grpc_udp_client::{GrpcUdpClientRunReader, GrpcUdpClientRunWriter};
-use crate::util::grpc_transport::connect_channel_without_proxy;
+use crate::util::grpc_transport::{
+    GrpcTransportOptions, configure_endpoint, connect_channel_without_proxy,
+};
 use log::{error, info};
 use std::io;
 use std::io::ErrorKind;
@@ -22,6 +23,7 @@ use tonic::transport::Endpoint;
 pub struct GrpcRunConnector {
     client: Arc<Mutex<RogServiceClient<tonic::transport::Channel>>>,
     cfg: config::Connector,
+    grpc_options: GrpcTransportOptions,
 }
 impl GrpcRunConnector {
     pub async fn new(cfg: &config::Connector) -> io::Result<Self> {
@@ -31,21 +33,23 @@ impl GrpcRunConnector {
             io::Error::new(ErrorKind::InvalidInput, err_msg)
         })?;
         let mut err = None;
-        let keep_alive = get_option_bool(&cfg.options, "keep_alive");
+        let grpc_options = GrpcTransportOptions::from_options(&cfg.options);
         for i in 1..=3 {
             let client = match Endpoint::new(endpoint.clone()) {
                 Ok(endpoint) => {
-                    let endpoint = if keep_alive {
-                        endpoint
-                            .http2_keep_alive_interval(Duration::from_secs(30))
-                            .keep_alive_timeout(Duration::from_secs(10))
-                            .keep_alive_while_idle(true)
-                    } else {
-                        endpoint
-                    };
+                    let endpoint = configure_endpoint(endpoint, &grpc_options);
                     connect_channel_without_proxy(endpoint)
                         .await
-                        .map(RogServiceClient::new)
+                        .map(|channel| {
+                            let mut client = RogServiceClient::new(channel);
+                            if let Some(limit) = grpc_options.max_decoding_message_size {
+                                client = client.max_decoding_message_size(limit);
+                            }
+                            if let Some(limit) = grpc_options.max_encoding_message_size {
+                                client = client.max_encoding_message_size(limit);
+                            }
+                            client
+                        })
                 }
                 Err(e) => Err(e),
             };
@@ -57,6 +61,7 @@ impl GrpcRunConnector {
                     return Ok(Self {
                         client: Arc::new(Mutex::new(client)),
                         cfg: cfg.clone(),
+                        grpc_options,
                     });
                 }
                 Err(e) => {
@@ -74,7 +79,8 @@ impl GrpcRunConnector {
 impl RunConnector for GrpcRunConnector {
     async fn connect(&self, addr: String) -> io::Result<Box<dyn RunStream>> {
         let (host, port) = parse_address(addr.as_str())?;
-        let (tx, rx) = mpsc::channel::<StreamReq>(8);
+        let channel_size = self.grpc_options.stream_channel_size_or(8);
+        let (tx, rx) = mpsc::channel::<StreamReq>(channel_size);
         let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
         let rx = Request::new(rx);
 
@@ -112,7 +118,8 @@ impl RunConnector for GrpcRunConnector {
         &self,
         src_addr: String,
     ) -> io::Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>> {
-        let (tx, rx) = mpsc::channel::<UdpReq>(8);
+        let channel_size = self.grpc_options.stream_channel_size_or(8);
+        let (tx, rx) = mpsc::channel::<UdpReq>(channel_size);
         let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
         let rx = Request::new(rx);
         let res = self.client.lock().await.udp(rx).await;

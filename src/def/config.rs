@@ -55,14 +55,6 @@ pub struct RouteRule {
     pub dns: Option<String>,
 }
 
-pub fn get_option_bool(options: &Option<HashMap<String, toml::Value>>, key: &str) -> bool {
-    options
-        .as_ref()
-        .and_then(|m| m.get(key))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-}
-
 #[derive(Deserialize, Debug, Clone)]
 pub struct RouteData {
     pub name: String,
