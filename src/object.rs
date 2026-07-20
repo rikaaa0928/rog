@@ -10,6 +10,7 @@ use std::io::Error;
 use std::sync::Arc;
 use tokio::spawn;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 // Already present, but ensure it's used for cache
 
 pub mod config;
@@ -42,6 +43,10 @@ impl Object {
     }
 
     pub async fn start(&self) -> io::Result<()> {
+        self.start_with_shutdown(CancellationToken::new()).await
+    }
+
+    pub async fn start_with_shutdown(&self, shutdown: CancellationToken) -> io::Result<()> {
         let config_outer = self.config.clone(); // Renamed for clarity
         let router_outer = self.router.clone(); // Renamed for clarity
         let acc = listener::create(&config_outer).await.map_err(|e| {
@@ -52,10 +57,13 @@ impl Object {
         let connector_cache_outer = self.connector_cache.clone(); // Clone cache Arc for the loop
 
         loop {
-            let (acc_stream, peer_addr) = main_acceptor.accept().await.map_err(|e| {
-                error!("Failed to accept connection: {}", e);
-                e
-            })?;
+            let (acc_stream, peer_addr) = tokio::select! {
+                _ = shutdown.cancelled() => return Ok(()),
+                accepted = main_acceptor.accept() => accepted.map_err(|e| {
+                    error!("Failed to accept connection: {}", e);
+                    e
+                })?,
+            };
             let main_acceptor_clone = Arc::clone(&main_acceptor);
             let router_clone = Arc::clone(&router_outer);
             let config_clone = Arc::clone(&config_outer);

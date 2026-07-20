@@ -1232,16 +1232,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proxy-observe"
-version = "0.1.0"
-source = "git+https://github.com/rikaaa0928/proxy-observe.git#01dd5c88bee61e5ed13b2edbe27516d34efae5df"
-dependencies = [
- "axum 0.7.9",
- "serde",
- "tokio",
-]
-
-[[package]]
 name = "pulldown-cmark"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1405,6 +1395,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "riproxy-observe"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b4282c43c25074460ad108f793ddf85f102575adbc6e140cdf4780497caf33c"
+dependencies = [
+ "axum 0.7.9",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "rog"
 version = "0.1.15"
 dependencies = [
@@ -1422,9 +1423,9 @@ dependencies = [
  "log",
  "mimalloc",
  "prost",
- "proxy-observe",
  "regex",
  "reqwest",
+ "riproxy-observe",
  "serde",
  "sha2",
  "socket2 0.6.1",
