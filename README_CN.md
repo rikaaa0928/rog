@@ -98,7 +98,8 @@ proto = "tcp"
 
 - `name`: 数据源的唯一名称。
 - `url`: 用于加载数据的可选 URL。
-- `format`: 数据格式。
+- `format`: 数据格式。支持 "cidr", "regex", "lan", "domain-suffix" (或 "suffix", "domain_suffix"), "domain-keyword" (或 "keyword", "domain_keyword")。
+- `interval`: (可选) 定时刷新间隔（秒），仅在配置了 `url` 时生效，默认 3600 秒。加载完全非阻塞，失败自动保持旧数据重试。
 - `data`: 内联数据。
 
 #### `connector`

@@ -1,3 +1,9 @@
 pub const FORMAT_REGEX: &str = "regex";
 pub const FORMAT_CIDR: &str = "cidr";
 pub const FORMAT_LAN: &str = "lan";
+pub const FORMAT_DOMAIN_SUFFIX: &str = "domain-suffix";
+pub const FORMAT_DOMAIN_SUFFIX_ALT1: &str = "domain_suffix";
+pub const FORMAT_DOMAIN_SUFFIX_ALT2: &str = "suffix";
+pub const FORMAT_DOMAIN_KEYWORD: &str = "domain-keyword";
+pub const FORMAT_DOMAIN_KEYWORD_ALT1: &str = "domain_keyword";
+pub const FORMAT_DOMAIN_KEYWORD_ALT2: &str = "keyword";

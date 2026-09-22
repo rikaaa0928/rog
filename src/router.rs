@@ -2,6 +2,7 @@ mod consts;
 mod data;
 mod default_router;
 mod matcher;
+pub(crate) mod remote_matcher;
 pub(crate) mod resolver;
 mod test;
 

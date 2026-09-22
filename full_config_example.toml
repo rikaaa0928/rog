@@ -64,6 +64,28 @@ data = """
 .*\\.twitter\\.com
 """
 
+# 域名后缀匹配示例（支持从 http/https url 或内嵌数据加载）
+[[data]]
+name = "custom_domain_suffixes"
+format = "domain-suffix" # 可选: "domain-suffix", "domain_suffix", "suffix"
+# url = "http://example.com/suffix.txt"
+# interval = 3600 # 可选：定期刷新间隔秒数（默认 3600 秒，完全非阻塞后台定时更新）
+data = """
+google.com
+baidu.com
+"""
+
+# 域名关键字匹配示例
+[[data]]
+name = "custom_domain_keywords"
+format = "domain-keyword" # 可选: "domain-keyword", "domain_keyword", "keyword"
+# url = "http://example.com/keyword.txt"
+# interval = 3600
+data = """
+twitter
+github
+"""
+
 # 路由器配置
 [[router]]
 name = "main_router" # 路由器名称，在 listener 中引用
@@ -81,6 +103,14 @@ select = "direct"
 # domain_to_ip = true
 # 可选：指定使用的DNS服务器
 # dns = "8.8.8.8:53"
+
+[[router.route_rules]]
+name = "custom_domain_suffixes"
+select = "proxy_outbound"
+
+[[router.route_rules]]
+name = "custom_domain_keywords"
+select = "proxy_outbound"
 
 [[router.route_rules]]
 name = "blocked_sites"

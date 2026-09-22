@@ -39,10 +39,7 @@ impl UdpRunStream {
     /// Create a reader/writer pair that share the same resolve state.
     /// The writer records domain→IP mappings, the reader uses them in reverse
     /// to restore domain names in response packets.
-    pub fn new_pair(
-        stream: Arc<UdpSocket>,
-        src_addr: String,
-    ) -> (UdpRunStream, UdpRunStream) {
+    pub fn new_pair(stream: Arc<UdpSocket>, src_addr: String) -> (UdpRunStream, UdpRunStream) {
         let shared_state = Arc::new(Mutex::new(UdpResolveState {
             domain_to_ip: HashMap::new(),
             ip_to_domain: HashMap::new(),
@@ -91,9 +88,7 @@ impl UdpRunStream {
         // Build reverse mapping only when the original address was a domain name,
         // so the read path can restore it in the response packet.
         if is_domain {
-            state
-                .ip_to_domain
-                .insert(addr, dst_addr.to_string());
+            state.ip_to_domain.insert(addr, dst_addr.to_string());
         }
 
         Ok(addr)

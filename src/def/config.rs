@@ -61,4 +61,5 @@ pub struct RouteData {
     pub url: Option<String>,
     pub format: String,
     pub data: Option<String>,
+    pub interval: Option<u64>,
 }
