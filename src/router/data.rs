@@ -34,11 +34,23 @@ pub async fn load_route_data(data_cfg: &[config::RouteData]) -> HashMap<String, 
                 "127.0.0.0/8".to_string(),
             ];
             rd.format = consts::FORMAT_CIDR.to_string();
-        } else if let Some(ref url) = rd_cfg.url {
-            let interval = Duration::from_secs(rd_cfg.interval.unwrap_or(3600));
+        } else if let Some(ref raw_url) = rd_cfg.url {
+            let (url, interval_secs) = if let Some((u, hash_part)) = raw_url.split_once('#') {
+                if let Some(val) = hash_part.strip_prefix("interval=") {
+                    let iv = val
+                        .parse::<u64>()
+                        .unwrap_or_else(|_| rd_cfg.interval.unwrap_or(3600));
+                    (u.to_string(), iv)
+                } else {
+                    (u.to_string(), rd_cfg.interval.unwrap_or(3600))
+                }
+            } else {
+                (raw_url.clone(), rd_cfg.interval.unwrap_or(3600))
+            };
+            let interval = Duration::from_secs(interval_secs);
             let matcher = DynamicRemoteMatcher::new(
                 rd_cfg.name.clone(),
-                url.clone(),
+                url,
                 rd_cfg.format.clone(),
                 interval,
             );

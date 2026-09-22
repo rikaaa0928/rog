@@ -13,7 +13,21 @@ pub struct DynamicRemoteMatcher {
 }
 
 impl DynamicRemoteMatcher {
-    pub fn new(name: String, url: String, format: String, interval: Duration) -> Self {
+    pub fn new(name: String, raw_url: String, format: String, default_interval: Duration) -> Self {
+        let (url, interval) = if let Some((u, hash_part)) = raw_url.split_once('#') {
+            if let Some(val) = hash_part.strip_prefix("interval=") {
+                let iv = val
+                    .parse::<u64>()
+                    .map(Duration::from_secs)
+                    .unwrap_or(default_interval);
+                (u.to_string(), iv)
+            } else {
+                (u.to_string(), default_interval)
+            }
+        } else {
+            (raw_url, default_interval)
+        };
+
         let inner = Arc::new(RwLock::new(None));
         let initialized = Arc::new(AtomicBool::new(false));
 

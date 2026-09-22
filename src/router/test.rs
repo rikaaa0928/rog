@@ -178,10 +178,10 @@ mod tests {
         let resolver = Resolver::new();
         let data_cfg = vec![RouteData {
             name: "remote_suffix".to_string(),
-            url: Some(format!("http://127.0.0.1:{}/suffix.txt", port)),
+            url: Some(format!("http://127.0.0.1:{}/suffix.txt#interval=1", port)),
             format: "domain-suffix".to_string(),
             data: None,
-            interval: Some(1), // 1 second interval
+            interval: None,
         }];
         let router_cfg = vec![Router {
             name: "test_router".to_string(),
