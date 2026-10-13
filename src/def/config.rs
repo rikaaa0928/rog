@@ -12,6 +12,24 @@ pub struct Config {
     pub buffer_size: Option<String>,
 }
 
+impl Config {
+    pub fn validate(&self) -> std::io::Result<()> {
+        if self
+            .listener
+            .iter()
+            .filter(|listener| listener.proto.eq_ignore_ascii_case("tproxy"))
+            .count()
+            > 1
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "only one tproxy inbound listener is allowed per configuration; use mode = \"tcp+udp\" for both protocols",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct ReverseServer {
     pub endpoint: String,
@@ -43,6 +61,10 @@ pub struct Listener {
     pub pw: Option<String>,
     pub proto: String,
     pub router: String,
+    #[serde(default)]
+    pub up: Option<String>,
+    #[serde(default)]
+    pub down: Option<String>,
     pub options: Option<HashMap<String, toml::Value>>,
 }
 

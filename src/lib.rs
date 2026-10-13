@@ -3,7 +3,6 @@ use crate::consts::TCP_IO_BUFFER_SIZE;
 use crate::def::config::Config;
 use crate::object::Object;
 use crate::object::config::ObjectConfig;
-use futures::future::select_all;
 use log::error;
 use proxy_observe::ObserveRegistry;
 use std::collections::HashMap;
@@ -35,8 +34,10 @@ pub struct RunOptions {
 }
 
 pub fn load_config_str(contents: &str) -> std::io::Result<Config> {
-    toml::from_str::<Config>(contents)
-        .map_err(|e| std::io::Error::other(format!("invalid config file: {}", e.message())))
+    let cfg = toml::from_str::<Config>(contents)
+        .map_err(|e| std::io::Error::other(format!("invalid config file: {}", e.message())))?;
+    cfg.validate()?;
+    Ok(cfg)
 }
 
 pub fn load_config_file(path: impl AsRef<Path>) -> std::io::Result<Config> {
@@ -46,6 +47,7 @@ pub fn load_config_file(path: impl AsRef<Path>) -> std::io::Result<Config> {
 
 pub async fn run(options: RunOptions) -> std::io::Result<()> {
     let cfg = options.config;
+    cfg.validate()?;
     let observe_registry = options.observe_registry;
     let shutdown = options.shutdown;
 
@@ -121,10 +123,23 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
     if tasks.is_empty() {
         shutdown.cancelled().await;
     } else {
+        let mut tasks_stream = futures::stream::FuturesUnordered::from_iter(tasks);
         tokio::select! {
-            _ = shutdown.cancelled() => {}
-            (result, _, _) = select_all(tasks) => {
-                error!("error: {:?}", result);
+            _ = shutdown.cancelled() => {
+                log::info!("Shutdown signal received, waiting for listeners to finish...");
+            }
+            Some(result) = futures::StreamExt::next(&mut tasks_stream) => {
+                error!(
+                    "A listener task finished unexpectedly: {:?}, cancelling remaining listeners...",
+                    result
+                );
+                shutdown.cancel();
+            }
+        }
+
+        while let Some(res) = futures::StreamExt::next(&mut tasks_stream).await {
+            if let Err(e) = res {
+                error!("listener task error during shutdown: {:?}", e);
             }
         }
     }
@@ -136,10 +151,44 @@ pub async fn run_config_file(path: impl AsRef<Path>) -> std::io::Result<()> {
     let contents = fs::read_to_string(path).await?;
     let cfg = load_config_str(&contents)?;
     let observe_registry = ObserveRegistry::new();
+    let shutdown = CancellationToken::new();
+
+    let shutdown_signal = shutdown.clone();
+    spawn(async move {
+        let ctrl_c = tokio::signal::ctrl_c();
+        #[cfg(unix)]
+        {
+            let mut sigterm =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::warn!("Failed to register SIGTERM handler: {}", e);
+                        let _ = ctrl_c.await;
+                        shutdown_signal.cancel();
+                        return;
+                    }
+                };
+            tokio::select! {
+                _ = ctrl_c => {
+                    log::info!("Received SIGINT (Ctrl-C), initiating shutdown...");
+                }
+                _ = sigterm.recv() => {
+                    log::info!("Received SIGTERM, initiating shutdown...");
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = ctrl_c.await;
+            log::info!("Received Ctrl-C, initiating shutdown...");
+        }
+        shutdown_signal.cancel();
+    });
+
     run(RunOptions {
         config: cfg,
         observe_registry,
-        shutdown: CancellationToken::new(),
+        shutdown,
     })
     .await
 }
@@ -166,4 +215,48 @@ pub async fn run_from_env() -> std::io::Result<()> {
     }
 
     run_config_file(env::var("ROG_CONFIG").unwrap()).await
+}
+
+#[cfg(test)]
+mod config_validation_tests {
+    use super::*;
+
+    fn config_text(protocols: &[&str]) -> String {
+        let mut text = "router = []\nconnector = []\n".to_string();
+        if protocols.is_empty() {
+            text.push_str("listener = []\n");
+        }
+        for (index, proto) in protocols.iter().enumerate() {
+            text.push_str(&format!(
+                "\n[[listener]]\nname = \"in_{index}\"\nendpoint = \"0.0.0.0:{}\"\nproto = \"{proto}\"\nrouter = \"main\"\n",
+                12345 + index
+            ));
+        }
+        text
+    }
+
+    #[test]
+    fn config_load_limits_only_tproxy_listeners() {
+        for protocols in [vec![], vec!["socks5", "http"], vec!["tproxy", "socks5"]] {
+            assert!(load_config_str(&config_text(&protocols)).is_ok());
+        }
+        let error = load_config_str(&config_text(&["tproxy", "tproxy"])).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("only one tproxy"));
+    }
+
+    #[tokio::test]
+    async fn run_rejects_multiple_tproxy_before_startup() {
+        // Direct deserialization bypasses load_config_str; run must still validate.
+        let config = toml::from_str(&config_text(&["tproxy", "tproxy"])).unwrap();
+        let error = run(RunOptions {
+            config,
+            observe_registry: ObserveRegistry::new(),
+            shutdown: CancellationToken::new(),
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("only one tproxy"));
+    }
 }

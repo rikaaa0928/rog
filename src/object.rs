@@ -49,21 +49,46 @@ impl Object {
     pub async fn start_with_shutdown(&self, shutdown: CancellationToken) -> io::Result<()> {
         let config_outer = self.config.clone(); // Renamed for clarity
         let router_outer = self.router.clone(); // Renamed for clarity
-        let acc = listener::create(&config_outer).await.map_err(|e| {
-            error!("Failed to create listener: {}", e);
-            e
-        })?;
+        let acc = listener::create(&config_outer, shutdown.clone())
+            .await
+            .map_err(|e| {
+                error!("Failed to create listener: {}", e);
+                e
+            })?;
+
+        // Establish cleanup protection FIRST so any failure or cancellation during up execution
+        // or listener loop will trigger the down hook cleanup.
+        let mut down_guard = crate::util::hook::DownHookGuard::new(
+            crate::util::hook::get_hook_cmd(&config_outer.listener, "down"),
+        );
+
+        // Run up hook if configured; if it fails, abort and let down_guard roll back
+        if let Some(cmd) = crate::util::hook::get_hook_cmd(&config_outer.listener, "up") {
+            let success = crate::util::hook::run_hook(&cmd, "up").await;
+            if !success {
+                error!("Up hook '{}' failed, rolling back listener...", cmd);
+                return Err(io::Error::other(format!("Up hook '{}' failed", cmd)));
+            }
+        }
+
         let main_acceptor = Arc::new(acc);
         let connector_cache_outer = self.connector_cache.clone(); // Clone cache Arc for the loop
 
-        loop {
-            let (acc_stream, peer_addr) = tokio::select! {
-                _ = shutdown.cancelled() => return Ok(()),
-                accepted = main_acceptor.accept() => accepted.map_err(|e| {
-                    error!("Failed to accept connection: {}", e);
-                    e
-                })?,
-            };
+        let run_result: io::Result<()> = async {
+            loop {
+                let (acc_stream, peer_addr) = tokio::select! {
+                    _ = shutdown.cancelled() => return Ok(()),
+                    accepted = main_acceptor.accept() => match accepted {
+                        Ok(item) => item,
+                        Err(e) => {
+                            if shutdown.is_cancelled() {
+                                return Ok(());
+                            }
+                            error!("Failed to accept connection: {}", e);
+                            return Err(e);
+                        }
+                    },
+                };
             let main_acceptor_clone = Arc::clone(&main_acceptor);
             let router_clone = Arc::clone(&router_outer);
             let config_clone = Arc::clone(&config_outer);
@@ -241,10 +266,14 @@ impl Object {
                 }
             });
         }
-        // The loop is infinite, so Ok(()) might not be reachable here unless the loop is broken.
-        // If the server is meant to run indefinitely, this Ok(()) might be removed or placed after a loop break condition.
-        // For now, keeping it as it was, assuming there's a broader context for server shutdown.
-        // Ok(())
+    }.await;
+
+    // Clean shutdown: execute down hook asynchronously
+    if let Some(cmd) = down_guard.defuse() {
+        crate::util::hook::run_hook(&cmd, "down").await;
+    }
+
+    run_result
     }
 }
 

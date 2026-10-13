@@ -7,6 +7,26 @@ endpoint = "127.0.0.1:1080"
 proto = "socks5"
 router = "main_router" # 引用下面定义的路由器
 
+# TPROXY 透明代理监听器配置示例（仅限 Linux）
+# 每份配置最多一个 TPROXY 监听器；TCP 和 UDP 使用 mode = "tcp+udp" 合并。
+# 此限制不阻止启动多个 rog 进程；配套脚本请仅由一个进程管理。
+# [[listener]]
+# name = "tproxy_inbound"
+# endpoint = "0.0.0.0:12345" # 或 "[::]:12345"
+# proto = "tproxy"
+# router = "main_router"
+# # 脚本参数：[PORT] [FWMARK] [TABLE_ID] [MODE] [FAMILY]
+# # 单栈 IPv4（0.0.0.0）示例：
+# up = "scripts/tproxy-up.sh 12345 1 100 tcp+udp v4"
+# down = "scripts/tproxy-down.sh 12345 1 100 tcp+udp v4"
+# # 双栈 IPv4+IPv6（[::]）示例：
+# # up = "scripts/tproxy-up.sh 12345 1 100 tcp+udp dual"
+# # down = "scripts/tproxy-down.sh 12345 1 100 tcp+udp dual"
+# [listener.options]
+# mode = "tcp+udp" # 支持 "tcp+udp"（默认）、"tcp"、"udp"
+# udp_idle_timeout_secs = 60 # UDP 会话空闲清理时长（秒）
+# udp_max_senders = 512 # 伪装回包套接字 LRU 缓存容量上限
+
 # 连接器配置
 [[connector]]
 name = "direct"

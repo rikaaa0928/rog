@@ -99,8 +99,26 @@ impl UdpRunStream {
 #[async_trait::async_trait]
 impl RunUdpReader for UdpRunStream {
     async fn read(&mut self) -> std::io::Result<UDPPacket> {
-        let src_addr = self.src_addr.clone();
-        let src: SocketAddr = src_addr.parse().unwrap();
+        let src: SocketAddr = match self.src_addr.parse() {
+            Ok(sa) => sa,
+            Err(_) => {
+                let bracketed = if self.src_addr.contains(':') && !self.src_addr.starts_with('[') {
+                    if let Some(idx) = self.src_addr.rfind(':') {
+                        format!("[{}]:{}", &self.src_addr[..idx], &self.src_addr[idx + 1..])
+                    } else {
+                        self.src_addr.clone()
+                    }
+                } else {
+                    self.src_addr.clone()
+                };
+                bracketed.parse().map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("invalid UDP client src_addr '{}': {}", self.src_addr, e),
+                    )
+                })?
+            }
+        };
         let inner = self.inner.clone();
 
         let mut buf = [0u8; 65536];

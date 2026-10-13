@@ -15,8 +15,12 @@ pub(crate) mod pb_tcp;
 mod rev_grpc;
 pub(crate) mod socks5;
 pub(crate) mod tcp;
+pub(crate) mod tproxy;
 
-pub async fn create(cfg: &ObjectConfig) -> std::io::Result<Box<dyn RunAcceptor>> {
+pub async fn create(
+    cfg: &ObjectConfig,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> std::io::Result<Box<dyn RunAcceptor>> {
     match cfg.listener.proto.as_str() {
         "socks5" => {
             let listener = TcpRunListener {}
@@ -63,6 +67,11 @@ pub async fn create(cfg: &ObjectConfig) -> std::io::Result<Box<dyn RunAcceptor>>
                 cfg.server_id.clone(),
             ));
             Ok(http)
+        }
+        "tproxy" => {
+            let listener = tproxy::TproxyListener::new(cfg.clone(), shutdown);
+            let acc = listener.listen().await?;
+            Ok(acc)
         }
         _ => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

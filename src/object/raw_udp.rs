@@ -72,11 +72,10 @@ pub async fn handle_raw_udp(
         site: None,
     });
 
+    let src_endpoint =
+        udp_endpoint_for_observe(&first_packet.meta.src_addr, first_packet.meta.src_port);
     let (mut udp_reader, udp_writer) = connector_obj
-        .udp_tunnel(format!(
-            "{}:{}",
-            first_packet.meta.src_addr, first_packet.meta.src_port,
-        ))
+        .udp_tunnel(src_endpoint)
         .await?
         .ok_or_else(|| {
             io::Error::other("UDP tunnel creation failed or not supported by connector")
