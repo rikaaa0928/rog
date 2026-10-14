@@ -1,58 +1,52 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ==============================================================================
-# rog TPROXY Teardown Script
+# rog Universal TPROXY + UDP DNS Teardown Script (IPv4 / IPv6 Dual-Stack)
 # Usage: ./tproxy-down.sh [TPROXY_PORT] [FWMARK] [TABLE_ID] [MODE] [FAMILY]
 # ==============================================================================
 
-TPROXY_PORT=${1:-${ROG_PORT:-12345}}
-FWMARK=${2:-${ROG_FWMARK:-1}}
-TABLE_ID=${3:-${ROG_TABLE:-100}}
-FAMILY=${5:-${ROG_FAMILY:-auto}}
+set -euo pipefail
 
-FAMILY=$(echo "$FAMILY" | tr '[:upper:]' '[:lower:]')
+TPROXY_PORT="${1:-${ROG_PORT:-12345}}"
+FWMARK="${2:-${ROG_FWMARK:-0x77}}"
+TABLE_ID="${3:-${ROG_TABLE:-177}}"
+FAMILY="$(echo "${5:-${ROG_FAMILY:-dual}}" | tr '[:upper:]' '[:lower:]')"
 
-CHAIN_NAME="ROG_TPROXY"
-CHAIN_NAME6="ROG_TPROXY6"
+LAN_IF="${ROG_IFACE:-$(ip -4 route show default | awk '{print $5; exit}')}"
+LAN_CIDR="${ROG_LAN_CIDR:-$(ip -4 route show dev "$LAN_IF" proto kernel scope link | awk '{print $1; exit}')}"
 
-FWMARK_HEX=$(printf "0x%x" "$FWMARK" 2>/dev/null || echo "$FWMARK")
-RULE_PATTERN="fwmark +(${FWMARK}|${FWMARK_HEX})(/0x[0-9a-fA-F]+)?\b.*lookup +${TABLE_ID}\b"
-
-echo "[rog-tproxy] Cleaning up TPROXY rules (port: $TPROXY_PORT, table: $TABLE_ID)..."
-
-# 1. Clean up IPv4
-if [ "$FAMILY" != "v6" ] && [ "$FAMILY" != "ipv6" ]; then
-    while iptables -t mangle -D PREROUTING -j "$CHAIN_NAME" 2>/dev/null; do :; done
-    iptables -t mangle -F "$CHAIN_NAME" 2>/dev/null || true
-    iptables -t mangle -X "$CHAIN_NAME" 2>/dev/null || true
-
-    # Delete the fwmark policy rule
-    while ip -4 rule show | grep -qE "$RULE_PATTERN"; do
-        ip -4 rule del fwmark "$FWMARK" table "$TABLE_ID" 2>/dev/null || break
+if [[ "$FAMILY" != "v6" && "$FAMILY" != "ipv6" ]]; then
+    while iptables -w -t mangle -D PREROUTING -i "$LAN_IF" -s "$LAN_CIDR" -j ROG_TP 2>/dev/null; do :; done
+    while iptables -w -t mangle -D PREROUTING -i lo -m mark --mark "${FWMARK}/0xff" -j ROG_TP 2>/dev/null; do :; done
+    while iptables -w -t mangle -D OUTPUT -j ROG_OUT 2>/dev/null; do :; done
+    while iptables -w -t nat -D PREROUTING -i "$LAN_IF" -s "$LAN_CIDR" -j ROG_DNS_PRE 2>/dev/null; do :; done
+    while iptables -w -t nat -D OUTPUT -j ROG_DNS_OUT 2>/dev/null; do :; done
+    while iptables -w -t nat -D POSTROUTING -j ROG_NAT 2>/dev/null; do :; done
+    for chain in ROG_TP ROG_OUT; do
+        iptables -w -t mangle -F "$chain" 2>/dev/null || true
+        iptables -w -t mangle -X "$chain" 2>/dev/null || true
     done
-
-    # If no other rules point to this table, flush the table
-    if ! ip -4 rule show | grep -qE "lookup +${TABLE_ID}\b"; then
-        ip -4 route flush table "$TABLE_ID" 2>/dev/null || true
-    fi
+    for chain in ROG_NAT ROG_DNS_PRE ROG_DNS_OUT; do
+        iptables -w -t nat -F "$chain" 2>/dev/null || true
+        iptables -w -t nat -X "$chain" 2>/dev/null || true
+    done
+    while ip -4 rule del pref "$TABLE_ID" fwmark "${FWMARK}/0xff" lookup "$TABLE_ID" 2>/dev/null; do :; done
+    ip -4 route flush table "$TABLE_ID" 2>/dev/null || true
 fi
 
-# 2. Clean up IPv6
-if [ "$FAMILY" != "v4" ] && [ "$FAMILY" != "ipv4" ]; then
-    if command -v ip6tables >/dev/null 2>&1; then
-        while ip6tables -t mangle -D PREROUTING -j "$CHAIN_NAME6" 2>/dev/null; do :; done
-        ip6tables -t mangle -F "$CHAIN_NAME6" 2>/dev/null || true
-        ip6tables -t mangle -X "$CHAIN_NAME6" 2>/dev/null || true
-    fi
-
-    if [ -f /proc/net/if_inet6 ]; then
-        while ip -6 rule show | grep -qE "$RULE_PATTERN"; do
-            ip -6 rule del fwmark "$FWMARK" table "$TABLE_ID" 2>/dev/null || break
-        done
-
-        if ! ip -6 rule show | grep -qE "lookup +${TABLE_ID}\b"; then
-            ip -6 route flush table "$TABLE_ID" 2>/dev/null || true
-        fi
-    fi
+if [[ "$FAMILY" != "v4" && "$FAMILY" != "ipv4" ]] && command -v ip6tables >/dev/null 2>&1; then
+    while ip6tables -w -t mangle -D PREROUTING -i "$LAN_IF" -j ROG6_TP 2>/dev/null; do :; done
+    while ip6tables -w -t mangle -D PREROUTING -i lo -m mark --mark "${FWMARK}/0xff" -j ROG6_TP 2>/dev/null; do :; done
+    while ip6tables -w -t mangle -D OUTPUT -j ROG6_OUT 2>/dev/null; do :; done
+    while ip6tables -w -t nat -D PREROUTING -i "$LAN_IF" -j ROG6_DNS_PRE 2>/dev/null; do :; done
+    while ip6tables -w -t nat -D OUTPUT -j ROG6_DNS_OUT 2>/dev/null; do :; done
+    for chain in ROG6_TP ROG6_OUT; do
+        ip6tables -w -t mangle -F "$chain" 2>/dev/null || true
+        ip6tables -w -t mangle -X "$chain" 2>/dev/null || true
+    done
+    for chain in ROG6_DNS_PRE ROG6_DNS_OUT; do
+        ip6tables -w -t nat -F "$chain" 2>/dev/null || true
+        ip6tables -w -t nat -X "$chain" 2>/dev/null || true
+    done
+    while ip -6 rule del pref "$TABLE_ID" fwmark "${FWMARK}/0xff" lookup "$TABLE_ID" 2>/dev/null; do :; done
+    ip -6 route flush table "$TABLE_ID" 2>/dev/null || true
 fi
-
-echo "[rog-tproxy] TPROXY cleanup completed."

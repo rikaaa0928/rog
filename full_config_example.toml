@@ -24,13 +24,15 @@ router = "main_router" # 引用下面定义的路由器
 # endpoint = "0.0.0.0:12345" # 或 "[::]:12345"
 # proto = "tproxy"
 # router = "main_router"
-# # 脚本参数：[PORT] [FWMARK] [TABLE_ID] [MODE] [FAMILY]
+# # 脚本参数：[TPROXY_PORT] [FWMARK] [TABLE_ID] [MODE] [FAMILY]
+# # scripts/tproxy-up.sh 默认自动探测默认路由网卡 (ROG_IFACE)、本机 IPv4 (ROG_IPV4)、局域网 CIDR (ROG_LAN_CIDR) 与 IPv6 前缀，全机器通用。
+# # 如需自定义可通过环境变量覆盖：ROG_IFACE / ROG_IPV4 / ROG_LAN_CIDR / ROG_DNS_PORT / ROG_USER / ROG_GROUP / ROG_BYPASS_IPV4
 # # 单栈 IPv4（0.0.0.0）示例：
-# up = "scripts/tproxy-up.sh 12345 1 100 tcp+udp v4"
-# down = "scripts/tproxy-down.sh 12345 1 100 tcp+udp v4"
+# up = "scripts/tproxy-up.sh 12345 0x77 177 tcp+udp v4"
+# down = "scripts/tproxy-down.sh 12345 0x77 177 tcp+udp v4"
 # # 双栈 IPv4+IPv6（[::]）示例：
-# # up = "scripts/tproxy-up.sh 12345 1 100 tcp+udp dual"
-# # down = "scripts/tproxy-down.sh 12345 1 100 tcp+udp dual"
+# # up = "scripts/tproxy-up.sh 12345 0x77 177 tcp+udp dual"
+# # down = "scripts/tproxy-down.sh 12345 0x77 177 tcp+udp dual"
 # [listener.options]
 # mode = "tcp+udp" # 支持 "tcp+udp"（默认）、"tcp"、"udp"
 # udp_idle_timeout_secs = 60 # UDP 会话空闲清理时长（秒）

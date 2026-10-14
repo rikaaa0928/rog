@@ -79,6 +79,14 @@ proto = "tcp"
 - `proto`: 使用的协议（如 `"tcp"`, `"http"`, `"socks5"`, `"htss5"`, `"pb_tcp"`, `"grpc"`, `"rev_grpc"`, `"tproxy"`）。
 - `router`: 此监听器使用的路由器的名称。
 - `up` / `down`: (可选) 监听器启动后与停止前执行的宿主命令钩子（常用于 `tproxy` 自动装载和卸载 `iptables`/`ip6tables`/策略路由）。
+  - 仓库 `scripts/tproxy-up.sh` 与 `scripts/tproxy-down.sh` 默认**全机器通用自动探测**：自动从默认路由探测主网卡（`ROG_IFACE`）、本机 IPv4（`ROG_IPV4`）、局域网网段（`ROG_LAN_CIDR`）以及网卡 IPv6 RA 前缀，并自动设置 `sysctl` 转发参数、策略路由、双栈 `mangle` TPROXY 链、UDP `:53` 透明重定向与 `MASQUERADE`。
+  - 如需在特殊网络拓扑下自定义，可通过位置参数 `[TPROXY_PORT] [FWMARK] [TABLE_ID] [MODE] [FAMILY]` 或环境变量覆盖：
+    - `ROG_IFACE`：局域网网卡名（默认自动取默认路由网卡，如 `eth0`）
+    - `ROG_IPV4`：旁网关本机 IPv4 地址（默认自动取 `ROG_IFACE` 全局 IPv4）
+    - `ROG_LAN_CIDR`：局域网网段 CIDR（默认自动取 `ROG_IFACE` 直连路由网段）
+    - `ROG_DNS_PORT`：透明劫持 UDP 53 到的本地 DNS 端口（默认 `53`，设为 `0` 关闭 DNS 端口劫持）
+    - `ROG_USER` / `ROG_GROUP`：`OUTPUT` 链直连豁免的服务运行用户与组（默认 `rog`，防止回环死循环）
+    - `ROG_BYPASS_IPV4`：额外需要直连绕过 TPROXY 的 IPv4 CIDR 列表（空格分隔，可选）
 - `options`: 可选协议参数。
   - `tproxy` 支持 `mode`（`"tcp+udp"` 默认、`"tcp"`、`"udp"`）、`udp_idle_timeout_secs`、`udp_max_senders`。
   - `grpc`/`rev_grpc` 支持 `keep_alive`、`keep_alive_interval_secs`、`keep_alive_timeout_secs`、`keep_alive_while_idle`、`connect_timeout_secs`、`tcp_nodelay`、`tcp_keepalive_secs`、`tcp_keepalive_interval_secs`、`tcp_keepalive_retries`、`initial_stream_window_size`、`initial_connection_window_size`、`stream_channel_size`、`channel_buffer_size`、`max_decoding_message_size`、`max_encoding_message_size`、`max_concurrent_streams`、`max_frame_size`、`concurrency_limit`、`concurrency_limit_per_connection` 等。

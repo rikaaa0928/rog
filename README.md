@@ -79,6 +79,14 @@ proto = "tcp"
 - `proto`: The protocol to use (`"tcp"`, `"http"`, `"socks5"`, `"htss5"`, `"pb_tcp"`, `"grpc"`, `"rev_grpc"`, `"tproxy"`).
 - `router`: The name of the router to use for this listener.
 - `up` / `down`: (Optional) Host commands executed after listener startup and before shutdown (commonly used with `tproxy` to load/unload `iptables`/`ip6tables` and policy routing rules).
+  - `scripts/tproxy-up.sh` and `scripts/tproxy-down.sh` are **universal across machines by default**: they auto-detect the primary LAN interface (`ROG_IFACE`), local IPv4 address (`ROG_IPV4`), local IPv4 subnet (`ROG_LAN_CIDR`), and on-link IPv6 RA prefixes, and configure `sysctl`, policy routing, dual-stack `mangle` TPROXY chains, UDP `:53` DNS redirection, and `MASQUERADE`.
+  - Optional positional arguments (`[TPROXY_PORT] [FWMARK] [TABLE_ID] [MODE] [FAMILY]`) or environment variables can be used to override defaults:
+    - `ROG_IFACE`: LAN interface name (auto-detected from default route)
+    - `ROG_IPV4`: Local IPv4 address on `ROG_IFACE` (auto-detected)
+    - `ROG_LAN_CIDR`: Local IPv4 subnet CIDR on `ROG_IFACE` (auto-detected)
+    - `ROG_DNS_PORT`: Local UDP DNS port to redirect port 53 to (default `53`, `0` to disable)
+    - `ROG_USER` / `ROG_GROUP`: Service user/group bypassed in `OUTPUT` chains (default `rog`)
+    - `ROG_BYPASS_IPV4`: Space-separated IPv4 CIDRs to bypass TPROXY (optional)
 - `options`: Optional protocol parameters.
   - `tproxy` supports `mode` (`"tcp+udp"` by default, `"tcp"`, `"udp"`), `udp_idle_timeout_secs`, and `udp_max_senders`.
   - `grpc`/`rev_grpc` support `keep_alive`, `keep_alive_interval_secs`, `keep_alive_timeout_secs`, `keep_alive_while_idle`, `connect_timeout_secs`, `tcp_nodelay`, `tcp_keepalive_secs`, `tcp_keepalive_interval_secs`, `tcp_keepalive_retries`, `initial_stream_window_size`, `initial_connection_window_size`, `stream_channel_size`, `channel_buffer_size`, `max_decoding_message_size`, `max_encoding_message_size`, `max_concurrent_streams`, `max_frame_size`, `concurrency_limit`, `concurrency_limit_per_connection`, and related gRPC transport settings.
