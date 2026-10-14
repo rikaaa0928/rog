@@ -173,6 +173,146 @@ endpoint = "127.0.0.1:9050" # 替换为你的上游 SOCKS5 代理
 
 本项目根据 [LICENSE NAME] 许可证获得许可。
 
+## TPROXY 透明代理与旁网关部署指南（Linux 双栈）
+
+`rog` 支持在 Linux 上通过 **`TPROXY` 入站 + 独立 `UDP DNS` 服务** 构建高性能透明代理或局域网旁路由（旁网关），同时支持 **IPv4 与 IPv6 双栈**、**TCP 与 UDP 全流量透明拦截**。
+
+### 1. 工作原理
+
+相比传统的 TUN + Fake-IP 方案，`rog` 的 `TPROXY + 真实 DNS` 模式无需创建虚拟网卡，也不会向客户端返回虚假的 `198.18.x.x` IP：
+1. **DNS 查询与映射学习**：客户端将 DNS 指向旁网关（或被 `nat` 表 53 端口规则透明重定向到 `rog` 的 `[::]:53`）。`rog` 根据 `router` 中的域名规则分流查询上游 DNS，将**真实公网 IP（A / AAAA）**返回给客户端，同时在内存 `IpDomainTable` 中记录 `真实目标 IP -> 域名` 的映射关系。
+2. **TCP / UDP 透明拦截与域名反查**：客户端向该真实公网 IP 发起 TCP 或 UDP（如 QUIC / NTP）连接时，Linux 内核 `TPROXY` 在不修改数据包源/目地址的情况下将流量转交 `rog`（`[::]:12345`）。`rog` 通过目标 IP 反查 `IpDomainTable` 还原出原始域名，从而精确执行基于域名的分流规则。
+3. **跨栈代理转发（IPv6 客户端 $\rightarrow$ IPv4 远端节点）**：当客户端通过 IPv6 访问某域名，而命中的远端代理服务器仅具备 IPv4 出站能力时，`rog` 会自动将连接目标从 IPv6 字面量还原为学习到的域名发往远端代理节点，由远端节点自行解析 IPv4 连接目标站点。
+
+### 2. 完整旁网关配置示例 (`/etc/rog/config.toml`)
+
+```toml
+[dns]
+endpoint = "[::]:53"
+router = "main"
+default_servers = ["1.1.1.1:53", "8.8.8.8:53"]
+disable_aaaa = false # 如不希望局域网使用 IPv6，可设为 true 屏蔽 AAAA 记录
+upstream_timeout_ms = 2000
+request_timeout_ms = 8000
+
+[[listener]]
+name = "tproxy_inbound"
+endpoint = "[::]:12345"
+proto = "tproxy"
+router = "main"
+# 也可直接通过 listener 的 up / down 钩子调用脚本（或由 systemd ExecStartPre/ExecStopPost 管理）：
+# up = "/etc/rog/tproxy-up.sh"
+# down = "/etc/rog/tproxy-down.sh"
+[listener.options]
+mode = "tcp+udp"
+udp_idle_timeout_secs = 60
+udp_max_senders = 512
+
+[[connector]]
+name = "Proxy"
+proto = "grpc"
+endpoint = "https://proxy.example.com:443"
+pw = "your_password"
+# 未配置 dns 和 bootstrap_dns 时，自动回退使用 [dns].default_servers
+[connector.options]
+connect_timeout_secs = 5
+keep_alive = true
+keep_alive_interval_secs = 30
+keep_alive_timeout_secs = 20
+keep_alive_while_idle = true
+tcp_keepalive_secs = 30
+
+[[connector]]
+name = "Direct"
+proto = "tcp"
+dns = ["114.114.114.114:53", "223.5.5.5:53"] # 国内直连出口指定国内 DNS
+
+[[data]]
+name = "lan_and_cn_cidr"
+format = "cidr"
+data = """
+127.0.0.0/8
+10.0.0.0/8
+172.16.0.0/12
+192.168.0.0/16
+::1/128
+fc00::/7
+fe80::/10
+"""
+
+[[data]]
+name = "cn_domains"
+format = "domain-suffix"
+url = "https://example.com/cn-domain-suffix.txt#interval=3600"
+
+[[router]]
+name = "main"
+default = "Proxy"
+
+[[router.route_rules]]
+name = "lan_and_cn_cidr"
+select = "Direct"
+exclude = []
+
+[[router.route_rules]]
+name = "cn_domains"
+select = "Direct"
+exclude = []
+```
+
+### 3. 部署步骤与 Systemd 服务配置
+
+由于 `scripts/tproxy-up.sh` 同时拦截了**局域网转发流量 (`PREROUTING`)** 和 **旁网关本机自身发出的流量 (`OUTPUT`)**，为了防止 `rog` 自己发出的代理连接再次被 `OUTPUT` 链拦截造成死循环，**必须使用独立的系统用户/组（默认 `rog:rog`）运行 `rog`**，脚本会自动通过 `-m owner --uid-owner rog` 和 `--gid-owner rog` 放行 `rog` 自身的出站流量。
+
+```bash
+# 1. 创建专用系统用户和配置目录（允许当前登录用户直接编辑配置文件）
+ADMIN_USER="$(id -un)"
+sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin rog || true
+sudo install -d -o "$ADMIN_USER" -g rog -m 2775 /etc/rog
+
+# 2. 拷贝二进制、配置与 TPROXY 脚本
+sudo install -o root -g root -m 0755 target/release/rog /usr/local/bin/rog
+install -m 0775 scripts/tproxy-up.sh /etc/rog/tproxy-up.sh
+install -m 0775 scripts/tproxy-down.sh /etc/rog/tproxy-down.sh
+```
+
+创建 `/etc/systemd/system/rog.service`：
+
+```ini
+[Unit]
+Description=Rog TPROXY and UDP DNS Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rog
+Group=rog
+Environment=ROG_CONFIG=/etc/rog/config.toml
+Environment=PROXY_OBSERVE_LISTEN=0.0.0.0:19090
+Environment=PROXY_OBSERVE_TOKEN=token
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecStartPre=+/etc/rog/tproxy-up.sh
+ExecStart=/usr/local/bin/rog
+ExecStopPost=+/etc/rog/tproxy-down.sh
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+*(提示：如果旁网关本机上还运行了 `cloudflared` 等需要直连绕过 TPROXY 的服务，只需在对应服务的 systemd drop-in 中加上 `Group=rog`，即可自动命中 `--gid-owner` 规则直连放行。)*
+
+### 4. 局域网客户端接入方式
+
+- **IPv4 设置**：将客户端（或主路由 DHCP 下发）的 **默认网关（Router）** 和 **DNS 服务器** 均指向旁网关的 IPv4 地址（例如 `192.168.0.71`）。
+- **IPv6 设置**：
+  - **方式 A（开启完整 IPv6 代理）**：将客户端的 **IPv6 路由器（Router）** 指向旁网关网卡的 `fe80::...` 链路本地地址（`ip -6 addr show` 中 `scope link` 的地址，永久不变）。
+  - **方式 B（仅配 IPv4 网关、不配 IPv6 网关）**：若局域网主路由开启了 IPv6 RA 广播，而你不希望在客户端手动填写 IPv6 网关，只需在 `/etc/rog/config.toml` 的 `[dns]` 中设置 `disable_aaaa = true`，让客户端所有域名请求统一通过 IPv4 经过旁网关分流。
+
 ## 独立 UDP DNS 服务
 
 在配置中增加 `[dns]` 即可启动独立 UDP DNS 服务（支持监听双栈 `"[::]:53"`），客户端直接把 DNS 指向 rog 所在机器。DNS 复用 `dns.router` 引用的现有业务规则，跳过纯 IP 规则并禁止 `domain_to_ip`；每条查询按域名匹配规则选择上游 DNS：

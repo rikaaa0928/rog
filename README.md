@@ -165,6 +165,141 @@ Now, you can configure your applications to use `localhost:1080` as a SOCKS5 pro
 
 **Note:** Replace `127.0.0.1:9050` with the actual address of your upstream SOCKS5 proxy server.
 
+## TPROXY Transparent Proxy & Side-Gateway Guide (Linux Dual-Stack)
+
+`rog` supports building a Linux transparent proxy or LAN side-gateway by combining the **`tproxy` listener** with the **built-in `[dns]` UDP server**, supporting **IPv4/IPv6 dual-stack** and **full TCP/UDP interception**.
+
+### 1. How It Works
+
+Unlike TUN + Fake-IP setups, `rog`'s `TPROXY + Real DNS` mode requires no virtual TUN device and returns real public IP addresses to clients:
+1. **DNS Routing & IP-Domain Learning**: Clients point their DNS to the gateway (or have port 53 transparently redirected by `nat` rules to `rog`'s `[::]:53`). `rog` routes each DNS query using `router` domain rules, returns the real `A`/`AAAA` records to the client, and records `target_ip -> domain` in `IpDomainTable`.
+2. **Transparent TCP/UDP Interception**: When clients connect to those real IPs over TCP or UDP (e.g., QUIC, NTP), Linux `TPROXY` delivers the traffic to `rog` (`[::]:12345`) while preserving the original destination IP/port. `rog` looks up the destination IP in `IpDomainTable` to recover the domain name and evaluate domain routing rules.
+3. **Cross-Stack Proxy Forwarding (IPv6 Client $\rightarrow$ IPv4-Only Proxy Outbound)**: When an IPv6 client connects to a learned domain via a non-direct proxy connector (such as a remote VPS with IPv4-only egress), `rog` automatically rewrites the destination back to `domain:port` so the remote proxy node resolves and connects over IPv4.
+
+### 2. Complete Side-Gateway Configuration Example (`/etc/rog/config.toml`)
+
+```toml
+[dns]
+endpoint = "[::]:53"
+router = "main"
+default_servers = ["1.1.1.1:53", "8.8.8.8:53"]
+disable_aaaa = false # Set to true to strip AAAA responses if clients only configure an IPv4 gateway
+upstream_timeout_ms = 2000
+request_timeout_ms = 8000
+
+[[listener]]
+name = "tproxy_inbound"
+endpoint = "[::]:12345"
+proto = "tproxy"
+router = "main"
+# Can be managed via listener up/down hooks or systemd ExecStartPre/ExecStopPost:
+# up = "/etc/rog/tproxy-up.sh"
+# down = "/etc/rog/tproxy-down.sh"
+[listener.options]
+mode = "tcp+udp"
+udp_idle_timeout_secs = 60
+udp_max_senders = 512
+
+[[connector]]
+name = "Proxy"
+proto = "grpc"
+endpoint = "https://proxy.example.com:443"
+pw = "your_password"
+# Inherits dns and bootstrap_dns from [dns].default_servers automatically
+[connector.options]
+connect_timeout_secs = 5
+keep_alive = true
+keep_alive_interval_secs = 30
+keep_alive_timeout_secs = 20
+keep_alive_while_idle = true
+tcp_keepalive_secs = 30
+
+[[connector]]
+name = "Direct"
+proto = "tcp"
+dns = ["114.114.114.114:53", "223.5.5.5:53"]
+
+[[data]]
+name = "lan_and_cn_cidr"
+format = "cidr"
+data = """
+127.0.0.0/8
+10.0.0.0/8
+172.16.0.0/12
+192.168.0.0/16
+::1/128
+fc00::/7
+fe80::/10
+"""
+
+[[data]]
+name = "cn_domains"
+format = "domain-suffix"
+url = "https://example.com/cn-domain-suffix.txt#interval=3600"
+
+[[router]]
+name = "main"
+default = "Proxy"
+
+[[router.route_rules]]
+name = "lan_and_cn_cidr"
+select = "Direct"
+exclude = []
+
+[[router.route_rules]]
+name = "cn_domains"
+select = "Direct"
+exclude = []
+```
+
+### 3. Systemd Deployment (`rog.service`)
+
+Because `scripts/tproxy-up.sh` intercepts both forwarded LAN traffic (`PREROUTING`) and local host traffic (`OUTPUT`), **run `rog` under a dedicated user/group (`rog:rog`)** so `ROG_OUT` can bypass `rog`'s own outbound sockets via `-m owner --uid-owner` / `--gid-owner` and prevent routing loops:
+
+```bash
+ADMIN_USER="$(id -un)"
+sudo useradd --system --user-group --no-create-home --shell /usr/sbin/nologin rog || true
+sudo install -d -o "$ADMIN_USER" -g rog -m 2775 /etc/rog
+sudo install -o root -g root -m 0755 target/release/rog /usr/local/bin/rog
+install -m 0775 scripts/tproxy-up.sh /etc/rog/tproxy-up.sh
+install -m 0775 scripts/tproxy-down.sh /etc/rog/tproxy-down.sh
+```
+
+Create `/etc/systemd/system/rog.service`:
+
+```ini
+[Unit]
+Description=Rog TPROXY and UDP DNS Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rog
+Group=rog
+Environment=ROG_CONFIG=/etc/rog/config.toml
+Environment=PROXY_OBSERVE_LISTEN=0.0.0.0:19090
+Environment=PROXY_OBSERVE_TOKEN=token
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecStartPre=+/etc/rog/tproxy-up.sh
+ExecStart=/usr/local/bin/rog
+ExecStopPost=+/etc/rog/tproxy-down.sh
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 4. LAN Client Configuration
+
+- **IPv4**: Point the client's **Default Gateway (Router)** and **DNS Server** to the side-gateway's IPv4 address.
+- **IPv6**:
+  - **Option A (Full Dual-Stack IPv6 Proxy)**: Point the client's **IPv6 Router** to the side-gateway's link-local address (`fe80::...` under `scope link` on the LAN interface).
+  - **Option B (IPv4 Gateway Only)**: Set `disable_aaaa = true` under `[dns]` so clients only receive `A` records and route all domain traffic through the IPv4 side-gateway.
+
 ## Independent UDP DNS Service
 
 Add a `[dns]` section to enable the built-in UDP DNS server (supports dual-stack `"[::]:53"`). It reuses the routing rules from `dns.router` (skipping IP-only rules) to route DNS queries and learns real IP (A/AAAA) → domain mappings in `IpDomainTable`:

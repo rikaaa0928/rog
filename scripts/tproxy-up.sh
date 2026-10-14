@@ -29,9 +29,17 @@ TABLE_ID="${3:-${ROG_TABLE:-177}}"
 MODE="$(echo "${4:-${ROG_MODE:-tcp+udp}}" | tr '[:upper:]' '[:lower:]')"
 FAMILY="$(echo "${5:-${ROG_FAMILY:-dual}}" | tr '[:upper:]' '[:lower:]')"
 
-LAN_IF="${ROG_IFACE:-$(ip -4 route show default | awk '{print $5; exit}')}"
-SELF_IPV4="${ROG_IPV4:-$(ip -4 -o addr show dev "$LAN_IF" scope global | awk '{split($4,a,"/"); print a[1]; exit}')}"
-LAN_CIDR="${ROG_LAN_CIDR:-$(ip -4 route show dev "$LAN_IF" proto kernel scope link | awk '{print $1; exit}')}"
+for _ in {1..10}; do
+    LAN_IF="${ROG_IFACE:-$(ip -4 route show default | awk '{print $5; exit}')}"
+    [[ -n "$LAN_IF" ]] && break
+    sleep 0.5
+done
+for _ in {1..10}; do
+    SELF_IPV4="${ROG_IPV4:-$(ip -4 -o addr show dev "$LAN_IF" scope global | awk '{split($4,a,"/"); print a[1]; exit}')}"
+    LAN_CIDR="${ROG_LAN_CIDR:-$(ip -4 route show dev "$LAN_IF" proto kernel scope link | awk '{print $1; exit}')}"
+    [[ -n "$SELF_IPV4" && -n "$LAN_CIDR" ]] && break
+    sleep 0.5
+done
 DNS_PORT="${ROG_DNS_PORT:-53}"
 ROG_USER="${ROG_USER:-rog}"
 ROG_GROUP="${ROG_GROUP:-rog}"
@@ -173,6 +181,10 @@ if [[ "$DO_V6" == true ]] && command -v ip6tables >/dev/null 2>&1; then
         [[ "$DNS_PORT" != "0" ]] && ip6tables -w -t mangle -A "$chain" -p udp --dport 53 -j RETURN
         for network in ::/128 ::1/128 fc00::/7 fe80::/10 ff00::/8; do
             ip6tables -w -t mangle -A "$chain" -d "$network" -j RETURN
+        done
+        for _ in {1..10}; do
+            ip -6 route show dev "$LAN_IF" | grep -q '::/' && break
+            sleep 0.5
         done
         for prefix in $(ip -6 route show dev "$LAN_IF" | awk '/::\// && !/^default/ && !/^fe80:/ {print $1}' | sort -u); do
             ip6tables -w -t mangle -A "$chain" -d "$prefix" -j RETURN
