@@ -26,7 +26,7 @@ regex = "1.11.1"
 aho-corasick = "1.1"
 ipnetwork = "0.21.1"
 hickory-proto = "0.25.2"
-hickory-resolver = { version = "0.25.2", features = ["https-ring", "webpki-roots"] }
+hickory-resolver = "0.25.2"
 #hickory-client = { version = "0.24.2", features = ["dns-over-rustls", "dns-over-https-rustls", "dns-over-https"] }
 uuid = { version = "1.16.0", features = ["v4", "serde"] }
 #tokio-stream = "0.1.17"

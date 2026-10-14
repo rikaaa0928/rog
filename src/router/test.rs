@@ -25,17 +25,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resolve_ip_with_doh() {
-        let resolver = Resolver::new();
-        let dns_config = "doh://cloudflare-dns.com/dns-query";
-        let result = resolver
-            .resolve_ip_with_doh("www.example.com", dns_config)
-            .await;
-        assert!(result.is_ok());
-        assert!(!result.unwrap().is_empty());
-    }
-
-    #[tokio::test]
     async fn test_cache_expiration() {
         let resolver = Resolver::new();
         let dns_config = "8.8.8.8:53";
