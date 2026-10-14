@@ -12,7 +12,10 @@ disable_aaaa = false
 [[connector]]
 name = "direct"
 proto = "tcp"
-dns = ["1.1.1.1:53"]
+dns = ["114.114.114.114:53", "223.5.5.5:53"]
+# Notes on DNS fallback order:
+# - connector.dns falls back to dns.default_servers when omitted.
+# - connector.options.bootstrap_dns falls back to connector.dns, then dns.default_servers when omitted.
 
 [[data]]
 name = "selected_domains"

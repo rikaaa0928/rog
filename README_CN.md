@@ -4,12 +4,12 @@
 
 ## 特性
 
-- **多协议支持:** 支持多种协议，包括 TCP、HTTP、SOCKS5 和 gRPC。
-- **可配置路由:** 允许基于各种标准进行灵活的路由规则配置。
+- **多协议支持:** 支持多种入站/出站协议，包括 TCP、HTTP、SOCKS5、HTSS5、PB-TCP、gRPC、反向 gRPC (`rev_grpc`) 以及 Linux `TPROXY`（支持 IPv4/IPv6 双栈透明代理）。
+- **可配置路由:** 支持基于 CIDR、正则、域名后缀、域名关键字及远端动态规则集的灵活分流。
 - **异步架构:** 使用 Tokio 构建，实现高性能和非阻塞操作。
 - **集中式配置:** 通过 TOML 文件管理配置。
 - **内存管理:** 可配置全局缓冲区大小，支持基于百分比的限制，有效控制内存使用。
-- **智能 DNS:** 支持为每条路由规则单独配置 DNS 服务器。
+- **独立 UDP DNS 与域名映射学习:** 内置按路由分流的双栈 UDP DNS 服务，自动学习真实 IP（A/AAAA）→ 域名映射供 TPROXY 透明分流与跨栈代理转发使用。
 
 ## 入门指南
 
@@ -74,33 +74,36 @@ proto = "tcp"
 
 #### `listener`
 
-- `endpoint`: 监听的地址和端口。
+- `endpoint`: 监听的地址和端口（如 `"0.0.0.0:1080"` 或双栈 `"[::]:12345"`）。
 - `name`: 监听器的唯一名称。
-- `proto`: 使用的协议 (例如, "tcp", "http", "socks5", "grpc")。
+- `proto`: 使用的协议（如 `"tcp"`, `"http"`, `"socks5"`, `"htss5"`, `"pb_tcp"`, `"grpc"`, `"rev_grpc"`, `"tproxy"`）。
 - `router`: 此监听器使用的路由器的名称。
-- `options`: 可选协议参数。`grpc`/`rev_grpc` 支持 `keep_alive`、`keep_alive_interval_secs`、`keep_alive_timeout_secs`、`keep_alive_while_idle`、`connect_timeout_secs`、`tcp_nodelay`、`tcp_keepalive_secs`、`tcp_keepalive_interval_secs`、`tcp_keepalive_retries`、`initial_stream_window_size`、`initial_connection_window_size`、`stream_channel_size`、`channel_buffer_size`、`max_decoding_message_size`、`max_encoding_message_size`、`max_concurrent_streams`、`max_frame_size`、`concurrency_limit`、`concurrency_limit_per_connection` 等。
+- `up` / `down`: (可选) 监听器启动后与停止前执行的宿主命令钩子（常用于 `tproxy` 自动装载和卸载 `iptables`/`ip6tables`/策略路由）。
+- `options`: 可选协议参数。
+  - `tproxy` 支持 `mode`（`"tcp+udp"` 默认、`"tcp"`、`"udp"`）、`udp_idle_timeout_secs`、`udp_max_senders`。
+  - `grpc`/`rev_grpc` 支持 `keep_alive`、`keep_alive_interval_secs`、`keep_alive_timeout_secs`、`keep_alive_while_idle`、`connect_timeout_secs`、`tcp_nodelay`、`tcp_keepalive_secs`、`tcp_keepalive_interval_secs`、`tcp_keepalive_retries`、`initial_stream_window_size`、`initial_connection_window_size`、`stream_channel_size`、`channel_buffer_size`、`max_decoding_message_size`、`max_encoding_message_size`、`max_concurrent_streams`、`max_frame_size`、`concurrency_limit`、`concurrency_limit_per_connection` 等。
 
 #### `router`
 
 - `name`: 路由器的唯一名称。
-- `default`: 要使用的默认路由。
+- `default`: 要使用的默认路由（connector 名称）。
 - `route_rules`: 路由规则列表。
 
 #### `router.route_rules`
 
-- `name`: 规则的唯一名称。
-- `select`: 要匹配的模式。
-- `exclude`: 要排除的模式列表。
-- `domain_to_ip`: 是否将域名解析为 IP 地址。
-- `dns`: (可选) 此规则专用的 DNS 服务器 (例如, "8.8.8.8:53")。
+- `name`: 引用的 `data` 数据源名称。
+- `select`: 命中后选择的 `connector` 名称。
+- `exclude`: 要排除的数据源名称列表。
+- `domain_to_ip`: (可选) 是否将域名解析为 IP 地址后再匹配 CIDR 规则。
+- `dns`: (可选) `domain_to_ip` 解析时专用的 UDP DNS 服务器 (例如 `"223.5.5.5:53"`)。
 
 #### `data`
 
 - `name`: 数据源的唯一名称。
-- `url`: 用于加载数据的可选 URL。
-- `format`: 数据格式。支持 "cidr", "regex", "lan", "domain-suffix" (或 "suffix", "domain_suffix"), "domain-keyword" (或 "keyword", "domain_keyword")。
-- `interval`: (可选) 定时刷新间隔（秒），仅在配置了 `url` 时生效，默认 3600 秒。加载完全非阻塞，失败自动保持旧数据重试。
-- `data`: 内联数据。
+- `url`: 用于加载数据的可选 URL（支持 `http://`、`https://`、`file://`，并支持在 URL 末尾附加 `#interval=3600` 指定刷新间隔秒数）。
+- `format`: 数据格式。支持 `"cidr"`, `"regex"`, `"lan"`, `"domain-suffix"` (或 `"suffix"`, `"domain_suffix"`), `"domain-keyword"` (或 `"keyword"`, `"domain_keyword"`)。
+- `interval`: (可选) 定时刷新间隔（秒），仅在配置了 `url` 时生效，默认 3600 秒（若 `url` 中带有 `#interval=<秒>` 则优先使用 URL 中的值）。加载完全非阻塞，失败自动保持旧数据重试。
+- `data`: 内联数据（多行字符串）。
 
 #### `connector`
 
@@ -108,8 +111,11 @@ proto = "tcp"
 - `name`: 连接器的唯一名称。
 - `user`: 用于身份验证的可选用户名。
 - `pw`: 用于身份验证的可选密码。
-- `proto`: 连接器的协议 (例如, "tcp", "grpc")。
-- `options`: 可选协议参数。`grpc` 支持与 listener 相同的 gRPC transport 参数；常用推荐值见 `full_config_example.toml`。
+- `proto`: 连接器的协议（如 `"tcp"`, `"socks5"`, `"http"`, `"htss5"`, `"pb_tcp"`, `"grpc"`, `"rev_grpc"`, `"block"`）。
+- `dns`: (可选) 该出口关联的上游 UDP DNS 列表（如 `["114.114.114.114:53", "223.5.5.5:53"]`）。未配置时默认回退使用 `[dns]` 中的 `default_servers`。
+- `options`: 可选协议参数。
+  - `bootstrap_dns`: (可选) 代理节点域名自身的启动解析 DNS 列表。未配置时优先回退使用该 connector 的 `dns`，若仍未配置则回退使用 `[dns]` 中的 `default_servers`。
+  - `grpc` 支持与 listener 相同的 gRPC transport 参数；常用推荐值见 `full_config_example.toml`。
 
 ## 用法
 
@@ -161,11 +167,17 @@ endpoint = "127.0.0.1:9050" # 替换为你的上游 SOCKS5 代理
 
 ## 独立 UDP DNS 服务
 
-在配置中增加 `[dns]` 即可启动独立 DNS 服务，客户端直接把 DNS 指向 rog 所在机器。DNS 复用 `dns.router` 引用的现有业务规则，跳过 IP 规则并禁止 `domain_to_ip`；每条查询独立选择 outbound。命中规则优先使用该 connector 的 `dns` 列表，否则使用 `dns.default_servers`。未命中时使用业务默认出口和默认 DNS 列表。
+在配置中增加 `[dns]` 即可启动独立 UDP DNS 服务（支持监听双栈 `"[::]:53"`），客户端直接把 DNS 指向 rog 所在机器。DNS 复用 `dns.router` 引用的现有业务规则，跳过纯 IP 规则并禁止 `domain_to_ip`；每条查询按域名匹配规则选择上游 DNS：
+- 当命中的 connector 配置了专属 `dns`（且不同于 `dns.default_servers`，如国内直连 `Direct` 配置 `["114.114.114.114:53", "223.5.5.5:53"]`）时，通过该 connector 查询其专属 DNS；
+- 当命中的代理 connector 未配置专属 `dns`（或与 `dns.default_servers` 相同）时，默认复用路由器 `default` 出口查询 `dns.default_servers`。
+- 支持配置 `disable_aaaa = true` 屏蔽 `AAAA` 记录（直接返回空 `NOERROR` 响应），默认为 `false`。
 
-参考 `dns_config_example.toml` 和 `docs/design-udp-dns-routing.md`。本机示例监听 `127.0.0.1:5353`，可使用 `dig @127.0.0.1 -p 5353 example.com` 验证；系统 DNS 通常需要监听 53 端口。TPROXY 和 DNS 必须在同一进程并使用同一个 router，才能共享按客户端隔离的真实 IP→域名映射。
+参考 `dns_config_example.toml` 和 `full_config_example.toml`。本机测试示例监听 `127.0.0.1:5353`，可使用 `dig @127.0.0.1 -p 5353 example.com` 验证；生产环境通常监听 `"[::]:53"`。TPROXY 和 DNS 在同一进程使用同一个 `router` 时，会自动共享真實 IP（IPv4/IPv6）→ 域名映射表：
+- TPROXY 收到客户端连接后，自动根据目标 IP 反查已学习的域名进行域名规则分流；
+- 当客户端发起 IPv6 连接且命中的代理出口为非直连节点（如仅支持 IPv4 出站的远端代理服务器）时，自动将目标 IPv6 地址还原为学习到的域名发往远端代理节点解析连接。
 
-首版仅支持 UDP DNS、IPv4 字面上游地址；返回 AAAA 记录不受此限制。TCP/53、DoH/DoT、响应缓存与 FakeDNS 未实现。代理 DNS 出口使用固定 IP，或在 `[connector.options]` 配置 `bootstrap_dns = ["4.2.2.1:53", "1.1.1.1:53"]`。节点域名通过这些服务器 direct 解析，绕过系统 DNS 和业务 DNS 路由，gRPC 保留域名 TLS/SNI。
+代理节点域名自身的启动解析（`bootstrap_dns`）按以下优先级自动回退，无需重复配置：
+`connector.options.bootstrap_dns` $\rightarrow$ `connector.dns` $\rightarrow$ `dns.default_servers`。节点域名通过这些服务器直连解析，绕过系统 DNS 和业务 DNS 路由，gRPC 保留域名 TLS/SNI。
 
 ## DNS 映射观测
 

@@ -1,5 +1,14 @@
 # 完整的项目配置样例
 
+# 独立 UDP DNS 服务配置（可选，常与 TPROXY 配合使用）
+# [dns]
+# endpoint = "[::]:53" # 支持 IPv4/IPv6 双栈监听
+# router = "main_router" # 复用下面定义的路由器规则进行 DNS 分流与 IP->域名学习
+# default_servers = ["1.1.1.1:53", "8.8.8.8:53"] # 默认上游 UDP DNS（未被 connector.dns 覆盖时使用）
+# disable_aaaa = false # 是否屏蔽 AAAA 查询（返回空 NOERROR）
+# upstream_timeout_ms = 2000
+# request_timeout_ms = 6000
+
 # 监听器配置
 [[listener]]
 name = "socks5_inbound"
@@ -28,15 +37,19 @@ router = "main_router" # 引用下面定义的路由器
 # udp_max_senders = 512 # 伪装回包套接字 LRU 缓存容量上限
 
 # 连接器配置
+# 注：当启用了 [dns] 时：
+# - connector.dns 未配置时自动回退使用 dns.default_servers；
+# - connector.options.bootstrap_dns 未配置时优先回退使用 connector.dns，其次回退使用 dns.default_servers。
 [[connector]]
 name = "direct"
 proto = "tcp"
+dns = ["114.114.114.114:53", "223.5.5.5:53"] # 国内直连出口可单独指定国内 DNS
 # endpoint = "example.com:80" # 可选，如果需要固定连接到某个端点
 
 [[connector]]
 name = "proxy_outbound"
 proto = "socks5"
-endpoint = "127.0.0.1:1081" # 代理服务器地址
+endpoint = "127.0.0.1:1081" # 代理服务器地址（未指定 dns 时自动继承 dns.default_servers）
 
 # gRPC / rev_grpc 推荐传输配置，可放在 proto = "grpc" 的 listener/connector
 # 或 reverse_server.options / proto = "rev_grpc" 的 listener 上。
@@ -84,11 +97,11 @@ data = """
 .*\\.twitter\\.com
 """
 
-# 域名后缀匹配示例（支持从 http/https url 或内嵌数据加载）
+# 域名后缀匹配示例（支持从 http/https/file url 或内嵌数据加载）
 [[data]]
 name = "custom_domain_suffixes"
 format = "domain-suffix" # 可选: "domain-suffix", "domain_suffix", "suffix"
-# url = "http://example.com/suffix.txt"
+# url = "http://example.com/suffix.txt#interval=3600" # 支持通过 #interval=秒数 或下方 interval 字段指定刷新间隔
 # interval = 3600 # 可选：定期刷新间隔秒数（默认 3600 秒，完全非阻塞后台定时更新）
 data = """
 google.com
