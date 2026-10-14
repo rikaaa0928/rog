@@ -11,6 +11,8 @@ pub struct ObjectConfig {
 
 impl ObjectConfig {
     pub fn build(name: &str, cfg: &config::Config, server_id: String) -> Self {
+        let mut cfg = cfg.clone();
+        cfg.apply_defaults();
         let mut this_cfg: Option<config::Listener> = None;
         for conf in &cfg.listener {
             if name == conf.name {

@@ -35,8 +35,9 @@ pub struct RunOptions {
 }
 
 pub fn load_config_str(contents: &str) -> std::io::Result<Config> {
-    let cfg = toml::from_str::<Config>(contents)
+    let mut cfg = toml::from_str::<Config>(contents)
         .map_err(|e| std::io::Error::other(format!("invalid config file: {}", e.message())))?;
+    cfg.apply_defaults();
     cfg.validate()?;
     Ok(cfg)
 }
@@ -47,7 +48,8 @@ pub fn load_config_file(path: impl AsRef<Path>) -> std::io::Result<Config> {
 }
 
 pub async fn run(options: RunOptions) -> std::io::Result<()> {
-    let cfg = options.config;
+    let mut cfg = options.config;
+    cfg.apply_defaults();
     cfg.validate()?;
     let observe_registry = options.observe_registry;
     let shutdown = options.shutdown;

@@ -14,6 +14,44 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn apply_defaults(&mut self) {
+        let default_servers = self
+            .dns
+            .as_ref()
+            .map(|d| d.default_servers.clone())
+            .filter(|v| !v.is_empty());
+        for conn in &mut self.connector {
+            if conn.dns.as_ref().is_none_or(Vec::is_empty) {
+                if let Some(ref defaults) = default_servers {
+                    conn.dns = Some(defaults.clone());
+                }
+            }
+            let has_bootstrap = conn
+                .options
+                .as_ref()
+                .is_some_and(|o| o.contains_key("bootstrap_dns"));
+            if !has_bootstrap {
+                if let Some(fallback_dns) = conn
+                    .dns
+                    .as_ref()
+                    .filter(|v| !v.is_empty())
+                    .or(default_servers.as_ref())
+                {
+                    let bootstrap_val = toml::Value::Array(
+                        fallback_dns
+                            .iter()
+                            .cloned()
+                            .map(toml::Value::String)
+                            .collect(),
+                    );
+                    conn.options
+                        .get_or_insert_with(HashMap::new)
+                        .insert("bootstrap_dns".to_string(), bootstrap_val);
+                }
+            }
+        }
+    }
+
     pub fn validate(&self) -> std::io::Result<()> {
         if let Some(dns) = &self.dns {
             dns.validate(self)?;

@@ -46,10 +46,11 @@ pub(crate) struct DnsServer {
 impl DnsServer {
     pub(crate) async fn bind(
         cfg: DnsConfig,
-        config: Config,
+        mut config: Config,
         router: Arc<dyn RouterSet>,
         table: Arc<IpDomainTable>,
     ) -> io::Result<Arc<Self>> {
+        config.apply_defaults();
         let bind_addr: SocketAddr = cfg
             .endpoint
             .parse()
@@ -185,14 +186,19 @@ impl DnsServer {
             return Ok(message::error_reply(query, ResponseCode::NoError));
         }
         let (cfg, outbound_name, chosen) = if decision.matched_rule.is_some() {
-            if let Some(custom_dns) = matched_cfg.dns.as_ref().filter(|v| !v.is_empty()) {
+            if let Some(custom_dns) = matched_cfg
+                .dns
+                .as_ref()
+                .filter(|v| !v.is_empty() && *v != &self.cfg.default_servers)
+            {
                 (matched_cfg, decision.outbound.clone(), custom_dns)
             } else if matched_cfg.proto == "tcp" {
-                (
-                    matched_cfg,
-                    decision.outbound.clone(),
-                    &self.cfg.default_servers,
-                )
+                let chosen = matched_cfg
+                    .dns
+                    .as_ref()
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or(&self.cfg.default_servers);
+                (matched_cfg, decision.outbound.clone(), chosen)
             } else {
                 let default_outbound = self
                     .config

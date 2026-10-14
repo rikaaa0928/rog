@@ -172,12 +172,17 @@ impl DnsConfig {
                             })
                         })
                         .unwrap_or(false);
-                let bootstrap = crate::util::bootstrap::servers(&connector.options)?;
-                if !numeric && bootstrap.is_none() {
-                    return Err(invalid(format!(
-                        "DNS proxy {name} requires bootstrap_dns for domain endpoints"
-                    )));
-                }
+                let bootstrap = match crate::util::bootstrap::servers(&connector.options)? {
+                    Some(b) => Some(b),
+                    None if !numeric => {
+                        if let Some(conn_dns) = connector.dns.as_ref().filter(|v| !v.is_empty()) {
+                            Some(servers(conn_dns)?)
+                        } else {
+                            Some(defaults.clone())
+                        }
+                    }
+                    None => None,
+                };
                 if let Some(bootstrap) = bootstrap {
                     for addr in bootstrap {
                         if addr.port() == bind.port()
@@ -234,6 +239,75 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn connector_dns_and_bootstrap_fallback_order() {
+        let raw = r#"
+[dns]
+endpoint = "127.0.0.1:5353"
+router = "main"
+default_servers = ["1.1.1.1:53", "8.8.8.8:53"]
+
+[[listener]]
+name = "in"
+endpoint = "127.0.0.1:1080"
+proto = "tproxy"
+router = "main"
+
+[[connector]]
+name = "proxy_default"
+proto = "grpc"
+endpoint = "https://proxy.example:443"
+pw = "secret"
+
+[[connector]]
+name = "proxy_cn"
+proto = "pb_tcp"
+endpoint = "cn.example:9289"
+pw = "secret"
+dns = ["114.114.114.114:53", "223.5.5.5:53"]
+
+[[router]]
+name = "main"
+default = "proxy_default"
+"#;
+        let cfg = crate::load_config_str(raw).unwrap();
+        let c_default = cfg
+            .connector
+            .iter()
+            .find(|c| c.name == "proxy_default")
+            .unwrap();
+        assert_eq!(
+            c_default.dns.as_ref().unwrap(),
+            &vec!["1.1.1.1:53".to_string(), "8.8.8.8:53".to_string()]
+        );
+        let b_default = crate::util::bootstrap::servers(&c_default.options)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            b_default,
+            vec!["1.1.1.1:53".parse().unwrap(), "8.8.8.8:53".parse().unwrap()]
+        );
+
+        let c_cn = cfg.connector.iter().find(|c| c.name == "proxy_cn").unwrap();
+        assert_eq!(
+            c_cn.dns.as_ref().unwrap(),
+            &vec![
+                "114.114.114.114:53".to_string(),
+                "223.5.5.5:53".to_string()
+            ]
+        );
+        let b_cn = crate::util::bootstrap::servers(&c_cn.options)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            b_cn,
+            vec![
+                "114.114.114.114:53".parse().unwrap(),
+                "223.5.5.5:53".parse().unwrap()
+            ]
         );
     }
 }
