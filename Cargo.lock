@@ -1589,7 +1589,7 @@ dependencies = [
 
 [[package]]
 name = "rog"
-version = "0.1.18-dev.6"
+version = "0.1.18-dev.7"
 dependencies = [
  "aho-corasick",
  "async-trait",

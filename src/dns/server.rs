@@ -168,13 +168,13 @@ impl DnsServer {
     ) -> io::Result<Vec<u8>> {
         let domain = canonical(&query.query().unwrap().name().to_ascii());
         let decision = self.router.route_dns(&self.cfg.router, &domain).await?;
-        let cfg = self
+        let matched_cfg = self
             .config
             .connector
             .iter()
             .find(|c| c.name == decision.outbound)
             .ok_or_else(|| io::Error::other("DNS connector not found"))?;
-        if cfg.proto == "block" {
+        if matched_cfg.proto == "block" {
             return Ok(message::error_reply(query, ResponseCode::Refused));
         }
         if self.cfg.disable_aaaa
@@ -184,46 +184,85 @@ impl DnsServer {
         {
             return Ok(message::error_reply(query, ResponseCode::NoError));
         }
-        let chosen = if decision.matched_rule.is_some() {
-            cfg.dns
-                .as_ref()
-                .filter(|v| !v.is_empty())
-                .unwrap_or(&self.cfg.default_servers)
+        let (cfg, outbound_name, chosen) = if decision.matched_rule.is_some() {
+            if let Some(custom_dns) = matched_cfg.dns.as_ref().filter(|v| !v.is_empty()) {
+                (matched_cfg, decision.outbound.clone(), custom_dns)
+            } else if matched_cfg.proto == "tcp" {
+                (
+                    matched_cfg,
+                    decision.outbound.clone(),
+                    &self.cfg.default_servers,
+                )
+            } else {
+                let default_outbound = self
+                    .config
+                    .router
+                    .iter()
+                    .find(|r| r.name == self.cfg.router)
+                    .map(|r| r.default.as_str())
+                    .unwrap_or(decision.outbound.as_str());
+                let default_cfg = self
+                    .config
+                    .connector
+                    .iter()
+                    .find(|c| c.name == default_outbound)
+                    .unwrap_or(matched_cfg);
+                (
+                    default_cfg,
+                    default_cfg.name.clone(),
+                    &self.cfg.default_servers,
+                )
+            }
         } else {
-            &self.cfg.default_servers
+            (
+                matched_cfg,
+                decision.outbound.clone(),
+                &self.cfg.default_servers,
+            )
         };
         log::debug!(
-            "DNS client={client} domain={domain} rule={:?} outbound={}",
+            "DNS client={client} domain={domain} rule={:?} outbound={} dns_via={}",
             decision.matched_rule,
-            decision.outbound
+            decision.outbound,
+            outbound_name
         );
         for upstream in servers(chosen)? {
             let attempt_deadline = (tokio::time::Instant::now()
                 + Duration::from_millis(self.cfg.upstream_timeout_ms))
             .min(deadline);
+            let outbound_key = outbound_name.clone();
             let attempt = async {
-                let cached = { self.cache.lock().await.get(&decision.outbound).cloned() };
+                let cached = { self.cache.lock().await.get(&outbound_key).cloned() };
                 let connector = match cached {
                     Some(c) => c,
                     None => {
                         let fresh = Arc::new(connector::create(cfg).await?);
                         let mut cache = self.cache.lock().await;
                         cache
-                            .entry(decision.outbound.clone())
+                            .entry(outbound_key.clone())
                             .or_insert(fresh)
                             .clone()
                     }
                 };
-                let norm_client = SocketAddr::new(super::table::normalize(client.ip()), client.port());
+                let norm_client =
+                    SocketAddr::new(super::table::normalize(client.ip()), client.port());
+                let wire_client = if cfg.proto != "tcp" && norm_client.ip().is_ipv6() {
+                    SocketAddr::new(
+                        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                        norm_client.port(),
+                    )
+                } else {
+                    norm_client
+                };
                 let (mut reader, writer) = connector
-                    .udp_tunnel(norm_client.to_string())
+                    .udp_tunnel(wire_client.to_string())
                     .await?
                     .ok_or_else(|| io::Error::other("DNS connector has no UDP tunnel"))?;
                 writer
                     .write(UDPPacket {
                         meta: UDPMeta {
-                            src_addr: norm_client.ip().to_string(),
-                            src_port: norm_client.port(),
+                            src_addr: wire_client.ip().to_string(),
+                            src_port: wire_client.port(),
                             dst_addr: upstream.ip().to_string(),
                             dst_port: upstream.port(),
                         },
