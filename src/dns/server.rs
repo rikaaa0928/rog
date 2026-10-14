@@ -160,6 +160,13 @@ impl DnsServer {
         if cfg.proto == "block" {
             return Ok(message::error_reply(query, ResponseCode::Refused));
         }
+        if self.cfg.disable_aaaa
+            && query
+                .query()
+                .is_some_and(|q| q.query_type() == hickory_proto::rr::RecordType::AAAA)
+        {
+            return Ok(message::error_reply(query, ResponseCode::NoError));
+        }
         let chosen = if decision.matched_rule.is_some() {
             cfg.dns
                 .as_ref()
@@ -396,6 +403,36 @@ exclude=[]
                 .response_code(),
             ResponseCode::Refused
         );
+        let mut aaaa = Message::new();
+        aaaa.set_id(9).add_query(Query::query(
+            Name::from_ascii("default.example").unwrap(),
+            RecordType::AAAA,
+        ));
+        let mut cfg_no_aaaa = configuration(first, second);
+        cfg_no_aaaa.dns.as_mut().unwrap().disable_aaaa = true;
+        cfg_no_aaaa.dns.as_mut().unwrap().endpoint = "127.0.0.1:0".into();
+        let srv_no_aaaa = DnsServer::bind(
+            cfg_no_aaaa.dns.clone().unwrap(),
+            cfg_no_aaaa,
+            router.clone(),
+            table.clone(),
+        )
+        .await
+        .unwrap();
+        let addr_no_aaaa = srv_no_aaaa.socket.local_addr().unwrap();
+        let tok_no_aaaa = CancellationToken::new();
+        let task_no_aaaa = tokio::spawn(srv_no_aaaa.run(tok_no_aaaa.clone()));
+        client
+            .send_to(&aaaa.to_vec().unwrap(), addr_no_aaaa)
+            .await
+            .unwrap();
+        let mut buf = vec![0; 512];
+        let (n, _) = client.recv_from(&mut buf).await.unwrap();
+        let resp_aaaa = Message::from_vec(&buf[..n]).unwrap();
+        assert_eq!(resp_aaaa.response_code(), ResponseCode::NoError);
+        assert!(resp_aaaa.answers().is_empty());
+        tok_no_aaaa.cancel();
+        let _ = task_no_aaaa.await;
         let route = router
             .route_with_context(
                 "tproxy",
