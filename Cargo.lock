@@ -86,6 +86,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tower",
@@ -1597,10 +1598,11 @@ dependencies = [
 
 [[package]]
 name = "rog"
-version = "0.1.18-dev.2"
+version = "0.1.18-dev.3"
 dependencies = [
  "aho-corasick",
  "async-trait",
+ "axum 0.7.9",
  "base64",
  "bytes",
  "chacha20poly1305",
@@ -1621,6 +1623,7 @@ dependencies = [
  "reqwest",
  "riproxy-observe",
  "serde",
+ "serde_json",
  "sha2",
  "socket2 0.6.1",
  "tokio",

@@ -103,10 +103,17 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
 
     spawn(observe_registry.sampler_task());
     if let Some(listen_addr) = proxy_observe::env_listen_addr() {
-        spawn(proxy_observe::api::serve(
+        let observe_router = dns::observe::router(
             observe_registry.clone(),
-            listen_addr,
-        ));
+            dns_table.clone(),
+            proxy_observe::env_token(),
+        );
+        let token = shutdown.clone();
+        spawn(async move {
+            if let Err(error) = dns::observe::serve(observe_router, listen_addr, token).await {
+                error!("observe server failed: {error}");
+            }
+        });
     }
 
     if let Some(rev_server) = cfg.reverse_server.clone() {

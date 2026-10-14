@@ -166,3 +166,30 @@ endpoint = "127.0.0.1:9050" # 替换为你的上游 SOCKS5 代理
 参考 `dns_config_example.toml` 和 `docs/design-udp-dns-routing.md`。本机示例监听 `127.0.0.1:5353`，可使用 `dig @127.0.0.1 -p 5353 example.com` 验证；系统 DNS 通常需要监听 53 端口。TPROXY 和 DNS 必须在同一进程并使用同一个 router，才能共享按客户端隔离的真实 IP→域名映射。
 
 首版仅支持 UDP DNS、IPv4 字面上游地址；返回 AAAA 记录不受此限制。TCP/53、DoH/DoT、响应缓存与 FakeDNS 未实现。代理 DNS 出口使用固定 IP，或在 `[connector.options]` 配置 `bootstrap_dns = ["4.2.2.1:53", "1.1.1.1:53"]`。节点域名通过这些服务器 direct 解析，绕过系统 DNS 和业务 DNS 路由，gRPC 保留域名 TLS/SNI。
+
+## DNS 映射观测
+
+设置 `PROXY_OBSERVE_LISTEN=127.0.0.1:18080` 开启可观测 API，可用
+`PROXY_OBSERVE_TOKEN` 设置访问令牌。`GET /api/v1/observe/ip-domains` 返回当前
+独立 UDP DNS 学习到的有效 IP → 域名关系，使用与其他观测接口相同的鉴权。
+
+```bash
+curl -H 'Authorization: Bearer <token>' \
+  'http://127.0.0.1:18080/api/v1/observe/ip-domains?search=example&limit=200&offset=0'
+```
+
+每条记录包含 `router`、`client_ip`、`target_ip`、`domain`、`ttl_remaining_ms`
+（剩余 TTL）和 `last_observed_ago_ms`（距离最近一次观测的时间）。同一个 IP
+对应多个域名时逐条展示；不同客户端及 router 的映射相互隔离。过期记录不返回，
+查询不会刷新 TTL 或改变路由状态。此接口展示映射缓存，不表示当前连接使用了哪条路由。
+
+支持 `router` 精确筛选、`client_ip` / `target_ip` 地址筛选、`domain` 子串筛选，
+以及 `search` 在 router、两个 IP 和域名之间搜索。`offset` 默认 0，`limit` 默认
+200、范围 1–1000，按 router、客户端、目标 IP、域名排序后分页。
+`total` 是筛选后的记录总数；`key_count`、`record_count` 是整个有效缓存的键数及
+域名记录数，不受筛选和分页影响。`capacity` 是最大键数，键为
+`(router, client_ip, target_ip)`；同时返回 `max_domains_per_ip` 和 `max_ttl_secs`。
+未配置 `[dns]` 时返回 `enabled: false` 和空记录。
+
+相邻 `proxy-observe-ui` 客户端的 **IP Domains** 页支持搜索、分页、列排序和自动刷新。
+连接没有该接口的旧服务时显示不支持提示，其他观测页面仍然可用。

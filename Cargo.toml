@@ -1,9 +1,10 @@
 [package]
 name = "rog"
-version = "0.1.18-dev.2"
+version = "0.1.18-dev.3"
 edition = "2024"
 
 [dependencies]
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json", "query"] }
 tokio = { version = "1.35.1", features = ["rt", "rt-multi-thread", "net", "fs", "macros", "signal"] }
 log = "0.4.20"
 #anyhow = "1.0.79"
@@ -50,3 +51,6 @@ tonic-prost-build = "0.14.2"
 [profile.release]
 lto = true
 strip = "symbols"
+
+[dev-dependencies]
+serde_json = "1"

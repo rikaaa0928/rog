@@ -27,6 +27,25 @@ pub struct IpDomainTable {
     per_ip: usize,
     max_ttl: u64,
 }
+#[derive(Clone, serde::Serialize)]
+pub struct MappingSnapshot {
+    pub router: String,
+    pub client_ip: IpAddr,
+    pub target_ip: IpAddr,
+    pub domain: String,
+    pub ttl_remaining_ms: u64,
+    pub last_observed_ago_ms: u64,
+}
+#[derive(serde::Serialize)]
+pub struct TableSnapshot {
+    pub enabled: bool,
+    pub key_count: usize,
+    pub record_count: usize,
+    pub capacity: usize,
+    pub max_domains_per_ip: usize,
+    pub max_ttl_secs: u64,
+    pub entries: Vec<MappingSnapshot>,
+}
 impl IpDomainTable {
     pub fn new(capacity: usize, per_ip: usize, max_ttl: u64) -> Self {
         Self {
@@ -102,6 +121,52 @@ impl IpDomainTable {
         domains.sort();
         domains
     }
+    /// Read-only snapshot: excludes expired records without changing routing state.
+    pub fn snapshot(&self) -> TableSnapshot {
+        let now = Instant::now();
+        let (mut records, key_count) = {
+            let entries = self.entries.lock().unwrap();
+            let mut records = vec![];
+            let mut key_count = 0;
+            for ((router, client_ip, target_ip), domains) in entries.iter() {
+                let before = records.len();
+                for record in domains.iter().filter(|r| r.expires > now) {
+                    records.push(MappingSnapshot {
+                        router: router.clone(),
+                        client_ip: *client_ip,
+                        target_ip: *target_ip,
+                        domain: record.domain.clone(),
+                        ttl_remaining_ms: record.expires.saturating_duration_since(now).as_millis()
+                            as u64,
+                        last_observed_ago_ms: now
+                            .saturating_duration_since(record.observed)
+                            .as_millis() as u64,
+                    });
+                }
+                if records.len() > before {
+                    key_count += 1;
+                }
+            }
+            (records, key_count)
+        };
+        records.sort_by(|a, b| {
+            (&a.router, a.client_ip, a.target_ip, &a.domain).cmp(&(
+                &b.router,
+                b.client_ip,
+                b.target_ip,
+                &b.domain,
+            ))
+        });
+        TableSnapshot {
+            enabled: true,
+            key_count,
+            record_count: records.len(),
+            capacity: self.capacity,
+            max_domains_per_ip: self.per_ip,
+            max_ttl_secs: self.max_ttl,
+            entries: records,
+        }
+    }
     pub fn prune_expired(&self) {
         let now = Instant::now();
         self.entries.lock().unwrap().retain(|_, rs| {
@@ -113,6 +178,45 @@ impl IpDomainTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn snapshot_excludes_expired_records_without_mutating_table() {
+        let t = IpDomainTable::new(10, 3, 120);
+        let client = "192.168.1.2".parse().unwrap();
+        let target = "1.1.1.1".parse().unwrap();
+        for name in ["z.example", "A.EXAMPLE."] {
+            t.record("main", client, target, name, 60, Instant::now());
+        }
+        {
+            let mut entries = t.entries.lock().unwrap();
+            entries
+                .get_mut(&("main".into(), client, target))
+                .unwrap()
+                .push(Record {
+                    domain: "expired.example".into(),
+                    expires: Instant::now() - Duration::from_secs(1),
+                    observed: Instant::now() - Duration::from_secs(10),
+                });
+        }
+        let snapshot = t.snapshot();
+        assert_eq!(snapshot.key_count, 1);
+        assert_eq!(snapshot.record_count, 2);
+        assert_eq!(snapshot.capacity, 10);
+        assert_eq!(
+            snapshot
+                .entries
+                .iter()
+                .map(|r| r.domain.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a.example", "z.example"]
+        );
+        assert!(
+            snapshot
+                .entries
+                .iter()
+                .all(|r| r.ttl_remaining_ms <= 60_000)
+        );
+        assert_eq!(t.entries.lock().unwrap().values().next().unwrap().len(), 3);
+    }
     #[test]
     fn isolation_ttl_capacity() {
         let t = IpDomainTable::new(1, 2, 100);
