@@ -185,7 +185,7 @@ impl Object {
                                         && addr_ref.addr.parse::<std::net::Ipv6Addr>().is_ok()
                                     {
                                         if let Some(ref domain) = mapped_domain {
-                                            format!("{}:{}", domain, addr_ref.port)
+                                            crate::util::format_endpoint(domain, addr_ref.port)
                                         } else {
                                             addr_ref.endpoint()
                                         }
@@ -242,7 +242,7 @@ impl Object {
                                         inbound: Some(config_clone.listener.name.clone()),
                                         outbound: Some(client_name.clone()),
                                         source: peer_addr.to_string(),
-                                        destination: endpoint_for_observe(addr_ref),
+                                        destination: addr_ref.endpoint(),
                                         site: None,
                                     });
                                     if let Err(e) = tcp::handle_tcp_connection(
@@ -289,21 +289,5 @@ impl Object {
     }
 
     run_result
-    }
-}
-
-fn endpoint_for_observe(addr: &crate::util::RunAddr) -> String {
-    if addr.addr.contains(':') {
-        format!("[{}]:{}", addr.addr, addr.port)
-    } else {
-        addr.endpoint()
-    }
-}
-
-pub(crate) fn udp_endpoint_for_observe(addr: &str, port: u16) -> String {
-    if addr.contains(':') {
-        format!("[{}]:{}", addr, port)
-    } else {
-        format!("{}:{}", addr, port)
     }
 }

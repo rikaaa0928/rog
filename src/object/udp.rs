@@ -1,8 +1,7 @@
 use crate::connector;
 use crate::def::{RouterSet, RunAcceptor, RunStream, UDPPacket};
 use crate::object::config::ObjectConfig;
-use crate::object::udp_endpoint_for_observe;
-use crate::util::RunAddr;
+use crate::util::{RunAddr, format_endpoint};
 use log::{debug, info, warn};
 use proxy_observe::{ConnectionMeta, ObserveRegistry};
 use std::io::Result;
@@ -109,14 +108,14 @@ pub async fn handle_udp_connection(
         route: Some(client_name.clone()),
         inbound: Some(config.listener.name.clone()),
         outbound: Some(client_name.clone()),
-        source: udp_endpoint_for_observe(&udp_packet.meta.src_addr, udp_packet.meta.src_port),
-        destination: udp_endpoint_for_observe(&udp_packet.meta.dst_addr, udp_packet.meta.dst_port),
+        source: format_endpoint(&udp_packet.meta.src_addr, udp_packet.meta.src_port),
+        destination: format_endpoint(&udp_packet.meta.dst_addr, udp_packet.meta.dst_port),
         site: None,
     });
     let (mut udp_tunnel_reader, udp_tunnal_writer) = ctor
-        .udp_tunnel(format!(
-            "{}:{}",
-            udp_packet.meta.src_addr, udp_packet.meta.src_port,
+        .udp_tunnel(format_endpoint(
+            &udp_packet.meta.src_addr,
+            udp_packet.meta.src_port,
         ))
         .await?
         .unwrap();

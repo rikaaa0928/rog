@@ -179,16 +179,15 @@ impl UDPPacket {
         payload.extend(self.data.iter());
         (
             Vec::from([payload]),
-            format!(
-                "{}:{}",
+            crate::util::format_endpoint(
                 if self.meta.src_addr == "0.0.0.0" {
                     "127.0.0.1"
                 } else {
                     self.meta.src_addr.as_str()
                 },
-                self.meta.src_port
+                self.meta.src_port,
             ),
-            format!("{}:{}", self.meta.dst_addr, self.meta.dst_port),
+            crate::util::format_endpoint(&self.meta.dst_addr, self.meta.dst_port),
         )
     }
     pub fn parse(buf: &[u8], src_addr: SocketAddr) -> Result<Self> {

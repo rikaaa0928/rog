@@ -246,23 +246,15 @@ impl DnsServer {
                 };
                 let norm_client =
                     SocketAddr::new(super::table::normalize(client.ip()), client.port());
-                let wire_client = if cfg.proto != "tcp" && norm_client.ip().is_ipv6() {
-                    SocketAddr::new(
-                        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
-                        norm_client.port(),
-                    )
-                } else {
-                    norm_client
-                };
                 let (mut reader, writer) = connector
-                    .udp_tunnel(wire_client.to_string())
+                    .udp_tunnel(norm_client.to_string())
                     .await?
                     .ok_or_else(|| io::Error::other("DNS connector has no UDP tunnel"))?;
                 writer
                     .write(UDPPacket {
                         meta: UDPMeta {
-                            src_addr: wire_client.ip().to_string(),
-                            src_port: wire_client.port(),
+                            src_addr: norm_client.ip().to_string(),
+                            src_port: norm_client.port(),
                             dst_addr: upstream.ip().to_string(),
                             dst_port: upstream.port(),
                         },

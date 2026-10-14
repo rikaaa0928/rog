@@ -74,15 +74,9 @@ pub fn unmapped_socket_addr(addr: SocketAddr) -> SocketAddr {
 /// and IPv6 addresses (with or without brackets) without panicking.
 #[allow(dead_code)]
 pub fn parse_endpoint(addr: &str, port: u16) -> Option<SocketAddr> {
-    if let Ok(ip) = addr.parse::<std::net::IpAddr>() {
-        return Some(SocketAddr::new(ip, port));
-    }
-    let bracketed = if addr.contains(':') && !addr.starts_with('[') {
-        format!("[{}]:{}", addr, port)
-    } else {
-        format!("{}:{}", addr, port)
-    };
-    bracketed.parse::<SocketAddr>().ok()
+    crate::util::format_endpoint(addr, port)
+        .parse::<SocketAddr>()
+        .ok()
 }
 
 /// Check if an IP address belongs to any local network interface on this machine.

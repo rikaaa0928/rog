@@ -1,8 +1,7 @@
 use crate::connector;
 use crate::def::{RouterSet, RunConnector, RunUdpReader, RunUdpWriter, UDPPacket};
 use crate::object::config::ObjectConfig;
-use crate::object::udp_endpoint_for_observe;
-use crate::util::RunAddr;
+use crate::util::{RunAddr, format_endpoint};
 use log::{debug, warn};
 use proxy_observe::{ConnectionMeta, ObserveRegistry};
 use std::collections::HashMap;
@@ -23,7 +22,6 @@ pub async fn handle_raw_udp(
     debug!("raw udp, route based on the first packet");
     let mut first_packet = r.read().await?;
     let orig_dst_addr = first_packet.meta.dst_addr.clone();
-    let orig_src_addr = first_packet.meta.src_addr.clone();
     let (client_name, mapped_domain) = router
         .route_with_domain(
             config.listener.name.as_str(),
@@ -53,8 +51,6 @@ pub async fn handle_raw_udp(
     } else {
         None
     };
-    let rewrite_v6_src =
-        conn_conf.proto != "tcp" && orig_src_addr.parse::<std::net::Ipv6Addr>().is_ok();
 
     let connector_obj: Arc<Box<dyn RunConnector>>;
     {
@@ -79,20 +75,15 @@ pub async fn handle_raw_udp(
         route: Some(client_name.clone()),
         inbound: Some(config.listener.name.clone()),
         outbound: Some(client_name.clone()),
-        source: udp_endpoint_for_observe(&first_packet.meta.src_addr, first_packet.meta.src_port),
-        destination: udp_endpoint_for_observe(
+        source: format_endpoint(&first_packet.meta.src_addr, first_packet.meta.src_port),
+        destination: format_endpoint(
             &first_packet.meta.dst_addr,
             first_packet.meta.dst_port,
         ),
         site: None,
     });
 
-    let wire_src_addr = if rewrite_v6_src {
-        "127.0.0.1"
-    } else {
-        first_packet.meta.src_addr.as_str()
-    };
-    let src_endpoint = udp_endpoint_for_observe(wire_src_addr, first_packet.meta.src_port);
+    let src_endpoint = format_endpoint(&first_packet.meta.src_addr, first_packet.meta.src_port);
     let (mut udp_reader, udp_writer) =
         connector_obj
             .udp_tunnel(src_endpoint)
@@ -104,9 +95,6 @@ pub async fn handle_raw_udp(
     let first_packet_len = first_packet.data.len() as u64;
     if let Some(ref domain) = rewrite_v6_domain {
         first_packet.meta.dst_addr = domain.clone();
-    }
-    if rewrite_v6_src {
-        first_packet.meta.src_addr = "127.0.0.1".to_string();
     }
     udp_writer.write(first_packet).await?;
     observe.add_tx(first_packet_len);
@@ -150,9 +138,6 @@ pub async fn handle_raw_udp(
                     if let Some(ref domain) = rewrite_domain_b {
                         packet.meta.dst_addr = domain.clone();
                     }
-                    if rewrite_v6_src {
-                        packet.meta.src_addr = "127.0.0.1".to_string();
-                    }
 
                     debug!("raw udp server get udp_packet {:?}", &packet);
                     let packet_len = packet.data.len() as u64;
@@ -173,11 +158,6 @@ pub async fn handle_raw_udp(
     let token_c = cancel_token.clone();
     let observe_rx = observe.clone();
     let restore_v6_addr = rewrite_v6_domain.as_ref().map(|_| orig_dst_addr);
-    let restore_v6_src = if rewrite_v6_src {
-        Some(orig_src_addr)
-    } else {
-        None
-    };
     let c: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         loop {
             let res: Result<UDPPacket> = select! {
@@ -199,9 +179,6 @@ pub async fn handle_raw_udp(
                     let packet_len = udp_packet.data.len() as u64;
                     if let Some(ref orig_ip) = restore_v6_addr {
                         udp_packet.meta.dst_addr = orig_ip.clone();
-                    }
-                    if let Some(ref orig_src) = restore_v6_src {
-                        udp_packet.meta.src_addr = orig_src.clone();
                     }
                     debug!(
                         "raw udp tunnel udp_packet read src {:?} {:?}",

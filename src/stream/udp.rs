@@ -59,7 +59,7 @@ impl UdpRunStream {
     }
 
     async fn resolve_dst_addr(&self, dst_addr: &str, dst_port: u16) -> io::Result<SocketAddr> {
-        let cache_key = format!("{}:{}", dst_addr, dst_port);
+        let cache_key = crate::util::format_endpoint(dst_addr, dst_port);
         {
             let state = self.resolve_state.lock().await;
             if let Some(addr) = state.domain_to_ip.get(&cache_key).copied() {
@@ -99,26 +99,7 @@ impl UdpRunStream {
 #[async_trait::async_trait]
 impl RunUdpReader for UdpRunStream {
     async fn read(&mut self) -> std::io::Result<UDPPacket> {
-        let src: SocketAddr = match self.src_addr.parse() {
-            Ok(sa) => sa,
-            Err(_) => {
-                let bracketed = if self.src_addr.contains(':') && !self.src_addr.starts_with('[') {
-                    if let Some(idx) = self.src_addr.rfind(':') {
-                        format!("[{}]:{}", &self.src_addr[..idx], &self.src_addr[idx + 1..])
-                    } else {
-                        self.src_addr.clone()
-                    }
-                } else {
-                    self.src_addr.clone()
-                };
-                bracketed.parse().map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("invalid UDP client src_addr '{}': {}", self.src_addr, e),
-                    )
-                })?
-            }
-        };
+        let src = crate::util::parse_socket_addr(&self.src_addr)?;
         let inner = self.inner.clone();
 
         let mut buf = [0u8; 65536];

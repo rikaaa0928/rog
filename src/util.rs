@@ -20,13 +20,41 @@ pub struct RunAddr {
     // pub cache: Option<Vec<u8>>,
 }
 
+/// Format an address (domain, IPv4, or IPv6 with/without brackets) and port
+/// into a canonical endpoint string (`host:port` or `[ipv6]:port`).
+pub fn format_endpoint(addr: &str, port: u16) -> String {
+    let trimmed = addr.trim_matches(['[', ']']);
+    if trimmed.contains(':') {
+        format!("[{}]:{}", trimmed, port)
+    } else {
+        format!("{}:{}", trimmed, port)
+    }
+}
+
+/// Parse an endpoint string (`host:port`, `[ipv6]:port`, or bare `ipv6:port`)
+/// into a `SocketAddr`.
+pub fn parse_socket_addr(endpoint: &str) -> std::io::Result<std::net::SocketAddr> {
+    if let Ok(sa) = endpoint.parse() {
+        return Ok(sa);
+    }
+    if endpoint.contains(':') && !endpoint.starts_with('[') {
+        if let Some((host, port)) = endpoint.rsplit_once(':') {
+            if let Ok(port_num) = port.parse::<u16>() {
+                if let Ok(sa) = format_endpoint(host, port_num).parse() {
+                    return Ok(sa);
+                }
+            }
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("invalid socket address '{}'", endpoint),
+    ))
+}
+
 impl RunAddr {
     pub(crate) fn endpoint(&self) -> String {
-        if self.addr.contains(':') && !self.addr.starts_with('[') {
-            format!("[{}]:{}", self.addr, self.port)
-        } else {
-            format!("{}:{}", self.addr, self.port)
-        }
+        format_endpoint(&self.addr, self.port)
     }
 }
 
@@ -139,3 +167,36 @@ impl TryFrom<&Request> for RunAddr {
 //         }
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_endpoint_and_parse_socket_addr() {
+        assert_eq!(format_endpoint("192.168.0.71", 53), "192.168.0.71:53");
+        assert_eq!(format_endpoint("www.google.com", 443), "www.google.com:443");
+        assert_eq!(
+            format_endpoint("2001:4860:4860::8888", 53),
+            "[2001:4860:4860::8888]:53"
+        );
+        assert_eq!(
+            format_endpoint("[2001:4860:4860::8888]", 53),
+            "[2001:4860:4860::8888]:53"
+        );
+
+        assert_eq!(
+            parse_socket_addr("192.168.0.71:53").unwrap(),
+            "192.168.0.71:53".parse().unwrap()
+        );
+        assert_eq!(
+            parse_socket_addr("[2001:4860:4860::8888]:53").unwrap(),
+            "[2001:4860:4860::8888]:53".parse().unwrap()
+        );
+        assert_eq!(
+            parse_socket_addr("2001:4860:4860::8888:53").unwrap(),
+            "[2001:4860:4860::8888]:53".parse().unwrap()
+        );
+        assert!(parse_socket_addr("invalid").is_err());
+    }
+}
