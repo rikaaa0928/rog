@@ -21,7 +21,7 @@ use tonic::transport::Endpoint;
 // }
 
 pub struct GrpcRunConnector {
-    client: Arc<Mutex<RogServiceClient<tonic::transport::Channel>>>,
+    client: RogServiceClient<tonic::transport::Channel>,
     cfg: config::Connector,
     grpc_options: GrpcTransportOptions,
 }
@@ -60,7 +60,7 @@ impl GrpcRunConnector {
                         info!("grpc Connector {} is established after retry", endpoint);
                     }
                     return Ok(Self {
-                        client: Arc::new(Mutex::new(client)),
+                        client,
                         cfg: cfg.clone(),
                         grpc_options,
                     });
@@ -82,29 +82,27 @@ impl RunConnector for GrpcRunConnector {
         let (host, port) = parse_address(addr.as_str())?;
         let channel_size = self.grpc_options.stream_channel_size_or(8);
         let (tx, rx) = mpsc::channel::<StreamReq>(channel_size);
-        let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
-        let rx = Request::new(rx);
-
-        let resp = match self.client.lock().await.stream(rx).await {
-            Ok(r) => r.into_inner(),
-            Err(e) => {
-                error!("gRPC connector failed to open stream: {}", e);
-                return Err(io::Error::other(e));
-            }
-        };
-
-        let t = tx.clone();
         let auth = StreamReq {
             auth: self.cfg.pw.clone().unwrap(),
             dst_port: Some(port as u32),
             dst_addr: Some(host.clone()),
             ..Default::default()
         };
-        let res = t.send(auth).await;
-        if let Err(e) = res {
+        if let Err(e) = tx.send(auth).await {
             error!("gRPC connector failed to send auth request: {}", e);
             return Err(io::Error::other("failed to send auth request"));
         }
+
+        let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let rx = Request::new(rx);
+        let mut client = self.client.clone();
+        let resp = match client.stream(rx).await {
+            Ok(r) => r.into_inner(),
+            Err(e) => {
+                error!("gRPC connector failed to open stream: {}", e);
+                return Err(io::Error::other(e));
+            }
+        };
 
         let mut stream = GrpcClientRunStream::new(Arc::new(Mutex::new(resp)), tx);
         stream.set_info(&mut |x| {
@@ -121,16 +119,19 @@ impl RunConnector for GrpcRunConnector {
     ) -> io::Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>> {
         let channel_size = self.grpc_options.stream_channel_size_or(8);
         let (tx, rx) = mpsc::channel::<UdpReq>(channel_size);
-        let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
-        let rx = Request::new(rx);
-        let res = self.client.lock().await.udp(rx).await;
-        if res.is_err() {
-            return Err(io::Error::other("grpc stream error"));
-        }
-        let resp = res.unwrap().into_inner();
+        let mut client = self.client.clone();
+        let init = tokio::spawn(async move {
+            let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
+            let rx = Request::new(rx);
+            client
+                .udp(rx)
+                .await
+                .map(|r| r.into_inner())
+                .map_err(|e| io::Error::other(format!("grpc stream error: {e}")))
+        });
         Ok(Some((
             Box::new(GrpcUdpClientRunReader::new(
-                resp,
+                init,
                 src_addr.clone(),
                 self.cfg.pw.as_ref().unwrap().clone(),
             )),

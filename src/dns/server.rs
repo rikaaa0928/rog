@@ -257,12 +257,13 @@ impl DnsServer {
                     }
                     let received = Instant::now();
                     for (ip, ttl) in message::addresses(query, &response) {
+                        let table_ttl = if ttl > 0 { ttl.max(3600) } else { 0 };
                         self.table.record(
                             &self.cfg.router,
                             client.ip(),
                             ip,
                             &domain,
-                            ttl,
+                            table_ttl,
                             received,
                         );
                     }

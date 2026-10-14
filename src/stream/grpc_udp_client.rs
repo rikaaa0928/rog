@@ -13,17 +13,31 @@ pub struct GrpcUdpClientRunWriter {
 }
 
 pub struct GrpcUdpClientRunReader {
-    reader: Streaming<UdpRes>,
+    reader: Option<Streaming<UdpRes>>,
+    init: Option<tokio::task::JoinHandle< std::io::Result<Streaming<UdpRes>>>>,
     src_addr: String,
     auth: String,
 }
 
 impl GrpcUdpClientRunReader {
-    pub fn new(reader: Streaming<UdpRes>, src_addr: String, auth: String) -> Self {
+    pub fn new(
+        init: tokio::task::JoinHandle<std::io::Result<Streaming<UdpRes>>>,
+        src_addr: String,
+        auth: String,
+    ) -> Self {
         Self {
-            reader,
+            reader: None,
+            init: Some(init),
             src_addr,
             auth,
+        }
+    }
+}
+
+impl Drop for GrpcUdpClientRunReader {
+    fn drop(&mut self) {
+        if let Some(handle) = self.init.take() {
+            handle.abort();
         }
     }
 }
@@ -53,7 +67,18 @@ impl RunUdpWriter for GrpcUdpClientRunWriter {
 #[async_trait::async_trait]
 impl RunUdpReader for GrpcUdpClientRunReader {
     async fn read(&mut self) -> std::io::Result<UDPPacket> {
-        match self.reader.next().await {
+        if self.reader.is_none() {
+            let handle = self
+                .init
+                .take()
+                .ok_or_else(|| Error::other("udp stream init missing"))?;
+            let stream = handle
+                .await
+                .map_err(|e| Error::other(format!("udp stream join error: {e}")))??;
+            self.reader = Some(stream);
+        }
+        let reader = self.reader.as_mut().unwrap();
+        match reader.next().await {
             Some(Err(e)) => Err(Error::new(std::io::ErrorKind::BrokenPipe, e.to_string())),
             Some(Ok(res)) => {
                 let udp = res.try_into().unwrap();
