@@ -214,9 +214,9 @@ connector 初始化与 `udp_tunnel()` 都放入超时和取消范围。共享 co
 
 宿主机系统 DNS 可能指向本服务。上游 DNS 使用字面 IP，因此其地址不需要再解析；代理节点本身的域名 endpoint 仍可能让 connector 调用系统解析器，形成 DNS 自依赖。
 
-首版明确约束：DNS router 可达的代理 connector 使用字面 IP endpoint，或通过 hosts 等独立启动解析机制固定地址；示例使用字面 IP。不能把本机 DNS 服务作为自身上游，启动校验拒绝能直接识别的自身 endpoint（包括环回、已配置本机地址与同端口）。
+首版明确约束：DNS router 可达的代理 connector 使用字面 IP endpoint，或显式配置 `connector.options.bootstrap_dns` 字面 IP 列表。bootstrap 直接通过指定服务器解析节点，绕过系统 DNS 与业务 DNS router；gRPC URI 保留原域名以维持 TLS/SNI。示例使用字面 IP。不能把本机 DNS 服务作为自身上游，启动校验拒绝能直接识别的自身 endpoint（包括环回、已配置本机地址与同端口）。
 
-若后续要原生支持代理 endpoint 的 bootstrap DNS，应单独设计，不能静默查询系统 DNS 或放宽当前循环约束。DNS 查询、connector 初始化和业务 `domain_to_ip` 是不同路径。
+域名 endpoint 的 bootstrap 查询不允许回退系统 DNS；没有配置 bootstrap 的域名 DNS 出口在启动时拒绝。DNS 查询、connector 初始化和业务 `domain_to_ip` 是不同路径。
 
 ## 6. 真实 IP 域名映射
 

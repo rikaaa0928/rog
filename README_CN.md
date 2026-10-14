@@ -165,4 +165,4 @@ endpoint = "127.0.0.1:9050" # 替换为你的上游 SOCKS5 代理
 
 参考 `dns_config_example.toml` 和 `docs/design-udp-dns-routing.md`。本机示例监听 `127.0.0.1:5353`，可使用 `dig @127.0.0.1 -p 5353 example.com` 验证；系统 DNS 通常需要监听 53 端口。TPROXY 和 DNS 必须在同一进程并使用同一个 router，才能共享按客户端隔离的真实 IP→域名映射。
 
-首版仅支持 UDP DNS、IPv4 字面上游地址；返回 AAAA 记录不受此限制。TCP/53、DoH/DoT、响应缓存与 FakeDNS 未实现。代理 DNS 出口需要固定 IP endpoint，避免宿主机 DNS 指向 rog 后产生启动解析循环。
+首版仅支持 UDP DNS、IPv4 字面上游地址；返回 AAAA 记录不受此限制。TCP/53、DoH/DoT、响应缓存与 FakeDNS 未实现。代理 DNS 出口使用固定 IP，或在 `[connector.options]` 配置 `bootstrap_dns = ["4.2.2.1:53", "1.1.1.1:53"]`。节点域名通过这些服务器 direct 解析，绕过系统 DNS 和业务 DNS 路由，gRPC 保留域名 TLS/SNI。

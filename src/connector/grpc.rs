@@ -4,7 +4,7 @@ use crate::proto::v1::pb::{StreamReq, UdpReq};
 use crate::stream::grpc_client::GrpcClientRunStream;
 use crate::stream::grpc_udp_client::{GrpcUdpClientRunReader, GrpcUdpClientRunWriter};
 use crate::util::grpc_transport::{
-    GrpcTransportOptions, configure_endpoint, connect_channel_without_proxy,
+    GrpcTransportOptions, configure_endpoint, connect_channel_with_bootstrap,
 };
 use log::{error, info};
 use std::io;
@@ -32,13 +32,14 @@ impl GrpcRunConnector {
             error!("{}", err_msg);
             io::Error::new(ErrorKind::InvalidInput, err_msg)
         })?;
+        let bootstrap_dns = crate::util::bootstrap::servers(&cfg.options)?;
         let mut err = None;
         let grpc_options = GrpcTransportOptions::from_options(&cfg.options);
         for i in 1..=3 {
             let client = match Endpoint::new(endpoint.clone()) {
                 Ok(endpoint) => {
                     let endpoint = configure_endpoint(endpoint, &grpc_options);
-                    connect_channel_without_proxy(endpoint)
+                    connect_channel_with_bootstrap(endpoint, bootstrap_dns.clone())
                         .await
                         .map(|channel| {
                             let mut client = RogServiceClient::new(channel);
@@ -142,7 +143,7 @@ impl RunConnector for GrpcRunConnector {
     }
 }
 
-pub(super) fn parse_address(addr: &str) -> io::Result<(String, u16)> {
+pub(crate) fn parse_address(addr: &str) -> io::Result<(String, u16)> {
     // 使用 rsplit_once 从右边分割,这样可以处理 IPv6 地址中的冒号
     let (host, port) = addr
         .rsplit_once(':')

@@ -170,10 +170,23 @@ impl DnsConfig {
                             })
                         })
                         .unwrap_or(false);
-                if !numeric {
+                let bootstrap = crate::util::bootstrap::servers(&connector.options)?;
+                if !numeric && bootstrap.is_none() {
                     return Err(invalid(format!(
-                        "DNS proxy {name} requires a numeric endpoint to avoid DNS bootstrap recursion"
+                        "DNS proxy {name} requires bootstrap_dns for domain endpoints"
                     )));
+                }
+                if let Some(bootstrap) = bootstrap {
+                    for addr in bootstrap {
+                        if addr.port() == bind.port()
+                            && (addr.ip() == bind.ip()
+                                || (bind.ip().is_unspecified()
+                                    && crate::listener::tproxy::is_local_host_ip(&addr.ip()))
+                                || (bind.ip().is_loopback() && addr.ip().is_loopback()))
+                        {
+                            return Err(invalid("bootstrap DNS points to the local DNS listener"));
+                        }
+                    }
                 }
             }
         }

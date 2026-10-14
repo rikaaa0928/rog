@@ -202,6 +202,13 @@ fn default_port(uri: &Uri) -> u16 {
 pub(crate) async fn connect_channel_without_proxy(
     endpoint: Endpoint,
 ) -> Result<Channel, tonic::transport::Error> {
+    connect_channel_with_bootstrap(endpoint, None).await
+}
+
+pub(crate) async fn connect_channel_with_bootstrap(
+    endpoint: Endpoint,
+    bootstrap_dns: Option<Vec<std::net::SocketAddr>>,
+) -> Result<Channel, tonic::transport::Error> {
     let tcp_nodelay = endpoint.get_tcp_nodelay();
     let connect_timeout = endpoint.get_connect_timeout();
     let tcp_keepalive = endpoint.get_tcp_keepalive();
@@ -216,12 +223,13 @@ pub(crate) async fn connect_channel_without_proxy(
             let tcp_keepalive_interval = tcp_keepalive_interval;
             let tcp_keepalive_retries = tcp_keepalive_retries;
 
+            let bootstrap_dns = bootstrap_dns.clone();
             async move {
                 let host = uri.host().ok_or_else(|| {
                     io::Error::new(io::ErrorKind::InvalidInput, "grpc endpoint missing host")
                 })?;
                 let port = uri.port_u16().unwrap_or_else(|| default_port(&uri));
-                let connect = TcpStream::connect((host, port));
+                let connect = crate::util::bootstrap::connect(host, port, bootstrap_dns.as_deref());
                 let stream = match connect_timeout {
                     Some(duration) => timeout(duration, connect).await.map_err(|_| {
                         io::Error::new(io::ErrorKind::TimedOut, "grpc connect timeout")

@@ -3,6 +3,7 @@ use crate::util::socks5::request::Request;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str;
 
+pub(crate) mod bootstrap;
 pub(crate) mod crypto;
 pub(crate) mod grpc_transport;
 pub mod hook;

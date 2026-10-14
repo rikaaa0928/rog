@@ -7,7 +7,6 @@ use crate::util::crypto::encrypt_field;
 use crate::util::tcp_frame::*;
 use std::io;
 use std::sync::Arc;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 pub struct PbTcpRunConnector {
@@ -32,7 +31,11 @@ impl RunConnector for PbTcpRunConnector {
         let (host, port) = parse_address(addr.as_str())?;
         let pw = self.cfg.pw.as_ref().unwrap();
 
-        let stream = TcpStream::connect(self.cfg.endpoint.as_ref().unwrap()).await?;
+        let stream = crate::util::bootstrap::connect_endpoint(
+            self.cfg.endpoint.as_ref().unwrap(),
+            &self.cfg.options,
+        )
+        .await?;
         let (reader, mut writer) = stream.into_split();
 
         write_conn_type(&mut writer, CONN_TYPE_STREAM).await?;
@@ -60,7 +63,11 @@ impl RunConnector for PbTcpRunConnector {
     ) -> io::Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>> {
         let pw = self.cfg.pw.as_ref().unwrap().clone();
 
-        let stream = TcpStream::connect(self.cfg.endpoint.as_ref().unwrap()).await?;
+        let stream = crate::util::bootstrap::connect_endpoint(
+            self.cfg.endpoint.as_ref().unwrap(),
+            &self.cfg.options,
+        )
+        .await?;
         let (reader, mut writer) = stream.into_split();
 
         write_conn_type(&mut writer, CONN_TYPE_UDP).await?;
