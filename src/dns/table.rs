@@ -111,13 +111,35 @@ impl IpDomainTable {
         });
     }
     pub fn get_domains(&self, router: &str, client: IpAddr, target: IpAddr) -> Vec<String> {
+        let now = Instant::now();
+        let client = normalize(client);
+        let target = normalize(target);
         let mut entries = self.entries.lock().unwrap();
-        let Some(records) = entries.get_mut(&(router.into(), normalize(client), normalize(target)))
-        else {
-            return vec![];
-        };
-        records.retain(|r| r.expires > Instant::now());
-        let mut domains: Vec<_> = records.iter().map(|r| r.domain.clone()).collect();
+        if let Some(records) = entries.get_mut(&(router.into(), client, target)) {
+            records.retain(|r| r.expires > now);
+            if !records.is_empty() {
+                let mut domains: Vec<_> = records.iter().map(|r| r.domain.clone()).collect();
+                domains.sort();
+                return domains;
+            }
+        }
+        // Dual-stack / IPv6 privacy address fallback:
+        // A client may query DNS over IPv4 and connect to AAAA over IPv6 (or vice versa),
+        // or query DNS from a SLAAC IPv6 address and connect from a temporary IPv6 address.
+        let mut domains = Vec::new();
+        for ((r, c, t), records) in entries.iter_mut() {
+            if r == router
+                && *t == target
+                && (client.is_ipv6() || target.is_ipv6() || c.is_ipv6() != client.is_ipv6())
+            {
+                records.retain(|rec| rec.expires > now);
+                for rec in records.iter() {
+                    if !domains.contains(&rec.domain) {
+                        domains.push(rec.domain.clone());
+                    }
+                }
+            }
+        }
         domains.sort();
         domains
     }
@@ -251,5 +273,13 @@ mod tests {
             Instant::now(),
         );
         assert!(t.get_domains("r", c, ip).is_empty());
+        // Dual-stack fallback: DNS queried over IPv4, connection made to AAAA over IPv6
+        let v6_target: IpAddr = "2404:6800:400a:1007::71".parse().unwrap();
+        let v6_client: IpAddr = "240e:305:1890:3000::abcd".parse().unwrap();
+        t.record("r", c, v6_target, "google.com", 60, Instant::now());
+        assert_eq!(
+            t.get_domains("r", v6_client, v6_target),
+            vec!["google.com"]
+        );
     }
 }

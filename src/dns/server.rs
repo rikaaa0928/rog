@@ -50,7 +50,24 @@ impl DnsServer {
         router: Arc<dyn RouterSet>,
         table: Arc<IpDomainTable>,
     ) -> io::Result<Arc<Self>> {
-        let socket = UdpSocket::bind(&cfg.endpoint).await?;
+        let bind_addr: SocketAddr = cfg
+            .endpoint
+            .parse()
+            .map_err(|_| super::config::invalid("invalid DNS endpoint"))?;
+        let sock = socket2::Socket::new(
+            socket2::Domain::for_address(bind_addr),
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        if bind_addr.ip().is_unspecified() {
+            sock.set_reuse_address(true)?;
+        }
+        if bind_addr.is_ipv6() {
+            let _ = sock.set_only_v6(false);
+        }
+        sock.set_nonblocking(true)?;
+        sock.bind(&bind_addr.into())?;
+        let socket = UdpSocket::from_std(sock.into())?;
         log::info!(
             "DNS listening on {} router {}",
             socket.local_addr()?,
@@ -197,15 +214,16 @@ impl DnsServer {
                             .clone()
                     }
                 };
+                let norm_client = SocketAddr::new(super::table::normalize(client.ip()), client.port());
                 let (mut reader, writer) = connector
-                    .udp_tunnel(client.to_string())
+                    .udp_tunnel(norm_client.to_string())
                     .await?
                     .ok_or_else(|| io::Error::other("DNS connector has no UDP tunnel"))?;
                 writer
                     .write(UDPPacket {
                         meta: UDPMeta {
-                            src_addr: client.ip().to_string(),
-                            src_port: client.port(),
+                            src_addr: norm_client.ip().to_string(),
+                            src_port: norm_client.port(),
                             dst_addr: upstream.ip().to_string(),
                             dst_port: upstream.port(),
                         },

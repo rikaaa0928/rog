@@ -44,6 +44,17 @@ impl def::RouterSet for DefaultRouter {
         addr: &RunAddr,
         context: &def::RouteContext,
     ) -> String {
+        self.route_with_domain(l_name, r_name, addr, context)
+            .await
+            .0
+    }
+    async fn route_with_domain(
+        &self,
+        l_name: &str,
+        r_name: &str,
+        addr: &RunAddr,
+        context: &def::RouteContext,
+    ) -> (String, Option<String>) {
         if context.use_dns_mapping {
             if let (Some(table), Some(client), Ok(target), Some(router)) = (
                 &self.dns_table,
@@ -52,7 +63,8 @@ impl def::RouterSet for DefaultRouter {
                 self.router_map.get(r_name),
             ) {
                 let domains = table.get_domains(r_name, client, target);
-                let selected = router.route_mapped(&addr.addr, &domains);
+                let (selected, matched_domain) =
+                    router.route_mapped_with_domain(&addr.addr, &domains);
                 log::info!(
                     "Route listener: {} router: {} ip: {} domains: {:?} -> {}",
                     l_name,
@@ -61,10 +73,10 @@ impl def::RouterSet for DefaultRouter {
                     domains,
                     selected
                 );
-                return selected;
+                return (selected, matched_domain);
             }
         }
-        self.route(l_name, r_name, addr).await
+        (self.route(l_name, r_name, addr).await, None)
     }
 
     async fn route(&self, l_name: &str, r_name: &str, addr: &RunAddr) -> String {

@@ -33,12 +33,20 @@ impl RunConnector for TcpRunConnector {
         &self,
         src_addr: String,
     ) -> Result<Option<(Box<dyn RunUdpReader>, Box<dyn RunUdpWriter>)>> {
-        let is_v6 = src_addr.starts_with('[') || src_addr.matches(':').count() > 1;
-        let bind_addr = if is_v6 { "[::]:0" } else { "0.0.0.0:0" };
-        let socket = match UdpSocket::bind(bind_addr).await {
+        let socket = match socket2::Socket::new(
+            socket2::Domain::IPV6,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )
+        .and_then(|sock| {
+            let _ = sock.set_only_v6(false);
+            sock.set_nonblocking(true)?;
+            let unspec: std::net::SocketAddr = "[::]:0".parse().unwrap();
+            sock.bind(&unspec.into())?;
+            UdpSocket::from_std(sock.into())
+        }) {
             Ok(s) => s,
-            Err(_) if is_v6 => UdpSocket::bind("0.0.0.0:0").await?,
-            Err(e) => return Err(e),
+            Err(_) => UdpSocket::bind("0.0.0.0:0").await?,
         };
         let inner = Arc::new(socket);
         let (reader, writer) = UdpRunStream::new_pair(inner, src_addr);

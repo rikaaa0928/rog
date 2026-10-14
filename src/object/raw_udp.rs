@@ -21,9 +21,10 @@ pub async fn handle_raw_udp(
     observe_registry: ObserveRegistry,
 ) -> Result<()> {
     debug!("raw udp, route based on the first packet");
-    let first_packet = r.read().await?;
-    let client_name = router
-        .route_with_context(
+    let mut first_packet = r.read().await?;
+    let orig_dst_addr = first_packet.meta.dst_addr.clone();
+    let (client_name, mapped_domain) = router
+        .route_with_domain(
             config.listener.name.as_str(),
             config.listener.router.as_str(),
             &RunAddr {
@@ -44,6 +45,13 @@ pub async fn handle_raw_udp(
             format!("Connector config '{}' not found for UDP", client_name),
         )
     })?;
+    let rewrite_v6_domain = if conn_conf.proto != "tcp"
+        && orig_dst_addr.parse::<std::net::Ipv6Addr>().is_ok()
+    {
+        mapped_domain
+    } else {
+        None
+    };
 
     let connector_obj: Arc<Box<dyn RunConnector>>;
     {
@@ -87,6 +95,9 @@ pub async fn handle_raw_udp(
             })?;
 
     let first_packet_len = first_packet.data.len() as u64;
+    if let Some(ref domain) = rewrite_v6_domain {
+        first_packet.meta.dst_addr = domain.clone();
+    }
     udp_writer.write(first_packet).await?;
     observe.add_tx(first_packet_len);
 
@@ -96,6 +107,7 @@ pub async fn handle_raw_udp(
 
     let token_b = cancel_token.clone();
     let observe_tx = observe.clone();
+    let rewrite_domain_b = rewrite_v6_domain.clone();
     let b: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         loop {
             let res: Result<UDPPacket> = select! {
@@ -113,7 +125,7 @@ pub async fn handle_raw_udp(
                     debug!("raw udp loop b read error {:?}", e);
                     break;
                 }
-                Ok(packet) => {
+                Ok(mut packet) => {
                     debug!(
                         "raw udp loop b read src_addr {:?} {} {:?} {}",
                         packet.meta.src_addr,
@@ -124,6 +136,9 @@ pub async fn handle_raw_udp(
                     if packet.data.is_empty() {
                         warn!("raw udp drop");
                         continue;
+                    }
+                    if let Some(ref domain) = rewrite_domain_b {
+                        packet.meta.dst_addr = domain.clone();
                     }
 
                     debug!("raw udp server get udp_packet {:?}", &packet);
@@ -144,6 +159,7 @@ pub async fn handle_raw_udp(
 
     let token_c = cancel_token.clone();
     let observe_rx = observe.clone();
+    let restore_v6_addr = rewrite_v6_domain.as_ref().map(|_| orig_dst_addr);
     let c: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         loop {
             let res: Result<UDPPacket> = select! {
@@ -161,8 +177,11 @@ pub async fn handle_raw_udp(
                     debug!("raw udp loop c tunnel read error {:?}", e);
                     break;
                 }
-                Ok(udp_packet) => {
+                Ok(mut udp_packet) => {
                     let packet_len = udp_packet.data.len() as u64;
+                    if let Some(ref orig_ip) = restore_v6_addr {
+                        udp_packet.meta.dst_addr = orig_ip.clone();
+                    }
                     debug!(
                         "raw udp tunnel udp_packet read src {:?} {:?}",
                         udp_packet.meta.src_addr, udp_packet.meta.src_port,

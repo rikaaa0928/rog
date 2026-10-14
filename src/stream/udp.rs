@@ -122,7 +122,14 @@ impl RunUdpReader for UdpRunStream {
         let inner = self.inner.clone();
 
         let mut buf = [0u8; 65536];
-        let (n, dst) = inner.recv_from(&mut buf).await?;
+        let (n, raw_dst) = inner.recv_from(&mut buf).await?;
+        let dst = match raw_dst {
+            SocketAddr::V6(v6) => match v6.ip().to_ipv4_mapped() {
+                Some(v4) => SocketAddr::new(IpAddr::V4(v4), v6.port()),
+                None => raw_dst,
+            },
+            SocketAddr::V4(_) => raw_dst,
+        };
 
         // Restore the original domain name if this IP was resolved from one.
         // This is critical for TUN + Fake DNS: the client needs the domain back
@@ -166,14 +173,20 @@ impl RunUdpWriter for UdpRunStream {
         let dst_port = packet.meta.dst_port;
         let data = packet.data.clone();
         let resolved_addr = self.resolve_dst_addr(&dst_addr, dst_port).await?;
+        let send_addr = match (inner.local_addr()?.is_ipv6(), resolved_addr) {
+            (true, SocketAddr::V4(v4)) => {
+                SocketAddr::new(IpAddr::V6(v4.ip().to_ipv6_mapped()), v4.port())
+            }
+            _ => resolved_addr,
+        };
         debug!(
             "udp send {:?} to {:?} (requested {}:{})",
             &data.as_slice().len(),
-            &resolved_addr,
+            &send_addr,
             &dst_addr,
             &dst_port
         );
-        inner.send_to(data.as_slice(), resolved_addr).await?;
+        inner.send_to(data.as_slice(), send_addr).await?;
         Ok(())
     }
 }

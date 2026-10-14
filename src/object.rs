@@ -121,8 +121,8 @@ impl Object {
                                         error!("Error handling UDP connection: {}", e);
                                     }
                                 } else {
-                                    let client_name = router_clone
-                                        .route_with_context(
+                                    let (client_name, mapped_domain) = router_clone
+                                        .route_with_domain(
                                             config_clone.listener.name.as_str(),
                                             config_clone.listener.router.as_str(),
                                             addr_ref,
@@ -181,8 +181,19 @@ impl Object {
                                     }
 
                                     debug!("Handshake successful {:?}", addr_ref);
+                                    let connect_target = if conn_conf.proto != "tcp"
+                                        && addr_ref.addr.parse::<std::net::Ipv6Addr>().is_ok()
+                                    {
+                                        if let Some(ref domain) = mapped_domain {
+                                            format!("{}:{}", domain, addr_ref.port)
+                                        } else {
+                                            addr_ref.endpoint()
+                                        }
+                                    } else {
+                                        addr_ref.endpoint()
+                                    };
                                     let client_stream_res = Arc::clone(&connector_obj)
-                                        .connect(addr_ref.endpoint())
+                                        .connect(connect_target)
                                         .await;
 
                                     let error_occurred = client_stream_res.is_err();

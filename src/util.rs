@@ -22,7 +22,11 @@ pub struct RunAddr {
 
 impl RunAddr {
     pub(crate) fn endpoint(&self) -> String {
-        format!("{}:{}", self.addr, self.port)
+        if self.addr.contains(':') && !self.addr.starts_with('[') {
+            format!("[{}]:{}", self.addr, self.port)
+        } else {
+            format!("{}:{}", self.addr, self.port)
+        }
     }
 }
 

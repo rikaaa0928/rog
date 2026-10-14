@@ -119,6 +119,18 @@ pub trait RouterSet: Send + Sync {
     ) -> String {
         self.route(l_name, r_name, addr).await
     }
+    async fn route_with_domain(
+        &self,
+        l_name: &str,
+        r_name: &str,
+        addr: &RunAddr,
+        context: &RouteContext,
+    ) -> (String, Option<String>) {
+        (
+            self.route_with_context(l_name, r_name, addr, context).await,
+            None,
+        )
+    }
     async fn route_dns(&self, _r_name: &str, _domain: &str) -> std::io::Result<DnsRouteDecision> {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,

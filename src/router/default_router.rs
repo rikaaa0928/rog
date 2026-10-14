@@ -72,27 +72,35 @@ impl DefaultBaseRouter {
             matched_rule: None,
         }
     }
+    #[cfg(test)]
     pub(crate) fn route_mapped(&self, ip: &str, domains: &[String]) -> String {
+        self.route_mapped_with_domain(ip, domains).0
+    }
+    pub(crate) fn route_mapped_with_domain(
+        &self,
+        ip: &str,
+        domains: &[String],
+    ) -> (String, Option<String>) {
         use crate::router::matcher::MatchKind;
         for rule in &self.rules {
             let Some(data) = self.data_map.get(&rule.name) else {
                 continue;
             };
-            let mut candidates = vec![];
-            if data.kind() != MatchKind::Domain {
-                candidates.push(ip);
+            if data.kind() != MatchKind::Domain
+                && !rule.exclude.is_match(ip)
+                && data.match_host(ip)
+            {
+                return (rule.select.clone(), domains.first().cloned());
             }
             if data.kind() != MatchKind::Ip {
-                candidates.extend(domains.iter().map(String::as_str));
-            }
-            if candidates
-                .into_iter()
-                .any(|host| !rule.exclude.is_match(host) && data.match_host(host))
-            {
-                return rule.select.clone();
+                for domain in domains {
+                    if !rule.exclude.is_match(domain) && data.match_host(domain) {
+                        return (rule.select.clone(), Some(domain.clone()));
+                    }
+                }
             }
         }
-        self.default_tag.clone()
+        (self.default_tag.clone(), domains.first().cloned())
     }
 
     pub(crate) async fn route(&self, addr: &RunAddr) -> (String, String) {
