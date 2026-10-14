@@ -16,6 +16,7 @@ pub mod block;
 mod connector;
 mod consts;
 pub mod def;
+pub mod dns;
 mod listener;
 mod object;
 mod proto;
@@ -69,14 +70,36 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
         None
     };
 
+    let dns_table = cfg.dns.as_ref().map(|d| {
+        Arc::new(dns::table::IpDomainTable::new(
+            d.mapping_capacity,
+            d.max_domains_per_ip,
+            d.mapping_max_ttl_secs,
+        ))
+    });
     let resolver = router::resolver::Resolver::new();
-    let router = router::DefaultRouter::new(
+    let mut router = router::DefaultRouter::new(
         cfg.router.as_slice(),
         cfg.data.as_ref().unwrap_or(&vec![]).as_slice(),
         resolver,
     )
     .await;
+    router.dns_table = dns_table.clone();
     let router = Arc::new(router);
+    // Bind before starting business listeners so failures cannot leave a partial service.
+    let dns_server = if let (Some(dns_cfg), Some(table)) = (&cfg.dns, &dns_table) {
+        Some(
+            dns::server::DnsServer::bind(
+                dns_cfg.clone(),
+                cfg.clone(),
+                router.clone(),
+                table.clone(),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
 
     spawn(observe_registry.sampler_task());
     if let Some(listen_addr) = proxy_observe::env_listen_addr() {
@@ -102,6 +125,10 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
     }
 
     let mut tasks = Vec::new();
+    if let Some(server) = dns_server {
+        let token = shutdown.clone();
+        tasks.push(spawn(server.run(token)));
+    }
     let server_id = cfg
         .server_id
         .clone()
@@ -120,6 +147,7 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
         }));
     }
 
+    let mut failure = None;
     if tasks.is_empty() {
         shutdown.cancelled().await;
     } else {
@@ -133,18 +161,39 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
                     "A listener task finished unexpectedly: {:?}, cancelling remaining listeners...",
                     result
                 );
+                match result {
+                    Ok(Err(e)) => failure = Some(e),
+                    Err(e) => failure = Some(std::io::Error::other(e)),
+                    Ok(Ok(())) if !shutdown.is_cancelled() => failure = Some(std::io::Error::other("listener stopped unexpectedly")),
+                    _ => {}
+                }
                 shutdown.cancel();
             }
         }
 
         while let Some(res) = futures::StreamExt::next(&mut tasks_stream).await {
-            if let Err(e) = res {
-                error!("listener task error during shutdown: {:?}", e);
+            match res {
+                Ok(Err(e)) => {
+                    error!("listener failed during shutdown: {e}");
+                    if failure.is_none() {
+                        failure = Some(e);
+                    }
+                }
+                Err(e) => {
+                    error!("listener task error during shutdown: {e}");
+                    if failure.is_none() {
+                        failure = Some(std::io::Error::other(e));
+                    }
+                }
+                _ => {}
             }
         }
     }
 
-    Ok(())
+    match failure {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 pub async fn run_config_file(path: impl AsRef<Path>) -> std::io::Result<()> {

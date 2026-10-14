@@ -11,7 +11,36 @@ use crate::router::matcher::domain_keyword::domain_keyword_matcher_factory;
 use crate::router::matcher::domain_suffix::domain_suffix_matcher_factory;
 use crate::router::matcher::regex::regex_matcher_factory;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MatchKind {
+    Ip,
+    Domain,
+    Regex,
+}
+pub struct TypedMatcher {
+    pub inner: Box<dyn Matcher>,
+    pub kind: MatchKind,
+}
+impl Matcher for TypedMatcher {
+    fn match_host(&self, host: &str) -> bool {
+        self.inner.match_host(host)
+    }
+    fn kind(&self) -> MatchKind {
+        self.kind
+    }
+}
+pub fn match_kind(format: &str) -> MatchKind {
+    match format {
+        "cidr" | "lan" => MatchKind::Ip,
+        "regex" => MatchKind::Regex,
+        _ => MatchKind::Domain,
+    }
+}
 pub trait Matcher: Send + Sync {
+    fn kind(&self) -> MatchKind {
+        MatchKind::Regex
+    }
+
     fn match_host(&self, host: &str) -> bool;
 }
 

@@ -53,6 +53,48 @@ impl DefaultBaseRouter {
         }
     }
 
+    pub(crate) fn route_dns(&self, domain: &str) -> crate::def::DnsRouteDecision {
+        for rule in &self.rules {
+            if let Some(data) = self.data_map.get(&rule.name) {
+                if data.kind() != crate::router::matcher::MatchKind::Ip
+                    && !rule.exclude.is_match(domain)
+                    && data.match_host(domain)
+                {
+                    return crate::def::DnsRouteDecision {
+                        outbound: rule.select.clone(),
+                        matched_rule: Some(rule.name.clone()),
+                    };
+                }
+            }
+        }
+        crate::def::DnsRouteDecision {
+            outbound: self.default_tag.clone(),
+            matched_rule: None,
+        }
+    }
+    pub(crate) fn route_mapped(&self, ip: &str, domains: &[String]) -> String {
+        use crate::router::matcher::MatchKind;
+        for rule in &self.rules {
+            let Some(data) = self.data_map.get(&rule.name) else {
+                continue;
+            };
+            let mut candidates = vec![];
+            if data.kind() != MatchKind::Domain {
+                candidates.push(ip);
+            }
+            if data.kind() != MatchKind::Ip {
+                candidates.extend(domains.iter().map(String::as_str));
+            }
+            if candidates
+                .into_iter()
+                .any(|host| !rule.exclude.is_match(host) && data.match_host(host))
+            {
+                return rule.select.clone();
+            }
+        }
+        self.default_tag.clone()
+    }
+
     pub(crate) async fn route(&self, addr: &RunAddr) -> (String, String) {
         for rule in &self.rules {
             let mut hosts = vec![addr.addr.clone().to_string()];
@@ -105,4 +147,62 @@ impl DefaultBaseRouter {
     //     }
     //     self.default_tag.clone()
     // }
+}
+
+#[cfg(test)]
+mod dns_tests {
+    use super::*;
+    use crate::router::matcher::{TypedMatcher, get_matcher_factory_fn, match_kind};
+    fn build(order: &[(&str, &str, &str, Vec<String>)]) -> DefaultBaseRouter {
+        let mut data = HashMap::new();
+        let mut rules = vec![];
+        for (i, (format, value, out, exclude)) in order.iter().enumerate() {
+            let name = i.to_string();
+            data.insert(
+                name.clone(),
+                Box::new(TypedMatcher {
+                    inner: get_matcher_factory_fn(format).unwrap()(vec![value.to_string()], vec![]),
+                    kind: match_kind(format),
+                }) as Box<dyn Matcher>,
+            );
+            rules.push(RouteRule {
+                name,
+                select: out.to_string(),
+                exclude: exclude.clone(),
+                domain_to_ip: Some(true),
+                dns: Some("invalid".into()),
+            });
+        }
+        DefaultBaseRouter::new(
+            "main".into(),
+            "default".into(),
+            rules,
+            Arc::new(data),
+            Resolver::new(),
+        )
+    }
+    #[tokio::test]
+    async fn rule_order_candidates_and_dns_projection() {
+        let domains = vec!["b.example".into(), "c.example".into()];
+        let r = build(&[
+            ("domain-suffix", "c.example", "C", vec![]),
+            ("cidr", "1.1.1.1/32", "IP", vec![]),
+            ("domain-suffix", "b.example", "B", vec![]),
+        ]);
+        assert_eq!(r.route_mapped("1.1.1.1", &domains), "C");
+        assert_eq!(r.route_dns("c.example").outbound, "C");
+        assert!(r.route_dns("unmatched").matched_rule.is_none());
+        let r = build(&[
+            ("cidr", "1.1.1.1/32", "IP", vec![]),
+            (
+                "domain-suffix",
+                "example",
+                "D",
+                vec!["^b\\.example$".into()],
+            ),
+        ]);
+        assert_eq!(r.route_mapped("1.1.1.1", &domains), "IP");
+        assert_eq!(r.route_dns("c.example").outbound, "D");
+        assert_eq!(r.route_mapped("8.8.8.8", &domains), "D");
+    }
 }

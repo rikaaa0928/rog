@@ -23,13 +23,17 @@ pub async fn handle_raw_udp(
     debug!("raw udp, route based on the first packet");
     let first_packet = r.read().await?;
     let client_name = router
-        .route(
+        .route_with_context(
             config.listener.name.as_str(),
             config.listener.router.as_str(),
             &RunAddr {
                 addr: first_packet.meta.dst_addr.clone(),
                 port: first_packet.meta.dst_port,
                 udp: true,
+            },
+            &crate::def::RouteContext {
+                client_ip: first_packet.meta.src_addr.parse().ok(),
+                use_dns_mapping: config.listener.proto == "tproxy",
             },
         )
         .await;
@@ -74,12 +78,13 @@ pub async fn handle_raw_udp(
 
     let src_endpoint =
         udp_endpoint_for_observe(&first_packet.meta.src_addr, first_packet.meta.src_port);
-    let (mut udp_reader, udp_writer) = connector_obj
-        .udp_tunnel(src_endpoint)
-        .await?
-        .ok_or_else(|| {
-            io::Error::other("UDP tunnel creation failed or not supported by connector")
-        })?;
+    let (mut udp_reader, udp_writer) =
+        connector_obj
+            .udp_tunnel(src_endpoint)
+            .await?
+            .ok_or_else(|| {
+                io::Error::other("UDP tunnel creation failed or not supported by connector")
+            })?;
 
     let first_packet_len = first_packet.data.len() as u64;
     udp_writer.write(first_packet).await?;

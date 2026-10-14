@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Config {
+    pub dns: Option<crate::dns::config::DnsConfig>,
     pub reverse_server: Option<ReverseServer>,
     pub listener: Vec<Listener>,
     pub router: Vec<Router>,
@@ -14,6 +15,9 @@ pub struct Config {
 
 impl Config {
     pub fn validate(&self) -> std::io::Result<()> {
+        if let Some(dns) = &self.dns {
+            dns.validate(self)?;
+        }
         if self
             .listener
             .iter()
@@ -38,6 +42,7 @@ pub struct ReverseServer {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Connector {
+    pub dns: Option<Vec<String>>,
     pub endpoint: Option<String>,
     pub name: String,
     pub user: Option<String>,

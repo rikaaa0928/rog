@@ -158,3 +158,11 @@ endpoint = "127.0.0.1:9050" # 替换为你的上游 SOCKS5 代理
 ## 许可证
 
 本项目根据 [LICENSE NAME] 许可证获得许可。
+
+## 独立 UDP DNS 服务
+
+在配置中增加 `[dns]` 即可启动独立 DNS 服务，客户端直接把 DNS 指向 rog 所在机器。DNS 复用 `dns.router` 引用的现有业务规则，跳过 IP 规则并禁止 `domain_to_ip`；每条查询独立选择 outbound。命中规则优先使用该 connector 的 `dns` 列表，否则使用 `dns.default_servers`。未命中时使用业务默认出口和默认 DNS 列表。
+
+参考 `dns_config_example.toml` 和 `docs/design-udp-dns-routing.md`。本机示例监听 `127.0.0.1:5353`，可使用 `dig @127.0.0.1 -p 5353 example.com` 验证；系统 DNS 通常需要监听 53 端口。TPROXY 和 DNS 必须在同一进程并使用同一个 router，才能共享按客户端隔离的真实 IP→域名映射。
+
+首版仅支持 UDP DNS、IPv4 字面上游地址；返回 AAAA 记录不受此限制。TCP/53、DoH/DoT、响应缓存与 FakeDNS 未实现。代理 DNS 出口需要固定 IP endpoint，避免宿主机 DNS 指向 rog 后产生启动解析循环。

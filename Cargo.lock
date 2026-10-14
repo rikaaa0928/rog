@@ -1597,7 +1597,7 @@ dependencies = [
 
 [[package]]
 name = "rog"
-version = "0.1.18"
+version = "0.1.18-dev.1"
 dependencies = [
  "aho-corasick",
  "async-trait",
@@ -1607,6 +1607,7 @@ dependencies = [
  "dashmap",
  "env_logger",
  "futures",
+ "hickory-proto",
  "hickory-resolver",
  "hyper-util",
  "ipnet",

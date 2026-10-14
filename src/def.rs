@@ -97,8 +97,35 @@ pub trait RunAcceptor: Send + Sync {
 pub trait RunListener: Send {
     async fn listen(&self, addr: &str) -> Result<Box<dyn RunAcceptor>>;
 }
+#[derive(Default)]
+pub struct RouteContext {
+    pub client_ip: Option<std::net::IpAddr>,
+    pub use_dns_mapping: bool,
+}
+
+pub struct DnsRouteDecision {
+    pub outbound: String,
+    pub matched_rule: Option<String>,
+}
+
 #[async_trait::async_trait]
 pub trait RouterSet: Send + Sync {
+    async fn route_with_context(
+        &self,
+        l_name: &str,
+        r_name: &str,
+        addr: &RunAddr,
+        _context: &RouteContext,
+    ) -> String {
+        self.route(l_name, r_name, addr).await
+    }
+    async fn route_dns(&self, _r_name: &str, _domain: &str) -> std::io::Result<DnsRouteDecision> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "DNS routing is not supported",
+        ))
+    }
+
     async fn route(&self, l_name: &str, r_name: &str, addr: &RunAddr) -> String;
 }
 

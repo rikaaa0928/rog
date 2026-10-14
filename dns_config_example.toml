@@ -1,0 +1,30 @@
+# Independent UDP DNS server. Point clients directly at this host's DNS address.
+# For local testing: dig @127.0.0.1 -p 5353 example.com
+# Use port 53 for system DNS configuration; do not use this listener as its own upstream.
+listener = []
+
+[dns]
+endpoint = "127.0.0.1:5353"
+router = "main"
+default_servers = ["4.2.2.1:53", "1.1.1.1:53"]
+
+[[connector]]
+name = "direct"
+proto = "tcp"
+dns = ["1.1.1.1:53"]
+
+[[data]]
+name = "selected_domains"
+format = "domain-suffix"
+data = "example.com"
+
+[[router]]
+name = "main"
+default = "direct"
+
+[[router.route_rules]]
+name = "selected_domains"
+select = "direct"
+exclude = []
+# Matched example.com uses connector.dns; unmatched queries use dns.default_servers.
+# A TPROXY listener can use the same router "main" in this process to consume mappings.

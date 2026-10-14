@@ -95,6 +95,7 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             ${{ env.ASSET }}
 

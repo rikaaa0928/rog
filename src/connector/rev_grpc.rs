@@ -40,6 +40,18 @@ pub struct PendingUdpConn {
     pub pw: Option<String>,
 }
 
+// DNS uses a shorter outer request timeout than the reverse handshake. Clean
+// pending entries even when that timeout drops the handshake future.
+struct PendingUdpGuard {
+    state: Arc<RevGrpcState>,
+    id: String,
+}
+impl Drop for PendingUdpGuard {
+    fn drop(&mut self) {
+        self.state.pending_udp.remove(&self.id);
+    }
+}
+
 pub struct RevGrpcState {
     pub managers: DashMap<String, mpsc::Sender<Result<ManagerRes, Status>>>,
     pub pending_streams: DashMap<String, PendingConn>,
@@ -211,6 +223,11 @@ impl RunConnector for RevGrpcRunConnector {
                 pw: self.cfg.pw.clone(),
             },
         );
+
+        let _pending_guard = PendingUdpGuard {
+            state: self.state.clone(),
+            id: conn_id.clone(),
+        };
 
         let req = ManagerRes {
             addr_info: None,
@@ -410,5 +427,29 @@ impl RogReverseService for RevGrpcServer {
         } else {
             Err(Status::not_found("udp conn_id not found or expired"))
         }
+    }
+}
+
+#[cfg(test)]
+mod dns_cancel_tests {
+    use super::*;
+    #[tokio::test]
+    async fn outer_timeout_removes_pending_udp() {
+        let state = Arc::new(RevGrpcState::new());
+        let (tx, mut rx) = mpsc::channel(1);
+        state.managers.insert("reverse".into(), tx);
+        let cfg: config::Connector = toml::from_str("name='reverse'\nproto='rev_grpc'\n").unwrap();
+        let connector = RevGrpcRunConnector {
+            cfg,
+            state: state.clone(),
+        };
+        let result = timeout(
+            Duration::from_millis(10),
+            connector.udp_tunnel("127.0.0.1:12345".into()),
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(rx.try_recv().is_ok());
+        assert!(state.pending_udp.is_empty());
     }
 }

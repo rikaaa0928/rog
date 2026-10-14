@@ -122,10 +122,14 @@ impl Object {
                                     }
                                 } else {
                                     let client_name = router_clone
-                                        .route(
+                                        .route_with_context(
                                             config_clone.listener.name.as_str(),
                                             config_clone.listener.router.as_str(),
                                             addr_ref,
+                                            &crate::def::RouteContext {
+                                                client_ip: Some(peer_addr.ip()),
+                                                use_dns_mapping: config_clone.listener.proto == "tproxy",
+                                            },
                                         )
                                         .await;
                                     let conn_conf = match config_clone

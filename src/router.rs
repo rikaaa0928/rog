@@ -19,11 +19,54 @@ use std::sync::Arc;
 // #[derive(Clone)]
 pub struct DefaultRouter {
     router_map: HashMap<String, DefaultBaseRouter>,
+    pub(crate) dns_table: Option<Arc<crate::dns::table::IpDomainTable>>,
     data_map: Arc<HashMap<String, Box<dyn Matcher>>>,
 }
 
 #[async_trait::async_trait]
 impl def::RouterSet for DefaultRouter {
+    async fn route_dns(
+        &self,
+        r_name: &str,
+        domain: &str,
+    ) -> std::io::Result<def::DnsRouteDecision> {
+        self.router_map
+            .get(r_name)
+            .map(|r| r.route_dns(&crate::dns::table::canonical(domain)))
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "unknown DNS router")
+            })
+    }
+    async fn route_with_context(
+        &self,
+        l_name: &str,
+        r_name: &str,
+        addr: &RunAddr,
+        context: &def::RouteContext,
+    ) -> String {
+        if context.use_dns_mapping {
+            if let (Some(table), Some(client), Ok(target), Some(router)) = (
+                &self.dns_table,
+                context.client_ip,
+                addr.addr.parse::<std::net::IpAddr>(),
+                self.router_map.get(r_name),
+            ) {
+                let domains = table.get_domains(r_name, client, target);
+                let selected = router.route_mapped(&addr.addr, &domains);
+                log::info!(
+                    "Route listener: {} router: {} ip: {} domains: {:?} -> {}",
+                    l_name,
+                    r_name,
+                    addr.addr,
+                    domains,
+                    selected
+                );
+                return selected;
+            }
+        }
+        self.route(l_name, r_name, addr).await
+    }
+
     async fn route(&self, l_name: &str, r_name: &str, addr: &RunAddr) -> String {
         if let Some(router) = self.router_map.get(r_name) {
             let (match_name, res) = router.route(addr).await;
@@ -54,6 +97,7 @@ impl DefaultRouter {
         let data_map = Arc::new(load_route_data(data_cfg).await);
         let mut router_set = DefaultRouter {
             router_map: HashMap::new(),
+            dns_table: None,
             data_map: data_map.clone(),
         };
         for r in cfg {

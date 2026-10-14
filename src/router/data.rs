@@ -54,7 +54,13 @@ pub async fn load_route_data(data_cfg: &[config::RouteData]) -> HashMap<String, 
                 rd_cfg.format.clone(),
                 interval,
             );
-            data_map.insert(rd_cfg.name.clone(), Box::new(matcher));
+            data_map.insert(
+                rd_cfg.name.clone(),
+                Box::new(crate::router::matcher::TypedMatcher {
+                    inner: Box::new(matcher),
+                    kind: crate::router::matcher::match_kind(&rd.format),
+                }),
+            );
             continue;
         } else if rd_cfg.data.is_some() {
             rd.lines = rd_cfg
@@ -70,7 +76,13 @@ pub async fn load_route_data(data_cfg: &[config::RouteData]) -> HashMap<String, 
             continue;
         }
         if let Some(factory) = get_matcher_factory_fn(&rd.format) {
-            data_map.insert(rd_cfg.name.clone(), factory(rd.lines, rd.data));
+            data_map.insert(
+                rd_cfg.name.clone(),
+                Box::new(crate::router::matcher::TypedMatcher {
+                    inner: factory(rd.lines, rd.data),
+                    kind: crate::router::matcher::match_kind(&rd.format),
+                }),
+            );
         }
     }
     data_map
