@@ -6,7 +6,6 @@ use std::str;
 pub(crate) mod bootstrap;
 pub(crate) mod crypto;
 pub(crate) mod grpc_transport;
-pub mod hook;
 pub mod parse;
 pub(crate) mod socks5;
 pub(crate) mod tcp_frame;

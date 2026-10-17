@@ -56,39 +56,23 @@ impl Object {
                 e
             })?;
 
-        // Establish cleanup protection FIRST so any failure or cancellation during up execution
-        // or listener loop will trigger the down hook cleanup.
-        let mut down_guard = crate::util::hook::DownHookGuard::new(
-            crate::util::hook::get_hook_cmd(&config_outer.listener, "down"),
-        );
-
-        // Run up hook if configured; if it fails, abort and let down_guard roll back
-        if let Some(cmd) = crate::util::hook::get_hook_cmd(&config_outer.listener, "up") {
-            let success = crate::util::hook::run_hook(&cmd, "up").await;
-            if !success {
-                error!("Up hook '{}' failed, rolling back listener...", cmd);
-                return Err(io::Error::other(format!("Up hook '{}' failed", cmd)));
-            }
-        }
-
         let main_acceptor = Arc::new(acc);
         let connector_cache_outer = self.connector_cache.clone(); // Clone cache Arc for the loop
 
-        let run_result: io::Result<()> = async {
-            loop {
-                let (acc_stream, peer_addr) = tokio::select! {
-                    _ = shutdown.cancelled() => return Ok(()),
-                    accepted = main_acceptor.accept() => match accepted {
-                        Ok(item) => item,
-                        Err(e) => {
-                            if shutdown.is_cancelled() {
-                                return Ok(());
-                            }
-                            error!("Failed to accept connection: {}", e);
-                            return Err(e);
-                        }
-                    },
-                };
+        loop {
+            let (acc_stream, peer_addr) = tokio::select! {
+            _ = shutdown.cancelled() => return Ok(()),
+            accepted = main_acceptor.accept() => match accepted {
+                Ok(item) => item,
+                Err(e) => {
+                    if shutdown.is_cancelled() {
+                        return Ok(());
+                    }
+                    error!("Failed to accept connection: {}", e);
+                    return Err(e);
+                }
+                },
+            };
             let main_acceptor_clone = Arc::clone(&main_acceptor);
             let router_clone = Arc::clone(&router_outer);
             let config_clone = Arc::clone(&config_outer);
@@ -128,7 +112,8 @@ impl Object {
                                             addr_ref,
                                             &crate::def::RouteContext {
                                                 client_ip: Some(peer_addr.ip()),
-                                                use_dns_mapping: config_clone.listener.proto == "tproxy",
+                                                use_dns_mapping: config_clone.listener.proto
+                                                    == "tproxy",
                                             },
                                         )
                                         .await;
@@ -192,9 +177,8 @@ impl Object {
                                     } else {
                                         addr_ref.endpoint()
                                     };
-                                    let client_stream_res = Arc::clone(&connector_obj)
-                                        .connect(connect_target)
-                                        .await;
+                                    let client_stream_res =
+                                        Arc::clone(&connector_obj).connect(connect_target).await;
 
                                     let error_occurred = client_stream_res.is_err();
                                     debug!(
@@ -281,13 +265,5 @@ impl Object {
                 }
             });
         }
-    }.await;
-
-    // Clean shutdown: execute down hook asynchronously
-    if let Some(cmd) = down_guard.defuse() {
-        crate::util::hook::run_hook(&cmd, "down").await;
-    }
-
-    run_result
     }
 }

@@ -294,10 +294,7 @@ default = "proxy_default"
         let c_cn = cfg.connector.iter().find(|c| c.name == "proxy_cn").unwrap();
         assert_eq!(
             c_cn.dns.as_ref().unwrap(),
-            &vec![
-                "114.114.114.114:53".to_string(),
-                "223.5.5.5:53".to_string()
-            ]
+            &vec!["114.114.114.114:53".to_string(), "223.5.5.5:53".to_string()]
         );
         let b_cn = crate::util::bootstrap::servers(&c_cn.options)
             .unwrap()

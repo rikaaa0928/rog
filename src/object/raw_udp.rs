@@ -44,13 +44,12 @@ pub async fn handle_raw_udp(
             format!("Connector config '{}' not found for UDP", client_name),
         )
     })?;
-    let rewrite_v6_domain = if conn_conf.proto != "tcp"
-        && orig_dst_addr.parse::<std::net::Ipv6Addr>().is_ok()
-    {
-        mapped_domain
-    } else {
-        None
-    };
+    let rewrite_v6_domain =
+        if conn_conf.proto != "tcp" && orig_dst_addr.parse::<std::net::Ipv6Addr>().is_ok() {
+            mapped_domain
+        } else {
+            None
+        };
 
     let connector_obj: Arc<Box<dyn RunConnector>>;
     {
@@ -76,10 +75,7 @@ pub async fn handle_raw_udp(
         inbound: Some(config.listener.name.clone()),
         outbound: Some(client_name.clone()),
         source: format_endpoint(&first_packet.meta.src_addr, first_packet.meta.src_port),
-        destination: format_endpoint(
-            &first_packet.meta.dst_addr,
-            first_packet.meta.dst_port,
-        ),
+        destination: format_endpoint(&first_packet.meta.dst_addr, first_packet.meta.dst_port),
         site: None,
     });
 

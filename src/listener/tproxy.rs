@@ -179,7 +179,10 @@ impl TproxyOptions {
             if let Some(m) = opts.get("mode").and_then(|v| v.as_str()) {
                 mode = m.to_lowercase();
             }
-            if let Some(timeout) = opts.get("udp_idle_timeout_secs").and_then(|v| v.as_integer()) {
+            if let Some(timeout) = opts
+                .get("udp_idle_timeout_secs")
+                .and_then(|v| v.as_integer())
+            {
                 if timeout > 0 {
                     udp_idle_timeout_secs = timeout as u64;
                 }
@@ -508,10 +511,10 @@ impl RunUdpWriter for TproxySessionWriter {
         // packet.meta.src_addr / src_port is the original client.
         // For transparent proxy replies, we must spoof the source as the remote target,
         // and send the datagram to the client destination!
-        let spoofed_src: SocketAddr = parse_endpoint(&packet.meta.dst_addr, packet.meta.dst_port)
-            .unwrap_or(self.orig_dst);
-        let client_dst: SocketAddr = parse_endpoint(&packet.meta.src_addr, packet.meta.src_port)
-            .unwrap_or(self.client_addr);
+        let spoofed_src: SocketAddr =
+            parse_endpoint(&packet.meta.dst_addr, packet.meta.dst_port).unwrap_or(self.orig_dst);
+        let client_dst: SocketAddr =
+            parse_endpoint(&packet.meta.src_addr, packet.meta.src_port).unwrap_or(self.client_addr);
 
         let mut sender_guard = self.sender.lock().await;
         sender_guard
@@ -548,8 +551,7 @@ impl TproxyListener {
         })?;
 
         let options = TproxyOptions::from_listener(&self.cfg.listener);
-        let (accept_tx, accept_rx) =
-            tokio::sync::mpsc::channel::<(RunAccStream, SocketAddr)>(1024);
+        let (accept_tx, accept_rx) = tokio::sync::mpsc::channel::<(RunAccStream, SocketAddr)>(1024);
 
         let run_tcp = options.mode.contains("tcp");
         let run_udp = options.mode.contains("udp");
@@ -557,7 +559,10 @@ impl TproxyListener {
         if !run_tcp && !run_udp {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("Invalid tproxy mode '{}': must contain tcp or udp", options.mode),
+                format!(
+                    "Invalid tproxy mode '{}': must contain tcp or udp",
+                    options.mode
+                ),
             ));
         }
 
@@ -659,7 +664,10 @@ impl TproxyListener {
                             let src_addr = unmapped_socket_addr(src_addr);
                             let orig_dst = unmapped_socket_addr(orig_dst);
                             if is_self_connection(&orig_dst, &listen_addr) {
-                                debug!("tproxy: loopback UDP datagram detected to {}, dropping", orig_dst);
+                                debug!(
+                                    "tproxy: loopback UDP datagram detected to {}, dropping",
+                                    orig_dst
+                                );
                                 continue;
                             }
 
@@ -720,10 +728,7 @@ impl TproxyListener {
                             };
                             if accept_tx_udp
                                 .send((
-                                    RunAccStream::UDPSocket((
-                                        Box::new(reader),
-                                        Box::new(writer),
-                                    )),
+                                    RunAccStream::UDPSocket((Box::new(reader), Box::new(writer))),
                                     src_addr,
                                 ))
                                 .await
@@ -819,7 +824,9 @@ mod tests {
         } else {
             match tx.try_send(item) {
                 Ok(()) => panic!("should not succeed"),
-                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => panic!("should not be full"),
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    panic!("should not be full")
+                }
                 Err(tokio::sync::mpsc::error::TrySendError::Closed(p)) => {
                     item = p;
                     need_new = true;
@@ -911,8 +918,6 @@ mod tests {
             pw: None,
             proto: "tproxy".to_string(),
             router: "default".to_string(),
-            up: None,
-            down: None,
             options: None,
         };
 

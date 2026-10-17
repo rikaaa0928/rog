@@ -277,9 +277,6 @@ mod tests {
         let v6_target: IpAddr = "2404:6800:400a:1007::71".parse().unwrap();
         let v6_client: IpAddr = "240e:305:1890:3000::abcd".parse().unwrap();
         t.record("r", c, v6_target, "google.com", 60, Instant::now());
-        assert_eq!(
-            t.get_domains("r", v6_client, v6_target),
-            vec!["google.com"]
-        );
+        assert_eq!(t.get_domains("r", v6_client, v6_target), vec!["google.com"]);
     }
 }

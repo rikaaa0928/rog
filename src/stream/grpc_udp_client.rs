@@ -14,7 +14,7 @@ pub struct GrpcUdpClientRunWriter {
 
 pub struct GrpcUdpClientRunReader {
     reader: Option<Streaming<UdpRes>>,
-    init: Option<tokio::task::JoinHandle< std::io::Result<Streaming<UdpRes>>>>,
+    init: Option<tokio::task::JoinHandle<std::io::Result<Streaming<UdpRes>>>>,
     src_addr: String,
     auth: String,
 }

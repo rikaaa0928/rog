@@ -86,9 +86,7 @@ impl DefaultBaseRouter {
             let Some(data) = self.data_map.get(&rule.name) else {
                 continue;
             };
-            if data.kind() != MatchKind::Domain
-                && !rule.exclude.is_match(ip)
-                && data.match_host(ip)
+            if data.kind() != MatchKind::Domain && !rule.exclude.is_match(ip) && data.match_host(ip)
             {
                 return (rule.select.clone(), domains.first().cloned());
             }

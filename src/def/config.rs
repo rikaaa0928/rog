@@ -104,10 +104,6 @@ pub struct Listener {
     pub pw: Option<String>,
     pub proto: String,
     pub router: String,
-    #[serde(default)]
-    pub up: Option<String>,
-    #[serde(default)]
-    pub down: Option<String>,
     pub options: Option<HashMap<String, toml::Value>>,
 }
 

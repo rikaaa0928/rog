@@ -244,10 +244,7 @@ impl DnsServer {
                     None => {
                         let fresh = Arc::new(connector::create(cfg).await?);
                         let mut cache = self.cache.lock().await;
-                        cache
-                            .entry(outbound_key.clone())
-                            .or_insert(fresh)
-                            .clone()
+                        cache.entry(outbound_key.clone()).or_insert(fresh).clone()
                     }
                 };
                 let norm_client =
