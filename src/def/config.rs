@@ -20,34 +20,39 @@ impl Config {
             .as_ref()
             .map(|d| d.default_servers.clone())
             .filter(|v| !v.is_empty());
+        let direct_dns = self
+            .connector
+            .iter()
+            .find(|c| c.proto.eq_ignore_ascii_case("tcp"))
+            .and_then(|c| c.dns.clone())
+            .filter(|v| !v.is_empty());
         for conn in &mut self.connector {
-            if conn.dns.as_ref().is_none_or(Vec::is_empty) {
-                if let Some(ref defaults) = default_servers {
-                    conn.dns = Some(defaults.clone());
-                }
+            let explicit_conn_dns = conn.dns.clone().filter(|v| !v.is_empty());
+            if explicit_conn_dns.is_none()
+                && let Some(ref defaults) = default_servers
+            {
+                conn.dns = Some(defaults.clone());
             }
             let has_bootstrap = conn
                 .options
                 .as_ref()
                 .is_some_and(|o| o.contains_key("bootstrap_dns"));
-            if !has_bootstrap {
-                if let Some(fallback_dns) = conn
-                    .dns
+            if !has_bootstrap
+                && let Some(fallback_dns) = explicit_conn_dns
                     .as_ref()
-                    .filter(|v| !v.is_empty())
+                    .or(direct_dns.as_ref())
                     .or(default_servers.as_ref())
-                {
-                    let bootstrap_val = toml::Value::Array(
-                        fallback_dns
-                            .iter()
-                            .cloned()
-                            .map(toml::Value::String)
-                            .collect(),
-                    );
-                    conn.options
-                        .get_or_insert_with(HashMap::new)
-                        .insert("bootstrap_dns".to_string(), bootstrap_val);
-                }
+            {
+                let bootstrap_val = toml::Value::Array(
+                    fallback_dns
+                        .iter()
+                        .cloned()
+                        .map(toml::Value::String)
+                        .collect(),
+                );
+                conn.options
+                    .get_or_insert_with(HashMap::new)
+                    .insert("bootstrap_dns".to_string(), bootstrap_val);
             }
         }
     }

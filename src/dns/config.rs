@@ -306,5 +306,23 @@ default = "proxy_default"
                 "223.5.5.5:53".parse().unwrap()
             ]
         );
+
+        let raw_with_direct = format!(
+            "{raw}\n[[connector]]\nname = \"Direct\"\nproto = \"tcp\"\ndns = [\"223.5.5.5:53\"]\n"
+        );
+        let cfg2 = crate::load_config_str(&raw_with_direct).unwrap();
+        let c_default2 = cfg2
+            .connector
+            .iter()
+            .find(|c| c.name == "proxy_default")
+            .unwrap();
+        assert_eq!(
+            c_default2.dns.as_ref().unwrap(),
+            &vec!["1.1.1.1:53".to_string(), "8.8.8.8:53".to_string()]
+        );
+        let b_default2 = crate::util::bootstrap::servers(&c_default2.options)
+            .unwrap()
+            .unwrap();
+        assert_eq!(b_default2, vec!["223.5.5.5:53".parse().unwrap()]);
     }
 }

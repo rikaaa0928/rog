@@ -96,11 +96,22 @@ impl RunConnector for GrpcRunConnector {
         let rx = tokio_stream::wrappers::ReceiverStream::new(rx);
         let rx = Request::new(rx);
         let mut client = self.client.clone();
-        let resp = match client.stream(rx).await {
-            Ok(r) => r.into_inner(),
-            Err(e) => {
+        let stream_timeout = self
+            .grpc_options
+            .connect_timeout
+            .unwrap_or(Duration::from_secs(10));
+        let resp = match tokio::time::timeout(stream_timeout, client.stream(rx)).await {
+            Ok(Ok(r)) => r.into_inner(),
+            Ok(Err(e)) => {
                 error!("gRPC connector failed to open stream: {}", e);
                 return Err(io::Error::other(e));
+            }
+            Err(_) => {
+                error!("gRPC connector timed out opening stream to {}", addr);
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "grpc stream open timeout",
+                ));
             }
         };
 

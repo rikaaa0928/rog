@@ -2,9 +2,11 @@ use crate::def::{RunConnector, RunStream, RunUdpReader, RunUdpWriter};
 use crate::stream::tcp::TcpRunStream;
 use crate::stream::udp::UdpRunStream;
 use log::error;
-use std::io::Result;
+use std::io::{self, Result};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::{TcpStream, UdpSocket};
+use tokio::time::timeout;
 
 pub struct TcpRunConnector {}
 
@@ -17,9 +19,14 @@ impl TcpRunConnector {
 #[async_trait::async_trait]
 impl RunConnector for TcpRunConnector {
     async fn connect(&self, addr: String) -> Result<Box<dyn RunStream>> {
-        let tcp_stream = match TcpStream::connect(addr.clone()).await {
-            Ok(s) => s,
-            Err(e) => {
+        let tcp_stream = match timeout(Duration::from_secs(10), TcpStream::connect(&addr)).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                error!("Tcp connector failed to connect to {}: {}", addr, e);
+                return Err(e);
+            }
+            Err(_) => {
+                let e = io::Error::new(io::ErrorKind::TimedOut, "tcp connect timeout");
                 error!("Tcp connector failed to connect to {}: {}", addr, e);
                 return Err(e);
             }

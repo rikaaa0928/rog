@@ -432,7 +432,7 @@ fn recv_with_origdst(
 
 #[cfg(target_os = "linux")]
 struct TproxySendHalf {
-    senders: LruCache<SocketAddr, tokio::net::UdpSocket>,
+    senders: LruCache<SocketAddr, (tokio::net::UdpSocket, Instant)>,
 }
 
 #[cfg(target_os = "linux")]
@@ -442,6 +442,23 @@ impl TproxySendHalf {
             .unwrap_or_else(|| NonZeroUsize::new(DEFAULT_TPROXY_SENDER_LRU_CAP).unwrap());
         Self {
             senders: LruCache::new(cap),
+        }
+    }
+
+    fn reap_idle(&mut self, idle_timeout: tokio::time::Duration) {
+        let stale: Vec<SocketAddr> = self
+            .senders
+            .iter()
+            .filter_map(|(&addr, (_, last_used))| {
+                if last_used.elapsed() >= idle_timeout {
+                    Some(addr)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for addr in stale {
+            self.senders.pop(&addr);
         }
     }
 
@@ -469,12 +486,13 @@ impl TproxySendHalf {
 
         if !self.senders.contains(&src) {
             let socket = new_tproxy_udp_sender(src)?;
-            self.senders.put(src, socket);
+            self.senders.put(src, (socket, Instant::now()));
         }
-        let socket = self
+        let (socket, last_used) = self
             .senders
             .get_mut(&src)
             .expect("sender socket must exist after ensure");
+        *last_used = Instant::now();
         socket.send_to(buf, &dst).await
     }
 }
@@ -611,7 +629,8 @@ impl TproxyListener {
                                     }
                                 }
                                 Err(e) => {
-                                    debug!("tproxy tcp accept error: {}", e);
+                                    warn!("tproxy tcp accept error: {}, retrying after backoff...", e);
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                                 }
                             }
                         }
@@ -630,6 +649,7 @@ impl TproxyListener {
             let shutdown_udp = self.shutdown.clone();
             let shutdown_reaper = self.shutdown.clone();
             let send_half = Arc::new(Mutex::new(TproxySendHalf::new(options.udp_max_senders)));
+            let send_half_reaper = send_half.clone();
             let sessions: Arc<Mutex<HashMap<(SocketAddr, SocketAddr), SessionEntry>>> =
                 Arc::new(Mutex::new(HashMap::new()));
             let sessions_recv = sessions.clone();
@@ -754,6 +774,8 @@ impl TproxyListener {
                         _ = tokio::time::sleep(interval_duration) => {
                             let mut guard = sessions_reaper.lock().await;
                             guard.retain(|_, entry| entry.last_activity.elapsed() < idle_timeout);
+                            drop(guard);
+                            send_half_reaper.lock().await.reap_idle(idle_timeout);
                         }
                     }
                 }
