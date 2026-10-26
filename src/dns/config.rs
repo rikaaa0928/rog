@@ -8,6 +8,8 @@ pub struct DnsConfig {
     pub endpoint: String,
     pub router: String,
     pub default_servers: Vec<String>,
+    #[serde(default, alias = "bootstrap_dns")]
+    pub bootstrap_servers: Vec<String>,
     pub disable_aaaa: bool,
     pub upstream_timeout_ms: u64,
     pub request_timeout_ms: u64,
@@ -23,6 +25,7 @@ impl Default for DnsConfig {
             endpoint: String::new(),
             router: String::new(),
             default_servers: vec![],
+            bootstrap_servers: vec![],
             disable_aaaa: false,
             upstream_timeout_ms: 2000,
             request_timeout_ms: 6000,
@@ -134,6 +137,11 @@ impl DnsConfig {
             selected.push(rule.select.as_str());
         }
         let defaults = servers(&self.default_servers)?;
+        let bootstraps = if self.bootstrap_servers.is_empty() {
+            None
+        } else {
+            Some(servers(&self.bootstrap_servers)?)
+        };
         for connector in &config.connector {
             if let Some(dns) = &connector.dns {
                 servers(dns)?;
@@ -175,7 +183,11 @@ impl DnsConfig {
                 let bootstrap = match crate::util::bootstrap::servers(&connector.options)? {
                     Some(b) => Some(b),
                     None if !numeric => {
-                        if let Some(conn_dns) = connector.dns.as_ref().filter(|v| !v.is_empty()) {
+                        if let Some(ref b) = bootstraps {
+                            Some(b.clone())
+                        } else if let Some(conn_dns) =
+                            connector.dns.as_ref().filter(|v| !v.is_empty())
+                        {
                             Some(servers(conn_dns)?)
                         } else {
                             Some(defaults.clone())
@@ -198,6 +210,9 @@ impl DnsConfig {
             }
         }
         let mut all = defaults;
+        if let Some(b) = bootstraps {
+            all.extend(b);
+        }
         for connector in &config.connector {
             if let Some(values) = &connector.dns {
                 all.extend(servers(values)?);
@@ -307,10 +322,11 @@ default = "proxy_default"
             ]
         );
 
-        let raw_with_direct = format!(
-            "{raw}\n[[connector]]\nname = \"Direct\"\nproto = \"tcp\"\ndns = [\"223.5.5.5:53\"]\n"
+        let raw_with_bootstrap = raw.replace(
+            "default_servers = [\"1.1.1.1:53\", \"8.8.8.8:53\"]",
+            "default_servers = [\"1.1.1.1:53\", \"8.8.8.8:53\"]\nbootstrap_servers = [\"223.5.5.5:53\"]",
         );
-        let cfg2 = crate::load_config_str(&raw_with_direct).unwrap();
+        let cfg2 = crate::load_config_str(&raw_with_bootstrap).unwrap();
         let c_default2 = cfg2
             .connector
             .iter()

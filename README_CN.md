@@ -182,6 +182,7 @@ endpoint = "127.0.0.1:9050" # 替换为你的上游 SOCKS5 代理
 endpoint = "[::]:53"
 router = "main"
 default_servers = ["1.1.1.1:53", "8.8.8.8:53"]
+bootstrap_servers = ["114.114.114.114:53", "223.5.5.5:53"]
 disable_aaaa = false # 如不希望局域网使用 IPv6，可设为 true 屏蔽 AAAA 记录
 upstream_timeout_ms = 2000
 request_timeout_ms = 8000
@@ -320,8 +321,8 @@ WantedBy=multi-user.target
 - TPROXY 收到客户端连接后，自动根据目标 IP 反查已学习的域名进行域名规则分流；
 - 当客户端发起 IPv6 连接且命中的代理出口为非直连节点（如仅支持 IPv4 出站的远端代理服务器）时，自动将目标 IPv6 地址还原为学习到的域名发往远端代理节点解析连接。
 
-代理节点域名自身的启动解析（`bootstrap_dns`）按以下优先级自动回退，无需重复配置：
-`connector.options.bootstrap_dns` $\rightarrow$ `connector.dns` $\rightarrow$ `dns.default_servers`。节点域名通过这些服务器直连解析，绕过系统 DNS 和业务 DNS 路由，gRPC 保留域名 TLS/SNI。
+代理节点域名自身的启动解析（`bootstrap_dns`）按以下优先级自动回退，无需在每个节点重复配置：
+`connector.options.bootstrap_dns` $\rightarrow$ `dns.bootstrap_servers` $\rightarrow$ `connector.dns` $\rightarrow$ `dns.default_servers`。节点域名通过这些服务器直连解析（带内存缓存与失败旧值兜底），绕过系统 DNS 和业务 DNS 路由，gRPC 保留域名 TLS/SNI。
 
 ## DNS 映射观测
 

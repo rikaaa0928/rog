@@ -174,6 +174,7 @@ Unlike TUN + Fake-IP setups, `rog`'s `TPROXY + Real DNS` mode requires no virtua
 endpoint = "[::]:53"
 router = "main"
 default_servers = ["1.1.1.1:53", "8.8.8.8:53"]
+bootstrap_servers = ["114.114.114.114:53", "223.5.5.5:53"]
 disable_aaaa = false # Set to true to strip AAAA responses if clients only configure an IPv4 gateway
 upstream_timeout_ms = 2000
 request_timeout_ms = 8000

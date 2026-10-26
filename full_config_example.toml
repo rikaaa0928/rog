@@ -5,6 +5,7 @@
 # endpoint = "[::]:53" # 支持 IPv4/IPv6 双栈监听
 # router = "main_router" # 复用下面定义的路由器规则进行 DNS 分流与 IP->域名学习
 # default_servers = ["1.1.1.1:53", "8.8.8.8:53"] # 默认上游 UDP DNS（未被 connector.dns 覆盖时使用）
+# bootstrap_servers = ["114.114.114.114:53", "223.5.5.5:53"] # 可选：直连解析代理节点自身域名使用的 DNS
 # disable_aaaa = false # 是否屏蔽 AAAA 查询（返回空 NOERROR）
 # upstream_timeout_ms = 2000
 # request_timeout_ms = 6000
@@ -34,7 +35,7 @@ router = "main_router" # 引用下面定义的路由器
 # 连接器配置
 # 注：当启用了 [dns] 时：
 # - connector.dns 未配置时自动回退使用 dns.default_servers；
-# - connector.options.bootstrap_dns 未配置时优先回退使用 connector.dns，其次回退使用 dns.default_servers。
+# - connector.options.bootstrap_dns 未配置时按 dns.bootstrap_servers -> connector.dns -> dns.default_servers 顺序自动回退。
 [[connector]]
 name = "direct"
 proto = "tcp"

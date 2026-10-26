@@ -20,11 +20,10 @@ impl Config {
             .as_ref()
             .map(|d| d.default_servers.clone())
             .filter(|v| !v.is_empty());
-        let direct_dns = self
-            .connector
-            .iter()
-            .find(|c| c.proto.eq_ignore_ascii_case("tcp"))
-            .and_then(|c| c.dns.clone())
+        let bootstrap_servers = self
+            .dns
+            .as_ref()
+            .map(|d| d.bootstrap_servers.clone())
             .filter(|v| !v.is_empty());
         for conn in &mut self.connector {
             let explicit_conn_dns = conn.dns.clone().filter(|v| !v.is_empty());
@@ -38,9 +37,9 @@ impl Config {
                 .as_ref()
                 .is_some_and(|o| o.contains_key("bootstrap_dns"));
             if !has_bootstrap
-                && let Some(fallback_dns) = explicit_conn_dns
+                && let Some(fallback_dns) = bootstrap_servers
                     .as_ref()
-                    .or(direct_dns.as_ref())
+                    .or(explicit_conn_dns.as_ref())
                     .or(default_servers.as_ref())
             {
                 let bootstrap_val = toml::Value::Array(
