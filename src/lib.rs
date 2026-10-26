@@ -1,5 +1,3 @@
-use crate::block::BlockManager;
-use crate::consts::TCP_IO_BUFFER_SIZE;
 use crate::def::config::Config;
 use crate::object::Object;
 use crate::object::config::ObjectConfig;
@@ -12,7 +10,6 @@ use std::sync::Arc;
 use tokio::{fs, spawn};
 use tokio_util::sync::CancellationToken;
 
-pub mod block;
 mod connector;
 mod consts;
 pub mod def;
@@ -23,8 +20,6 @@ mod proto;
 mod router;
 mod stream;
 mod test;
-#[cfg(test)]
-mod test_tcp_buffer;
 mod util;
 
 #[derive(Clone)]
@@ -53,24 +48,6 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
     cfg.validate()?;
     let observe_registry = options.observe_registry;
     let shutdown = options.shutdown;
-
-    let buffer_size = if let Some(n) = &cfg.buffer_size {
-        util::parse::parse_size(n)?
-    } else {
-        0
-    };
-
-    let block_manager = if buffer_size > 0 {
-        let block_number = buffer_size.div_ceil(TCP_IO_BUFFER_SIZE as u64);
-        log::info!(
-            "Global buffer pool size: {} bytes with {} block",
-            buffer_size,
-            block_number
-        );
-        Some(Arc::new(BlockManager::new(block_number)))
-    } else {
-        None
-    };
 
     let dns_table = cfg.dns.as_ref().map(|d| {
         Arc::new(dns::table::IpDomainTable::new(
@@ -146,12 +123,11 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
         let cfg = cfg.clone();
         let router = router.clone();
         let server_id = server_id.clone();
-        let block_manager = block_manager.clone();
         let observe_registry = observe_registry.clone();
         let shutdown = shutdown.clone();
         tasks.push(spawn(async move {
             let obj_conf = Arc::new(ObjectConfig::build(listener.name.as_str(), &cfg, server_id));
-            let obj = Object::new(obj_conf, router, block_manager, observe_registry);
+            let obj = Object::new(obj_conf, router, observe_registry);
             obj.start_with_shutdown(shutdown).await
         }));
     }

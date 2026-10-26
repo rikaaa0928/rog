@@ -10,7 +10,6 @@ pub struct Config {
     pub data: Option<Vec<RouteData>>,
     pub connector: Vec<Connector>,
     pub server_id: Option<String>,
-    pub buffer_size: Option<String>,
 }
 
 impl Config {

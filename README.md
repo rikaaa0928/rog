@@ -8,7 +8,6 @@ A flexible and powerful network proxy.
 - **Configurable routing:** Flexible routing rules based on CIDR, regex, domain suffix, domain keyword, and dynamic remote rule lists.
 - **Asynchronous architecture:** Built with Tokio for high performance and non-blocking operations.
 - **Centralized configuration:** Configuration is managed through a TOML file.
-- **Memory Management:** Global buffer pool to limit memory usage, supporting percentage-based limits.
 - **Independent UDP DNS & IP-Domain Learning:** Built-in dual-stack UDP DNS server with rule-based upstream routing and automatic IP (A/AAAA) → domain mapping for transparent TPROXY routing and cross-stack proxy forwarding.
 
 ## Getting Started
@@ -40,14 +39,12 @@ The configuration is managed through a TOML file.
 #### Global Configuration
 
 - `server_id`: (Optional) Unique identifier for this proxy instance.
-- `buffer_size`: (Optional) Global TCP buffer limit. Supports bytes (e.g., "64MB"), percentage of system memory (e.g., "50%"), or "off" to disable.
 
 Here's an example structure:
 
 ```toml
 # Global settings
 server_id = "my-proxy-01"
-buffer_size = "50%" # Use 50% of available memory for TCP buffers
 
 [[listener]]
 endpoint = "0.0.0.0:1080"

@@ -1,12 +1,9 @@
-use crate::block::{BlockManager, DataBlock};
 use crate::consts::TCP_IO_BUFFER_SIZE;
 use crate::def::RunStream;
 use crate::util::RunAddr;
-use bytes::Bytes;
 use log::debug;
 use proxy_observe::ObserveConnection;
 use std::io::Result;
-use std::sync::Arc;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 
@@ -15,7 +12,6 @@ pub async fn handle_tcp_connection(
     cache: Option<Vec<u8>>,
     client_stream: Box<dyn RunStream>,
     server_stream: Box<dyn RunStream>,
-    block_manager: Option<Arc<BlockManager>>,
     observe: Option<ObserveConnection>,
 ) -> Result<()> {
     debug!("Post Handshake successful {:?}", addr);
@@ -31,143 +27,6 @@ pub async fn handle_tcp_connection(
     }
 
     debug!("start loop");
-    if let Some(block_manager) = block_manager {
-        // s read
-        let s2c_data_block = Arc::new(DataBlock::new(block_manager.clone()));
-        let s2c_data_block_r = s2c_data_block.clone();
-        let server_read_token = cancel_token.clone();
-        let server_reader_task = tokio::spawn(async move {
-            let mut buf = [0u8; TCP_IO_BUFFER_SIZE];
-            loop {
-                select! {
-                    tn = server_r.read(&mut buf) => {
-                        match tn {
-                            Err(e) => {
-                                debug!("Reader task server_reader error: {:?}", e);
-                                break;
-                            }
-                            Ok(0) => {
-                                debug!("Reader task server_reader: r.read() returned 0 (EOF)");
-                                break;
-                            }
-                            Ok(n) => {
-                                let data = Bytes::copy_from_slice(&buf[..n]);
-                                select! {
-                                    _ = s2c_data_block.provide(data) => {}
-                                    _ = server_read_token.cancelled() => {
-                                        debug!("Reader task server_reader interrupted while waiting for buffer.");
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    _ = server_read_token.cancelled() => {
-                        debug!("Reader task server_reader interrupted by cancellation.");
-                        break;
-                    }
-                }
-            }
-            debug!("Reader task server_reader finished, cancelling.");
-            server_read_token.cancel();
-        });
-        // c write
-        let client_write_token = cancel_token.clone();
-        let observe_tx = observe.clone();
-        let client_writer_task = tokio::spawn(async move {
-            loop {
-                select! {
-                    data = s2c_data_block_r.consume() =>{
-                        if let Err(e) = client_w.write(&data).await {
-                                debug!("Reader task client_writer: w.write() error: {:?}", e);
-                                 break;
-                             }
-                        if let Some(observe) = &observe_tx {
-                            observe.add_tx(data.len() as u64);
-                        }
-                    }
-                    _ = client_write_token.cancelled() => {
-                        debug!("Writer task client_writer interrupted by cancellation.");
-                        break;
-                    }
-                }
-            }
-            debug!("Writer task client_writer finished, cancelling.");
-            client_write_token.cancel();
-        });
-        // c read
-        let c2s_data_block = Arc::new(DataBlock::new(block_manager.clone()));
-        let c2s_data_block_r = c2s_data_block.clone();
-        let client_read_token = cancel_token.clone();
-        let client_reader_task = tokio::spawn(async move {
-            let mut buf = [0u8; TCP_IO_BUFFER_SIZE];
-            loop {
-                select! {
-                     tn = client_r.read(&mut buf) => {
-                        match tn {
-                            Err(e) => {
-                                debug!("Reader task client_reader error: {:?}", e);
-                                break;
-                            }
-                            Ok(0) => {
-                                debug!("Reader task client_reader: r.read() returned 0 (EOF)");
-                                break;
-                            }
-                            Ok(n) => {
-                                let data = Bytes::copy_from_slice(&buf[..n]);
-                                select! {
-                                    _ = c2s_data_block.provide(data) => {}
-                                    _ = client_read_token.cancelled() => {
-                                        debug!("Reader task client_reader interrupted while waiting for buffer.");
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    _ = client_read_token.cancelled() => {
-                        debug!("Reader task client_reader interrupted by cancellation.");
-                        break;
-                    }
-                }
-            }
-            debug!("Reader task client_reader finished, cancelling.");
-            client_read_token.cancel();
-        });
-
-        // s write
-        let server_write_token = cancel_token.clone();
-        let observe_rx = observe.clone();
-        let server_writer_task = tokio::spawn(async move {
-            loop {
-                select! {
-                    data = c2s_data_block_r.consume() =>{
-                        if let Err(e) = server_w.write(&data).await {
-                                debug!("Reader task server_writer: w.write() error: {:?}", e);
-                                 break;
-                             }
-                        if let Some(observe) = &observe_rx {
-                            observe.add_rx(data.len() as u64);
-                        }
-                    }
-                     _ = server_write_token.cancelled() => {
-                        debug!("Writer task server_writer interrupted by cancellation.");
-                        break;
-                    }
-                }
-            }
-            debug!("Writer task server_writer finished, cancelling.");
-            server_write_token.cancel();
-        });
-
-        // wait all
-        let _ = server_reader_task.await;
-        let _ = client_writer_task.await;
-        let _ = client_reader_task.await;
-        let _ = server_writer_task.await;
-
-        return Ok(());
-    }
     let token_reader = cancel_token.clone();
     let observe_tx = observe.clone();
     let s2c = tokio::spawn(async move {

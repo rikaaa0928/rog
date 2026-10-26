@@ -1,4 +1,3 @@
-use crate::block::BlockManager;
 use crate::def::{RouterSet, RunAccStream, RunConnector};
 use crate::object::config::ObjectConfig;
 use crate::{connector, listener};
@@ -22,7 +21,6 @@ pub struct Object {
     config: Arc<ObjectConfig>,
     router: Arc<dyn RouterSet>,
     connector_cache: Arc<Mutex<HashMap<String, Arc<Box<dyn RunConnector>>>>>, // New field
-    block_manager: Option<Arc<BlockManager>>,
     observe_registry: ObserveRegistry,
 }
 
@@ -30,14 +28,12 @@ impl Object {
     pub fn new(
         config: Arc<ObjectConfig>,
         router: Arc<dyn RouterSet>,
-        block_manager: Option<Arc<BlockManager>>,
         observe_registry: ObserveRegistry,
     ) -> Self {
         Self {
             config,
             router,
             connector_cache: Arc::new(Mutex::new(HashMap::new())), // Initialize cache
-            block_manager,
             observe_registry,
         }
     }
@@ -77,7 +73,6 @@ impl Object {
             let router_clone = Arc::clone(&router_outer);
             let config_clone = Arc::clone(&config_outer);
             let connector_cache_clone = Arc::clone(&connector_cache_outer); // Clone cache Arc for the spawned task
-            let block_manager_clone = self.block_manager.clone();
             let observe_registry_clone = self.observe_registry.clone();
             spawn(async move {
                 match acc_stream {
@@ -234,7 +229,6 @@ impl Object {
                                         payload_cache,
                                         client_stream,
                                         tcp_stream,
-                                        block_manager_clone,
                                         Some(observe),
                                     )
                                     .await
