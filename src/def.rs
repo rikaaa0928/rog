@@ -38,6 +38,9 @@ pub trait RunReadHalf: Send {
 #[async_trait::async_trait]
 pub trait RunWriteHalf: Send {
     async fn write(&mut self, buf: &[u8]) -> Result<()>;
+    async fn shutdown(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]

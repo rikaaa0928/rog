@@ -509,7 +509,7 @@ impl H3RunConnector {
                         stream: recv,
                         headers_received: false,
                     },
-                    ClientSendBody::H3(send),
+                    ClientSendBody::new_h3(send),
                 ))
             }
             ActiveClientConn::H2(sender) => {
@@ -532,7 +532,7 @@ impl H3RunConnector {
                         response_fut: Some(resp_fut),
                         body: None,
                     },
-                    ClientSendBody::H2(send_stream),
+                    ClientSendBody::new_h2(send_stream),
                 ))
             }
         }

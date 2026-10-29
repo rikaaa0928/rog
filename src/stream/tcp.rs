@@ -33,6 +33,10 @@ impl RunWriteHalf for TcpWriteHalf {
     async fn write(&mut self, buf: &[u8]) -> Result<()> {
         self.writer.write_all(buf).await
     }
+
+    async fn shutdown(&mut self) -> Result<()> {
+        self.writer.shutdown().await
+    }
 }
 
 // 为 MyTcpStream 实现构造方法

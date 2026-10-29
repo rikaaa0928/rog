@@ -14,21 +14,43 @@ use crate::util::h3_frame::{
     encode_lpm_frame, encode_udp_packet_frame,
 };
 
-pub enum ServerSendBody {
+pub enum ServerSendBodyInner {
     H3(h3::server::RequestStream<h3_quinn::SendStream<Bytes>, Bytes>),
     H2(h2::SendStream<Bytes>),
 }
 
+pub struct ServerSendBody {
+    inner: Option<ServerSendBodyInner>,
+}
+
+fn build_grpc_ok_trailers() -> http::HeaderMap {
+    let mut trailers = http::HeaderMap::new();
+    trailers.insert("grpc-status", http::HeaderValue::from_static("0"));
+    trailers
+}
+
 impl ServerSendBody {
+    pub fn new_h3(stream: h3::server::RequestStream<h3_quinn::SendStream<Bytes>, Bytes>) -> Self {
+        Self {
+            inner: Some(ServerSendBodyInner::H3(stream)),
+        }
+    }
+
+    pub fn new_h2(stream: h2::SendStream<Bytes>) -> Self {
+        Self {
+            inner: Some(ServerSendBodyInner::H2(stream)),
+        }
+    }
+
     pub async fn send_raw_bytes(&mut self, mut data: Bytes) -> io::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
-        match self {
-            ServerSendBody::H3(stream) => stream.send_data(data).await.map_err(|e| {
+        match self.inner.as_mut() {
+            Some(ServerSendBodyInner::H3(stream)) => stream.send_data(data).await.map_err(|e| {
                 io::Error::new(ErrorKind::BrokenPipe, format!("h3 server send error: {e}"))
             }),
-            ServerSendBody::H2(stream) => {
+            Some(ServerSendBodyInner::H2(stream)) => {
                 while !data.is_empty() {
                     let want = data.len();
                     stream.reserve_capacity(want);
@@ -58,6 +80,10 @@ impl ServerSendBody {
                 }
                 Ok(())
             }
+            None => Err(io::Error::new(
+                ErrorKind::BrokenPipe,
+                "server send stream already finished",
+            )),
         }
     }
 
@@ -68,17 +94,70 @@ impl ServerSendBody {
         let frame = encode_lpm_frame(payload);
         self.send_raw_bytes(frame).await
     }
+
+    pub async fn finish(&mut self) -> io::Result<()> {
+        if let Some(inner) = self.inner.take() {
+            let trailers = build_grpc_ok_trailers();
+            match inner {
+                ServerSendBodyInner::H3(mut stream) => {
+                    let _ = stream.send_trailers(trailers).await;
+                    let _ = stream.finish().await;
+                }
+                ServerSendBodyInner::H2(mut stream) => {
+                    let _ = stream.send_trailers(trailers);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
-pub enum ServerRecvBody {
+impl Drop for ServerSendBody {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.take() {
+            let trailers = build_grpc_ok_trailers();
+            match inner {
+                ServerSendBodyInner::H3(mut stream) => {
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        handle.spawn(async move {
+                            let _ = stream.send_trailers(trailers).await;
+                            let _ = stream.finish().await;
+                        });
+                    }
+                }
+                ServerSendBodyInner::H2(mut stream) => {
+                    let _ = stream.send_trailers(trailers);
+                }
+            }
+        }
+    }
+}
+
+pub enum ServerRecvBodyInner {
     H3(h3::server::RequestStream<h3_quinn::RecvStream, Bytes>),
     H2(h2::RecvStream),
 }
 
+pub struct ServerRecvBody {
+    inner: Option<ServerRecvBodyInner>,
+}
+
 impl ServerRecvBody {
+    pub fn new_h3(stream: h3::server::RequestStream<h3_quinn::RecvStream, Bytes>) -> Self {
+        Self {
+            inner: Some(ServerRecvBodyInner::H3(stream)),
+        }
+    }
+
+    pub fn new_h2(stream: h2::RecvStream) -> Self {
+        Self {
+            inner: Some(ServerRecvBodyInner::H2(stream)),
+        }
+    }
+
     pub async fn recv_chunk(&mut self) -> io::Result<Option<Bytes>> {
-        match self {
-            ServerRecvBody::H3(stream) => match stream.recv_data().await {
+        match self.inner.as_mut() {
+            Some(ServerRecvBodyInner::H3(stream)) => match stream.recv_data().await {
                 Ok(Some(mut buf)) => {
                     let len = buf.remaining();
                     if len == 0 {
@@ -93,7 +172,7 @@ impl ServerRecvBody {
                     format!("h3 server recv_data error: {e}"),
                 )),
             },
-            ServerRecvBody::H2(stream) => match stream.data().await {
+            Some(ServerRecvBodyInner::H2(stream)) => match stream.data().await {
                 Some(Ok(chunk)) => {
                     let _ = stream.flow_control().release_capacity(chunk.len());
                     Ok(Some(chunk))
@@ -104,6 +183,25 @@ impl ServerRecvBody {
                 )),
                 None => Ok(None),
             },
+            None => Ok(None),
+        }
+    }
+}
+
+impl Drop for ServerRecvBody {
+    fn drop(&mut self) {
+        if let Some(ServerRecvBodyInner::H2(mut stream)) = self.inner.take()
+            && !stream.is_end_stream()
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
+        {
+            handle.spawn(async move {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+                    while let Some(Ok(chunk)) = stream.data().await {
+                        let _ = stream.flow_control().release_capacity(chunk.len());
+                    }
+                })
+                .await;
+            });
         }
     }
 }
@@ -197,6 +295,10 @@ impl RunWriteHalf for H3ServerWriteHalf {
         } else {
             self.send.send_lpm_payload(buf).await
         }
+    }
+
+    async fn shutdown(&mut self) -> io::Result<()> {
+        self.send.finish().await
     }
 }
 

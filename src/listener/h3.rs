@@ -254,19 +254,19 @@ impl RunListener for H3Listener {
 
                         if is_udp {
                             let r = H3UdpServerReadHalf::new(
-                                ServerRecvBody::H2(recv_stream),
+                                ServerRecvBody::new_h2(recv_stream),
                                 auth.clone(),
                                 legacy_pb,
                             );
                             let w = H3UdpServerWriteHalf::new(
-                                ServerSendBody::H2(send_stream),
+                                ServerSendBody::new_h2(send_stream),
                                 legacy_pb,
                             );
                             let _ = udp_tx.send(((r, w), peer_addr)).await;
                         } else {
                             let stream = H3ServerRunStream::new(
-                                ServerRecvBody::H2(recv_stream),
-                                ServerSendBody::H2(send_stream),
+                                ServerRecvBody::new_h2(recv_stream),
+                                ServerSendBody::new_h2(send_stream),
                                 legacy_pb,
                             );
                             let _ = tcp_tx.send((stream, peer_addr)).await;
@@ -366,19 +366,19 @@ impl RunListener for H3Listener {
                                             let (send_half, recv_half) = stream.split();
                                             if is_udp {
                                                 let r = H3UdpServerReadHalf::new(
-                                                    ServerRecvBody::H3(recv_half),
+                                                    ServerRecvBody::new_h3(recv_half),
                                                     auth,
                                                     legacy_pb,
                                                 );
                                                 let w = H3UdpServerWriteHalf::new(
-                                                    ServerSendBody::H3(send_half),
+                                                    ServerSendBody::new_h3(send_half),
                                                     legacy_pb,
                                                 );
                                                 let _ = udp_tx.send(((r, w), peer_addr)).await;
                                             } else {
                                                 let run_stream = H3ServerRunStream::new(
-                                                    ServerRecvBody::H3(recv_half),
-                                                    ServerSendBody::H3(send_half),
+                                                    ServerRecvBody::new_h3(recv_half),
+                                                    ServerSendBody::new_h3(send_half),
                                                     legacy_pb,
                                                 );
                                                 let _ = tcp_tx.send((run_stream, peer_addr)).await;

@@ -41,6 +41,7 @@ pub async fn handle_tcp_connection(
                         }
                         Ok(0) => {
                             debug!("Reader task s2c: r.read() returned 0 (EOF)");
+                            let _ = client_w.shutdown().await;
                             break;
                         }
                         Ok(n) => {
@@ -56,6 +57,7 @@ pub async fn handle_tcp_connection(
                 }
                 _ = token_reader.cancelled() => {
                     debug!("Reader task s2c interrupted by cancellation.");
+                    let _ = client_w.shutdown().await;
                     break;
                 }
             }
@@ -68,6 +70,7 @@ pub async fn handle_tcp_connection(
     let observe_rx = observe.clone();
     let c2s = tokio::spawn(async move {
         let mut buf = vec![0u8; TCP_IO_BUFFER_SIZE];
+        let mut cancel_peer = true;
         loop {
             select! {
                 tn = client_r.read(&mut buf) => {
@@ -78,6 +81,8 @@ pub async fn handle_tcp_connection(
                         }
                         Ok(0) => {
                             debug!("Writer task c2s: r.read() returned 0 (EOF)");
+                            let _ = server_w.shutdown().await;
+                            cancel_peer = false;
                             break;
                         }
                         Ok(n) => {
@@ -93,12 +98,15 @@ pub async fn handle_tcp_connection(
                 }
                 _ = token_writer.cancelled() => {
                     debug!("Writer task c2s interrupted by cancellation.");
+                    let _ = server_w.shutdown().await;
                     break;
                 }
             }
         }
-        debug!("Writer task c2s finished, cancelling.");
-        token_writer.cancel();
+        debug!("Writer task c2s finished.");
+        if cancel_peer {
+            token_writer.cancel();
+        }
     });
 
     if let Err(e) = s2c.await {

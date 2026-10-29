@@ -10,22 +10,38 @@ use crate::util::h3_frame::{
     LpmDecoder, decode_udp_packet_frame, encode_lpm_frame, encode_udp_packet_frame,
 };
 
-pub enum ClientSendBody {
+pub enum ClientSendBodyInner {
     H3(h3::client::RequestStream<h3_quinn::SendStream<Bytes>, Bytes>),
     H2(h2::SendStream<Bytes>),
 }
 
+pub struct ClientSendBody {
+    inner: Option<ClientSendBodyInner>,
+}
+
 impl ClientSendBody {
+    pub fn new_h3(stream: h3::client::RequestStream<h3_quinn::SendStream<Bytes>, Bytes>) -> Self {
+        Self {
+            inner: Some(ClientSendBodyInner::H3(stream)),
+        }
+    }
+
+    pub fn new_h2(stream: h2::SendStream<Bytes>) -> Self {
+        Self {
+            inner: Some(ClientSendBodyInner::H2(stream)),
+        }
+    }
+
     pub async fn send_raw_bytes(&mut self, mut data: Bytes) -> io::Result<()> {
         if data.is_empty() {
             return Ok(());
         }
-        match self {
-            ClientSendBody::H3(stream) => stream
+        match self.inner.as_mut() {
+            Some(ClientSendBodyInner::H3(stream)) => stream
                 .send_data(data)
                 .await
                 .map_err(|e| io::Error::new(ErrorKind::BrokenPipe, format!("h3 send error: {e}"))),
-            ClientSendBody::H2(stream) => {
+            Some(ClientSendBodyInner::H2(stream)) => {
                 while !data.is_empty() {
                     let want = data.len();
                     stream.reserve_capacity(want);
@@ -52,6 +68,10 @@ impl ClientSendBody {
                 }
                 Ok(())
             }
+            None => Err(io::Error::new(
+                ErrorKind::BrokenPipe,
+                "client send stream already finished",
+            )),
         }
     }
 
@@ -61,6 +81,39 @@ impl ClientSendBody {
         }
         let frame = encode_lpm_frame(payload);
         self.send_raw_bytes(frame).await
+    }
+
+    pub async fn finish(&mut self) -> io::Result<()> {
+        if let Some(inner) = self.inner.take() {
+            match inner {
+                ClientSendBodyInner::H3(mut stream) => {
+                    let _ = stream.finish().await;
+                }
+                ClientSendBodyInner::H2(mut stream) => {
+                    let _ = stream.send_data(Bytes::new(), true);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ClientSendBody {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.take() {
+            match inner {
+                ClientSendBodyInner::H3(mut stream) => {
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        handle.spawn(async move {
+                            let _ = stream.finish().await;
+                        });
+                    }
+                }
+                ClientSendBodyInner::H2(mut stream) => {
+                    let _ = stream.send_data(Bytes::new(), true);
+                }
+            }
+        }
     }
 }
 
@@ -73,6 +126,25 @@ pub enum ClientRecvBody {
         response_fut: Option<h2::client::ResponseFuture>,
         body: Option<h2::RecvStream>,
     },
+}
+
+impl Drop for ClientRecvBody {
+    fn drop(&mut self) {
+        if let ClientRecvBody::H2 { body, .. } = self
+            && let Some(mut stream) = body.take()
+            && !stream.is_end_stream()
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
+        {
+            handle.spawn(async move {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+                    while let Some(Ok(chunk)) = stream.data().await {
+                        let _ = stream.flow_control().release_capacity(chunk.len());
+                    }
+                })
+                .await;
+            });
+        }
+    }
 }
 
 impl ClientRecvBody {
@@ -210,6 +282,10 @@ impl H3ClientWriteHalf {
 impl RunWriteHalf for H3ClientWriteHalf {
     async fn write(&mut self, buf: &[u8]) -> io::Result<()> {
         self.send.send_lpm_payload(buf).await
+    }
+
+    async fn shutdown(&mut self) -> io::Result<()> {
+        self.send.finish().await
     }
 }
 
