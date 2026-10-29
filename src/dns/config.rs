@@ -155,13 +155,13 @@ impl DnsConfig {
                 .ok_or_else(|| invalid(format!("unknown DNS connector: {name}")))?;
             if !matches!(
                 connector.proto.as_str(),
-                "tcp" | "pb_tcp" | "grpc" | "rev_grpc" | "block"
+                "tcp" | "pb_tcp" | "grpc" | "h3" | "rev_grpc" | "block"
             ) {
                 return Err(invalid(format!(
                     "connector {name} does not support DNS UDP"
                 )));
             }
-            if matches!(connector.proto.as_str(), "pb_tcp" | "grpc") {
+            if matches!(connector.proto.as_str(), "pb_tcp" | "grpc" | "h3") {
                 if connector.pw.as_deref().is_none_or(str::is_empty) {
                     return Err(invalid(format!("DNS proxy {name} requires a password")));
                 }
