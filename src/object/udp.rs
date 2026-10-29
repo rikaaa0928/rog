@@ -1,13 +1,15 @@
 use crate::connector;
-use crate::def::{RouterSet, RunAcceptor, RunStream, UDPPacket};
+use crate::def::{RouterSet, RunAcceptor, RunConnector, RunStream, UDPPacket};
 use crate::object::config::ObjectConfig;
 use crate::util::{RunAddr, format_endpoint};
 use log::{debug, info, warn};
 use proxy_observe::{ConnectionMeta, ObserveRegistry};
+use std::collections::HashMap;
 use std::io::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
+use tokio::sync::Mutex;
 use tokio::{select, spawn};
 use tokio_util::sync::CancellationToken;
 
@@ -17,6 +19,7 @@ pub async fn handle_udp_connection(
     config: Arc<ObjectConfig>,
     router: Arc<dyn RouterSet>,
     addr: RunAddr,
+    connector_cache: Arc<Mutex<HashMap<String, Arc<Box<dyn RunConnector>>>>>,
     observe_registry: ObserveRegistry,
 ) -> Result<()> {
     info!("udp? {:?}", addr);
@@ -99,7 +102,20 @@ pub async fn handle_udp_connection(
         )
         .await;
     let conn_conf = config.connector.get(client_name.as_str()).unwrap();
-    let ctor = connector::create(conn_conf).await?;
+    let ctor: Arc<Box<dyn RunConnector>>;
+    {
+        let mut cache_guard = connector_cache.lock().await;
+        if let Some(cached_connector) = cache_guard.get(client_name.as_str()) {
+            ctor = Arc::clone(cached_connector);
+            debug!("Reusing cached connector for SOCKS5 UDP: {}", client_name);
+        } else {
+            debug!("Creating new connector for SOCKS5 UDP: {}", client_name);
+            let new_connector = connector::create(conn_conf).await?;
+            let new_connector_arc = Arc::new(new_connector);
+            cache_guard.insert(client_name.clone(), Arc::clone(&new_connector_arc));
+            ctor = new_connector_arc;
+        }
+    }
     let observe = observe_registry.open(ConnectionMeta {
         service: "rog".to_string(),
         network: "udp".to_string(),

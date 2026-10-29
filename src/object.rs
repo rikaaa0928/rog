@@ -85,14 +85,13 @@ impl Object {
                             Ok((addr, payload_cache)) => {
                                 let addr_ref = &addr;
                                 if addr_ref.udp {
-                                    // Assuming udp::handle_udp_connection might also need caching if it creates connectors.
-                                    // For now, this part remains as is, focusing on the primary TCP/raw_udp paths.
                                     if let Err(e) = udp::handle_udp_connection(
                                         tcp_stream,
                                         Arc::clone(&main_acceptor_clone),
-                                        config_clone.clone(), // Pass cloned config
-                                        router_clone.clone(), // Pass cloned router
+                                        config_clone.clone(),
+                                        router_clone.clone(),
                                         addr,
+                                        connector_cache_clone,
                                         observe_registry_clone.clone(),
                                     )
                                     .await
