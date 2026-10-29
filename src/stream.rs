@@ -2,6 +2,8 @@ pub(crate) mod grpc_client;
 pub(crate) mod grpc_server;
 pub(crate) mod grpc_udp_client;
 pub(crate) mod grpc_udp_server;
+pub(crate) mod h3_client;
+pub(crate) mod h3_server;
 pub(crate) mod pb_tcp_client;
 pub(crate) mod pb_tcp_server;
 pub(crate) mod pb_tcp_udp_client;

@@ -1,1 +1,1 @@
-pub const TCP_IO_BUFFER_SIZE: usize = 2048;
+pub const TCP_IO_BUFFER_SIZE: usize = 32 * 1024;

@@ -1,6 +1,6 @@
 [package]
 name = "rog"
-version = "0.1.18-dev.11"
+version = "0.1.18-dev.12"
 edition = "2024"
 
 [dependencies]
@@ -43,6 +43,17 @@ proxy-observe = { package = "riproxy-observe", version = "0.1.1" }
 socket2 = { version = "0.6.1", features = ["all"] }
 libc = "0.2"
 lru = "0.12"
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+h2 = "0.4"
+http = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
+rustls-pki-types = "1"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+webpki-roots = "1.0"
+rcgen = "0.13"
 
 
 [build-dependencies]

@@ -30,7 +30,7 @@ pub async fn handle_tcp_connection(
     let token_reader = cancel_token.clone();
     let observe_tx = observe.clone();
     let s2c = tokio::spawn(async move {
-        let mut buf = [0u8; TCP_IO_BUFFER_SIZE];
+        let mut buf = vec![0u8; TCP_IO_BUFFER_SIZE];
         loop {
             select! {
                 tn = server_r.read(&mut buf) => {
@@ -67,7 +67,7 @@ pub async fn handle_tcp_connection(
     let token_writer = cancel_token.clone();
     let observe_rx = observe.clone();
     let c2s = tokio::spawn(async move {
-        let mut buf = [0u8; TCP_IO_BUFFER_SIZE];
+        let mut buf = vec![0u8; TCP_IO_BUFFER_SIZE];
         loop {
             select! {
                 tn = client_r.read(&mut buf) => {

@@ -1,5 +1,6 @@
 use crate::def::{RunAcceptor, RunListener};
 use crate::listener::grpc::GrpcListener;
+use crate::listener::h3::H3Listener;
 use crate::listener::htss5::Htss5RunAcceptor;
 use crate::listener::http::HttpRunAcceptor;
 use crate::listener::pb_tcp::PbTcpListener;
@@ -9,6 +10,7 @@ use crate::listener::tcp::TcpRunListener;
 use crate::object::config::ObjectConfig;
 
 pub(crate) mod grpc;
+pub(crate) mod h3;
 pub(crate) mod htss5;
 pub(crate) mod http;
 pub(crate) mod pb_tcp;
@@ -32,6 +34,11 @@ pub async fn create(
         "grpc" => {
             let grpc = GrpcListener::new(cfg.clone()); // router argument removed from call
             let acc = grpc.listen(cfg.listener.endpoint.as_str()).await?;
+            Ok(acc)
+        }
+        "h3" => {
+            let h3 = H3Listener::new(cfg.clone());
+            let acc = h3.listen(cfg.listener.endpoint.as_str()).await?;
             Ok(acc)
         }
         "rev_grpc" => {
