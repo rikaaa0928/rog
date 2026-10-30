@@ -81,7 +81,7 @@ pub struct DomainSuffixMatcher {
 
 impl Matcher for DomainSuffixMatcher {
     fn match_host(&self, host: &str) -> bool {
-        if host.parse::<IpAddr>().is_ok() {
+        if host.trim_matches(['[', ']']).parse::<IpAddr>().is_ok() {
             return false;
         }
         self.trie.matches(host)

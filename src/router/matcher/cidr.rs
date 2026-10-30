@@ -46,11 +46,15 @@ struct CidrLine {
 
 impl CidrLine {
     fn match_line(&self, line: &str) -> bool {
+        let trimmed = line.trim_matches(['[', ']']);
         if let Some(cidr) = &self.cidr {
-            if let Ok(ip) = line.parse::<IpAddr>() {
+            if let Ok(ip) = trimmed.parse::<IpAddr>() {
                 return cidr.contains(ip);
             }
         }
-        self.host.as_ref().map(|h| h == line).unwrap_or(false)
+        self.host
+            .as_ref()
+            .map(|h| h == line || h == trimmed)
+            .unwrap_or(false)
     }
 }

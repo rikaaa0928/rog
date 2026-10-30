@@ -166,8 +166,9 @@ pub(crate) fn parse_address(addr: &str) -> io::Result<(String, u16)> {
         .parse()
         .map_err(|_| io::Error::new(ErrorKind::InvalidData, "addr port error"))?;
 
-    // 验证主机名不为空
-    if host.trim_matches(['[', ']']).is_empty() {
+    // 验证主机名不为空并剥离 IPv6 方括号
+    let host = host.trim_matches(['[', ']']);
+    if host.is_empty() {
         return Err(io::Error::new(ErrorKind::InvalidData, "host empty error"));
     }
 

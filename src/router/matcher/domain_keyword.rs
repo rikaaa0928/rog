@@ -8,7 +8,7 @@ pub struct DomainKeywordMatcher {
 
 impl Matcher for DomainKeywordMatcher {
     fn match_host(&self, host: &str) -> bool {
-        if host.parse::<IpAddr>().is_ok() {
+        if host.trim_matches(['[', ']']).parse::<IpAddr>().is_ok() {
             return false;
         }
         if let Some(ref ac) = self.ac {

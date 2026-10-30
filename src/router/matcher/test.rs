@@ -5,12 +5,23 @@ mod tests {
 
     #[test]
     fn test_cidr_matcher() {
-        let lines = vec!["192.168.1.0/24".to_string(), "10.0.0.1/32".to_string()];
+        let lines = vec![
+            "192.168.1.0/24".to_string(),
+            "10.0.0.1/32".to_string(),
+            "2001:db8::/32".to_string(),
+            "::1/128".to_string(),
+        ];
         let factory = get_matcher_factory_fn(consts::FORMAT_CIDR).unwrap();
         let matcher = factory(lines, vec![]);
         assert!(matcher.match_host("192.168.1.1"));
         assert!(matcher.match_host("10.0.0.1"));
         assert!(!matcher.match_host("192.168.2.1"));
+        assert!(matcher.match_host("2001:db8::1"));
+        assert!(matcher.match_host("[2001:db8::1]"));
+        assert!(matcher.match_host("::1"));
+        assert!(matcher.match_host("[::1]"));
+        assert!(!matcher.match_host("2001:db9::1"));
+        assert!(!matcher.match_host("[2001:db9::1]"));
     }
 
     #[test]
@@ -53,6 +64,8 @@ mod tests {
             // IP addresses shouldn't match domain suffix
             assert!(!matcher.match_host("8.8.8.8"));
             assert!(!matcher.match_host("127.0.0.1"));
+            assert!(!matcher.match_host("2001:db8::1"));
+            assert!(!matcher.match_host("[2001:db8::1]"));
         }
     }
 
@@ -78,6 +91,8 @@ mod tests {
 
             // IP addresses shouldn't match domain keyword
             assert!(!matcher.match_host("8.8.8.8"));
+            assert!(!matcher.match_host("2001:db8::1"));
+            assert!(!matcher.match_host("[2001:db8::1]"));
         }
     }
 

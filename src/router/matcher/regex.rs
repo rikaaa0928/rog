@@ -61,15 +61,23 @@ fn parse_regex_line(line: &str) -> RegexLine {
 
 impl RegexLine {
     fn match_line(&self, host: &str) -> bool {
-        if let Ok(ip) = host.parse::<IpAddr>() {
+        let trimmed = host.trim_matches(['[', ']']);
+        if let Ok(ip) = trimmed.parse::<IpAddr>() {
             if self.cidr.is_some() {
                 return self.cidr.as_ref().unwrap().contains(ip);
             }
-            return self.host.as_ref().map(|h| h == host).unwrap_or(false);
+            return self
+                .host
+                .as_ref()
+                .map(|h| h == host || h == trimmed)
+                .unwrap_or(false);
         }
         if self.regex.is_some() {
             return self.regex.as_ref().unwrap().is_match(host);
         }
-        self.host.as_ref().map(|h| h == host).unwrap_or(false)
+        self.host
+            .as_ref()
+            .map(|h| h == host || h == trimmed)
+            .unwrap_or(false)
     }
 }

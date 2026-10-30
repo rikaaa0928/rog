@@ -156,6 +156,7 @@ impl RunAcceptor for Htss5RunAcceptor {
                         .ok_or_else(|| {
                             std::io::Error::new(ErrorKind::InvalidData, "URL has no host")
                         })?
+                        .trim_matches(['[', ']'])
                         .to_owned(),
                     port: ip_port.port_or_known_default().ok_or_else(|| {
                         std::io::Error::new(ErrorKind::InvalidData, "URL has no port")
