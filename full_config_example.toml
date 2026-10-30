@@ -47,19 +47,20 @@ name = "proxy_outbound"
 proto = "socks5"
 endpoint = "127.0.0.1:1081" # 代理服务器地址（未指定 dns 时自动继承 dns.default_servers）
 
-# gRPC / rev_grpc 推荐传输配置，可放在 proto = "grpc" 的 listener/connector
+# gRPC / rev_grpc / h3 推荐传输配置，可放在 proto = "grpc" / "h3" 的 listener/connector
 # 或 reverse_server.options / proto = "rev_grpc" 的 listener 上。
 # [listener.options]
 # keep_alive = true
 # keep_alive_interval_secs = 30
 # keep_alive_timeout_secs = 20
 # keep_alive_while_idle = true
+# max_idle_timeout_secs = 90 # QUIC/H3 空闲超时（秒，默认 60）
 # connect_timeout_secs = 10
 # tcp_nodelay = true
 # tcp_keepalive_secs = 60
 # tcp_keepalive_interval_secs = 20
 # tcp_keepalive_retries = 3
-# initial_stream_window_size = "4m"
+# initial_stream_window_size = "8m"
 # initial_connection_window_size = "16m"
 # stream_channel_size = 64
 # channel_buffer_size = 1024
@@ -68,6 +69,9 @@ endpoint = "127.0.0.1:1081" # 代理服务器地址（未指定 dns 时自动继
 # max_concurrent_streams = 256
 # concurrency_limit = 256
 # concurrency_limit_per_connection = 256
+# connections = 2 # H3 connector 连接池并发连接数（默认 2，移动端建议 1）
+# fallback_h2 = true # H3 connector QUIC 失败时是否自动回退 HTTP/2 over TLS
+# congestion_control = "bbr" # H3 connector 拥塞控制（"bbr" 默认，或 "cubic"）
 
 # 路由数据配置
 # 这些数据可以在路由规则中被引用

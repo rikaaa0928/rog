@@ -119,12 +119,11 @@ impl H3Listener {
             .unwrap_or(DEFAULT_MAX_CONCURRENT_STREAMS);
 
         let mut transport = quinn::TransportConfig::default();
-        transport.max_idle_timeout(Some(
-            Duration::from_secs(60)
-                .try_into()
-                .expect("valid idle timeout"),
-        ));
-        transport.keep_alive_interval(Some(Duration::from_secs(15)));
+        let idle_timeout = grpc_opts
+            .max_idle_timeout
+            .unwrap_or(Duration::from_secs(60));
+        transport.max_idle_timeout(idle_timeout.try_into().ok());
+        transport.keep_alive_interval(grpc_opts.effective_keep_alive_interval());
         transport.receive_window(quinn::VarInt::from_u32(conn_win));
         transport.stream_receive_window(quinn::VarInt::from_u32(stream_win));
         transport.send_window(u64::from(conn_win));
@@ -190,6 +189,10 @@ impl RunListener for H3Listener {
         let tcp_tx_h2 = tcp_tx.clone();
         let udp_tx_h2 = udp_tx.clone();
         let auth_h2 = auth.clone();
+        let tcp_nodelay = grpc_opts.tcp_nodelay;
+        let tcp_keepalive = grpc_opts.tcp_keepalive;
+        let tcp_keepalive_interval = grpc_opts.tcp_keepalive_interval;
+        let tcp_keepalive_retries = grpc_opts.tcp_keepalive_retries;
 
         tokio::spawn(async move {
             loop {
@@ -200,7 +203,15 @@ impl RunListener for H3Listener {
                         continue;
                     }
                 };
-                let _ = socket.set_nodelay(true);
+                let _ = socket.set_nodelay(tcp_nodelay);
+                if let Some(tcp_keepalive) = tcp_keepalive {
+                    let _ = crate::util::grpc_transport::apply_tcp_keepalive(
+                        &socket,
+                        tcp_keepalive,
+                        tcp_keepalive_interval,
+                        tcp_keepalive_retries,
+                    );
+                }
                 let tcp_tx = tcp_tx_h2.clone();
                 let udp_tx = udp_tx_h2.clone();
                 let auth = auth_h2.clone();

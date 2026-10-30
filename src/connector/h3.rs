@@ -88,6 +88,7 @@ pub struct H3RunConnector {
     connect_timeout: Duration,
     stream_window: u32,
     conn_window: u32,
+    grpc_opts: GrpcTransportOptions,
     bootstrap_dns: Option<Vec<SocketAddr>>,
     quinn_endpoint_v4: Option<quinn::Endpoint>,
     quinn_endpoint_v6: Option<quinn::Endpoint>,
@@ -209,12 +210,11 @@ impl H3RunConnector {
                 })?;
             let mut client_cfg = quinn::ClientConfig::new(Arc::new(quic_tls));
             let mut transport = quinn::TransportConfig::default();
-            transport.max_idle_timeout(Some(
-                Duration::from_secs(60)
-                    .try_into()
-                    .expect("valid idle timeout"),
-            ));
-            transport.keep_alive_interval(Some(grpc_opts.keep_alive_interval));
+            let idle_timeout = grpc_opts
+                .max_idle_timeout
+                .unwrap_or(Duration::from_secs(60));
+            transport.max_idle_timeout(idle_timeout.try_into().ok());
+            transport.keep_alive_interval(grpc_opts.effective_keep_alive_interval());
             transport.receive_window(quinn::VarInt::from_u32(conn_window));
             transport.stream_receive_window(quinn::VarInt::from_u32(stream_window));
             transport.send_window(u64::from(conn_window));
@@ -265,6 +265,7 @@ impl H3RunConnector {
             connect_timeout,
             stream_window,
             conn_window,
+            grpc_opts,
             bootstrap_dns,
             quinn_endpoint_v4,
             quinn_endpoint_v6,
@@ -386,7 +387,15 @@ impl H3RunConnector {
         for &remote_addr in addrs {
             match tokio::time::timeout(self.connect_timeout, tokio::net::TcpStream::connect(remote_addr)).await {
                 Ok(Ok(tcp)) => {
-                    let _ = tcp.set_nodelay(true);
+                    let _ = tcp.set_nodelay(self.grpc_opts.tcp_nodelay);
+                    if let Some(tcp_keepalive) = self.grpc_opts.tcp_keepalive {
+                        let _ = crate::util::grpc_transport::apply_tcp_keepalive(
+                            &tcp,
+                            tcp_keepalive,
+                            self.grpc_opts.tcp_keepalive_interval,
+                            self.grpc_opts.tcp_keepalive_retries,
+                        );
+                    }
                     let mut h2_builder = h2::client::Builder::new();
                     h2_builder
                         .initial_window_size(self.stream_window)

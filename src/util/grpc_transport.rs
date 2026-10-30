@@ -17,6 +17,7 @@ pub(crate) struct GrpcTransportOptions {
     pub keep_alive_interval: Duration,
     pub keep_alive_timeout: Duration,
     pub keep_alive_while_idle: bool,
+    pub max_idle_timeout: Option<Duration>,
     pub connect_timeout: Option<Duration>,
     pub tcp_keepalive: Option<Duration>,
     pub tcp_keepalive_interval: Option<Duration>,
@@ -57,6 +58,14 @@ impl GrpcTransportOptions {
             keep_alive_interval,
             keep_alive_timeout,
             keep_alive_while_idle: option_bool(options, &["keep_alive_while_idle"], true),
+            max_idle_timeout: option_duration_secs_opt(
+                options,
+                &[
+                    "max_idle_timeout_secs",
+                    "idle_timeout_secs",
+                    "quic_max_idle_timeout_secs",
+                ],
+            ),
             connect_timeout: option_duration_secs_opt(options, &["connect_timeout_secs"]),
             tcp_keepalive: option_duration_secs_opt(options, &["tcp_keepalive_secs"]),
             tcp_keepalive_interval: option_duration_secs_opt(
@@ -111,6 +120,14 @@ impl GrpcTransportOptions {
 
     pub fn stream_channel_size_or(&self, default: usize) -> usize {
         self.stream_channel_size.unwrap_or(default).max(1)
+    }
+
+    pub fn effective_keep_alive_interval(&self) -> Option<Duration> {
+        if self.keep_alive && !self.keep_alive_interval.is_zero() {
+            Some(self.keep_alive_interval)
+        } else {
+            None
+        }
     }
 }
 
@@ -253,7 +270,7 @@ pub(crate) async fn connect_channel_with_bootstrap(
         .await
 }
 
-fn apply_tcp_keepalive(
+pub(crate) fn apply_tcp_keepalive(
     stream: &TcpStream,
     time: Duration,
     interval: Option<Duration>,
@@ -372,4 +389,36 @@ fn option_size_u32(
     keys: &[&str],
 ) -> Option<u32> {
     option_size(options, keys).and_then(|n| u32::try_from(n).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_h3_keep_alive_and_idle_timeout_options() {
+        let default_opts = GrpcTransportOptions::from_options(&None);
+        assert!(!default_opts.keep_alive);
+        assert_eq!(default_opts.effective_keep_alive_interval(), None);
+        assert_eq!(default_opts.max_idle_timeout, None);
+
+        let mut map = HashMap::new();
+        map.insert("keep_alive".to_string(), toml::Value::Boolean(true));
+        map.insert(
+            "keep_alive_interval_secs".to_string(),
+            toml::Value::Integer(25),
+        );
+        map.insert(
+            "max_idle_timeout_secs".to_string(),
+            toml::Value::Integer(90),
+        );
+        let opts = GrpcTransportOptions::from_options(&Some(map));
+        assert!(opts.keep_alive);
+        assert_eq!(
+            opts.effective_keep_alive_interval(),
+            Some(Duration::from_secs(25))
+        );
+        assert_eq!(opts.max_idle_timeout, Some(Duration::from_secs(90)));
+    }
 }
