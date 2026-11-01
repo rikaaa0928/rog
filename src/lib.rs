@@ -72,6 +72,8 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
                 std::time::Duration::from_secs(dns_cfg.suppress_ipv6_ra_ttl_secs),
                 shutdown.clone(),
             );
+        } else {
+            crate::util::ra_suppress::disable_ra_suppression();
         }
         Some(
             dns::server::DnsServer::bind(

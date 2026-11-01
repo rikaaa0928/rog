@@ -29,7 +29,7 @@ impl Default for DnsConfig {
             default_servers: vec![],
             bootstrap_servers: vec![],
             disable_aaaa: false,
-            suppress_ipv6_ra: false,
+            suppress_ipv6_ra: true,
             suppress_ipv6_ra_ttl_secs: 300,
             upstream_timeout_ms: 2000,
             request_timeout_ms: 6000,

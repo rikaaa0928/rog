@@ -152,6 +152,7 @@ mod linux_impl {
     use tokio_util::sync::CancellationToken;
 
     static ENABLED: AtomicBool = AtomicBool::new(false);
+    static DISABLED: AtomicBool = AtomicBool::new(false);
     static CLIENT_TTL_SECS: AtomicU64 = AtomicU64::new(300);
     static CLIENT_SEEN: OnceLock<DashMap<Ipv4Addr, Instant>> = OnceLock::new();
     static CLIENT_NOTIFY: OnceLock<mpsc::Sender<Ipv4Addr>> = OnceLock::new();
@@ -170,7 +171,15 @@ mod linux_impl {
         last_seen: Instant,
     }
 
+    pub fn disable_ra_suppression() {
+        DISABLED.store(true, Ordering::SeqCst);
+        ENABLED.store(false, Ordering::SeqCst);
+    }
+
     pub fn enable_ra_suppression(ttl: Duration, shutdown: CancellationToken) {
+        if DISABLED.load(Ordering::SeqCst) {
+            return;
+        }
         CLIENT_TTL_SECS.store(ttl.as_secs().max(10), Ordering::Relaxed);
         if ENABLED.swap(true, Ordering::SeqCst) {
             return;
@@ -656,7 +665,10 @@ mod linux_impl {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux_impl::{enable_ra_suppression, note_client_ip};
+pub use linux_impl::{disable_ra_suppression, enable_ra_suppression, note_client_ip};
+
+#[cfg(not(target_os = "linux"))]
+pub fn disable_ra_suppression() {}
 
 #[cfg(not(target_os = "linux"))]
 pub fn enable_ra_suppression(_ttl: Duration, _shutdown: CancellationToken) {}

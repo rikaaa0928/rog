@@ -176,7 +176,7 @@ impl TproxyOptions {
         let mut mode = "tcp+udp".to_string();
         let mut udp_idle_timeout_secs = DEFAULT_UDP_IDLE_TIMEOUT_SECS;
         let mut udp_max_senders = DEFAULT_TPROXY_SENDER_LRU_CAP;
-        let mut suppress_ipv6_ra = false;
+        let mut suppress_ipv6_ra = true;
         let mut suppress_ipv6_ra_ttl_secs = 300u64;
 
         if let Some(ref opts) = listener.options {
@@ -591,6 +591,8 @@ impl TproxyListener {
                 std::time::Duration::from_secs(options.suppress_ipv6_ra_ttl_secs),
                 self.shutdown.clone(),
             );
+        } else {
+            crate::util::ra_suppress::disable_ra_suppression();
         }
         let (accept_tx, accept_rx) = tokio::sync::mpsc::channel::<(RunAccStream, SocketAddr)>(1024);
 
@@ -972,7 +974,7 @@ mod tests {
         assert_eq!(opts.mode, "tcp+udp");
         assert_eq!(opts.udp_idle_timeout_secs, DEFAULT_UDP_IDLE_TIMEOUT_SECS);
         assert_eq!(opts.udp_max_senders, DEFAULT_TPROXY_SENDER_LRU_CAP);
-        assert!(!opts.suppress_ipv6_ra);
+        assert!(opts.suppress_ipv6_ra);
         assert_eq!(opts.suppress_ipv6_ra_ttl_secs, 300);
 
         let mut map = HashMap::new();
@@ -982,7 +984,7 @@ mod tests {
             toml::Value::Integer(120),
         );
         map.insert("udp_max_senders".to_string(), toml::Value::Integer(1024));
-        map.insert("suppress_ipv6_ra".to_string(), toml::Value::Boolean(true));
+        map.insert("suppress_ipv6_ra".to_string(), toml::Value::Boolean(false));
         map.insert(
             "suppress_ipv6_ra_ttl_secs".to_string(),
             toml::Value::Integer(180),
@@ -993,7 +995,7 @@ mod tests {
         assert_eq!(opts.mode, "tcp");
         assert_eq!(opts.udp_idle_timeout_secs, 120);
         assert_eq!(opts.udp_max_senders, 1024);
-        assert!(opts.suppress_ipv6_ra);
+        assert!(!opts.suppress_ipv6_ra);
         assert_eq!(opts.suppress_ipv6_ra_ttl_secs, 180);
     }
 }

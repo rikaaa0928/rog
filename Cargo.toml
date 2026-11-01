@@ -1,6 +1,6 @@
 [package]
 name = "rog"
-version = "0.1.18-dev.17"
+version = "0.1.18-dev.18"
 edition = "2024"
 
 [dependencies]
