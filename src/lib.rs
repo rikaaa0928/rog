@@ -67,6 +67,12 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
     let router = Arc::new(router);
     // Bind before starting business listeners so failures cannot leave a partial service.
     let dns_server = if let (Some(dns_cfg), Some(table)) = (&cfg.dns, &dns_table) {
+        if dns_cfg.suppress_ipv6_ra {
+            crate::util::ra_suppress::enable_ra_suppression(
+                std::time::Duration::from_secs(dns_cfg.suppress_ipv6_ra_ttl_secs),
+                shutdown.clone(),
+            );
+        }
         Some(
             dns::server::DnsServer::bind(
                 dns_cfg.clone(),

@@ -166,6 +166,8 @@ pub struct TproxyOptions {
     pub mode: String, // "tcp+udp", "tcp", "udp"
     pub udp_idle_timeout_secs: u64,
     pub udp_max_senders: usize,
+    pub suppress_ipv6_ra: bool,
+    pub suppress_ipv6_ra_ttl_secs: u64,
 }
 
 impl TproxyOptions {
@@ -174,6 +176,8 @@ impl TproxyOptions {
         let mut mode = "tcp+udp".to_string();
         let mut udp_idle_timeout_secs = DEFAULT_UDP_IDLE_TIMEOUT_SECS;
         let mut udp_max_senders = DEFAULT_TPROXY_SENDER_LRU_CAP;
+        let mut suppress_ipv6_ra = false;
+        let mut suppress_ipv6_ra_ttl_secs = 300u64;
 
         if let Some(ref opts) = listener.options {
             if let Some(m) = opts.get("mode").and_then(|v| v.as_str()) {
@@ -196,12 +200,25 @@ impl TproxyOptions {
                     udp_max_senders = max_senders as usize;
                 }
             }
+            if let Some(suppress) = opts.get("suppress_ipv6_ra").and_then(|v| v.as_bool()) {
+                suppress_ipv6_ra = suppress;
+            }
+            if let Some(ttl) = opts
+                .get("suppress_ipv6_ra_ttl_secs")
+                .and_then(|v| v.as_integer())
+            {
+                if ttl > 0 {
+                    suppress_ipv6_ra_ttl_secs = ttl as u64;
+                }
+            }
         }
 
         Self {
             mode,
             udp_idle_timeout_secs,
             udp_max_senders,
+            suppress_ipv6_ra,
+            suppress_ipv6_ra_ttl_secs,
         }
     }
 }
@@ -569,6 +586,12 @@ impl TproxyListener {
         })?;
 
         let options = TproxyOptions::from_listener(&self.cfg.listener);
+        if options.suppress_ipv6_ra {
+            crate::util::ra_suppress::enable_ra_suppression(
+                std::time::Duration::from_secs(options.suppress_ipv6_ra_ttl_secs),
+                self.shutdown.clone(),
+            );
+        }
         let (accept_tx, accept_rx) = tokio::sync::mpsc::channel::<(RunAccStream, SocketAddr)>(1024);
 
         let run_tcp = options.mode.contains("tcp");
@@ -614,6 +637,7 @@ impl TproxyListener {
                                         debug!("tproxy: loopback TCP connection detected to {}, dropping", orig);
                                         continue;
                                     }
+                                    crate::util::ra_suppress::note_client_ip(peer.ip());
                                     let _ = stream.set_nodelay(true);
                                     let mut tcp_stream = TcpRunStream::new(stream);
                                     tcp_stream.set_info(&mut |x| {
@@ -690,6 +714,7 @@ impl TproxyListener {
                                 );
                                 continue;
                             }
+                            crate::util::ra_suppress::note_client_ip(src_addr.ip());
 
                             let mut pkt = UDPPacket {
                                 meta: UDPMeta {
@@ -947,6 +972,8 @@ mod tests {
         assert_eq!(opts.mode, "tcp+udp");
         assert_eq!(opts.udp_idle_timeout_secs, DEFAULT_UDP_IDLE_TIMEOUT_SECS);
         assert_eq!(opts.udp_max_senders, DEFAULT_TPROXY_SENDER_LRU_CAP);
+        assert!(!opts.suppress_ipv6_ra);
+        assert_eq!(opts.suppress_ipv6_ra_ttl_secs, 300);
 
         let mut map = HashMap::new();
         map.insert("mode".to_string(), toml::Value::String("tcp".to_string()));
@@ -955,11 +982,18 @@ mod tests {
             toml::Value::Integer(120),
         );
         map.insert("udp_max_senders".to_string(), toml::Value::Integer(1024));
+        map.insert("suppress_ipv6_ra".to_string(), toml::Value::Boolean(true));
+        map.insert(
+            "suppress_ipv6_ra_ttl_secs".to_string(),
+            toml::Value::Integer(180),
+        );
         listener.options = Some(map);
 
         let opts = TproxyOptions::from_listener(&listener);
         assert_eq!(opts.mode, "tcp");
         assert_eq!(opts.udp_idle_timeout_secs, 120);
         assert_eq!(opts.udp_max_senders, 1024);
+        assert!(opts.suppress_ipv6_ra);
+        assert_eq!(opts.suppress_ipv6_ra_ttl_secs, 180);
     }
 }

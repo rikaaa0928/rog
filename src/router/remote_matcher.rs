@@ -48,6 +48,20 @@ impl DynamicRemoteMatcher {
             )
             .await;
 
+            let retry_interval = std::cmp::min(interval, Duration::from_secs(5));
+            while !init_clone.load(Ordering::Acquire) {
+                tokio::time::sleep(retry_interval).await;
+                Self::fetch_and_update(
+                    &name_clone,
+                    &url_clone,
+                    &format_clone,
+                    interval,
+                    &inner_clone,
+                    &init_clone,
+                )
+                .await;
+            }
+
             let mut timer = tokio::time::interval(interval);
             timer.tick().await; // The first tick completes immediately; skip it since we just did initial fetch
 
@@ -91,7 +105,58 @@ impl DynamicRemoteMatcher {
             std::fs::read_to_string(path)
                 .map_err(|e| format!("failed to read file '{}': {}", path, e))
         } else {
+            if let Ok(parsed) = url::Url::parse(url)
+                && let Some(host) = parsed.host_str()
+            {
+                let clean_host = host.trim_matches(['[', ']']);
+                if clean_host.parse::<std::net::IpAddr>().is_err()
+                    && let Some(port) = parsed.port_or_known_default()
+                    && let Ok(resolved) = tokio::net::lookup_host((clean_host, port)).await
+                {
+                    let mut addrs: Vec<std::net::SocketAddr> = resolved.collect();
+                    // Prefer IPv4 first to avoid broken ULA/IPv6 routes, then IPv6
+                    addrs.sort_by_key(|a| if a.is_ipv4() { 0 } else { 1 });
+                    addrs.dedup();
+                    if !addrs.is_empty() {
+                        let mut last_err = String::new();
+                        for addr in addrs {
+                            let client = match reqwest::Client::builder()
+                                .resolve(clean_host, addr)
+                                .connect_timeout(Duration::from_secs(4))
+                                .timeout(Duration::from_secs(12))
+                                .build()
+                            {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    last_err = format!("failed to build client: {}", e);
+                                    continue;
+                                }
+                            };
+                            match client.get(url).send().await {
+                                Ok(resp) => {
+                                    if !resp.status().is_success() {
+                                        last_err = format!("HTTP status {}", resp.status());
+                                        continue;
+                                    }
+                                    match resp.text().await {
+                                        Ok(text) => return Ok(text),
+                                        Err(e) => {
+                                            last_err = format!("{}", e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    last_err = format!("{} (via {})", e, addr);
+                                }
+                            }
+                        }
+                        return Err(last_err);
+                    }
+                }
+            }
+
             let client = reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(5))
                 .timeout(Duration::from_secs(15))
                 .build()
                 .map_err(|e| format!("failed to build client: {}", e))?;

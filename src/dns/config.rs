@@ -11,6 +11,8 @@ pub struct DnsConfig {
     #[serde(default, alias = "bootstrap_dns")]
     pub bootstrap_servers: Vec<String>,
     pub disable_aaaa: bool,
+    pub suppress_ipv6_ra: bool,
+    pub suppress_ipv6_ra_ttl_secs: u64,
     pub upstream_timeout_ms: u64,
     pub request_timeout_ms: u64,
     pub max_concurrent_requests: usize,
@@ -27,6 +29,8 @@ impl Default for DnsConfig {
             default_servers: vec![],
             bootstrap_servers: vec![],
             disable_aaaa: false,
+            suppress_ipv6_ra: false,
+            suppress_ipv6_ra_ttl_secs: 300,
             upstream_timeout_ms: 2000,
             request_timeout_ms: 6000,
             max_concurrent_requests: 256,
@@ -80,6 +84,7 @@ impl DnsConfig {
             || self.max_domains_per_ip == 0
             || self.mapping_max_ttl_secs == 0
             || self.mapping_cleanup_interval_secs == 0
+            || self.suppress_ipv6_ra_ttl_secs == 0
         {
             return Err(invalid("DNS timeouts and capacities must be positive"));
         }

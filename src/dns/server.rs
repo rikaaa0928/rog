@@ -117,6 +117,7 @@ impl DnsServer {
         result
     }
     async fn handle(&self, client: SocketAddr, data: Vec<u8>) {
+        crate::util::ra_suppress::note_client_ip(client.ip());
         let query = match Message::from_vec(&data) {
             Ok(q) => q,
             Err(_) => {
