@@ -194,7 +194,7 @@ impl TproxyOptions {
         let mut udp_max_senders = DEFAULT_TPROXY_SENDER_LRU_CAP;
         let mut suppress_ipv6_ra = true;
         let mut suppress_ipv6_ra_ttl_secs = 300u64;
-        let mut ebpf_direct_offload = true;
+        let mut ebpf_direct_offload = false;
 
         if let Some(ref opts) = listener.options {
             if let Some(m) = opts.get("mode").and_then(|v| v.as_str()) {

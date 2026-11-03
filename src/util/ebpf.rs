@@ -985,9 +985,6 @@ mod linux_impl {
             return;
         }
 
-        // Also warm up SOCKHASH for zero-copy TCP splicing
-        let _ = init_sockhash();
-
         let Some((ifname, ifindex)) = detect_default_ifname() else {
             DIRECT_ENABLED.store(false, Ordering::SeqCst);
             return;
@@ -1111,155 +1108,11 @@ mod linux_impl {
         }
     }
 
-    fn init_sockhash() -> Option<&'static SockHashState> {
-        SOCKHASH_STATE
-            .get_or_init(|| {
-                let map_fd = create_bpf_map(BPF_MAP_TYPE_SOCKHASH, 8, 4, 4096, 0).ok()?;
-                let bytecode = build_sockhash_verdict_bytecode(map_fd.as_raw_fd());
-                let prog_fd = load_bpf_prog(BPF_PROG_TYPE_SK_SKB, &bytecode).ok()?;
-                attach_bpf_prog(
-                    map_fd.as_raw_fd(),
-                    prog_fd.as_raw_fd(),
-                    BPF_SK_SKB_STREAM_VERDICT,
-                )
-                .ok()?;
-                info!("ebpf_sockmap: initialized kernel SOCKHASH stream_verdict zero-copy TCP splicing");
-                Some(SockHashState {
-                    map_fd,
-                    _prog_fd: prog_fd,
-                })
-            })
-            .as_ref()
-    }
-
-    fn get_socket_cookie(fd: i32) -> io::Result<u64> {
-        unsafe {
-            let mut cookie: u64 = 0;
-            let mut len = mem::size_of::<u64>() as libc::socklen_t;
-            let ret = libc::getsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                SO_COOKIE,
-                &mut cookie as *mut u64 as *mut libc::c_void,
-                &mut len,
-            );
-            if ret < 0 {
-                Err(io::Error::last_os_error())
-            } else {
-                Ok(cookie)
-            }
-        }
-    }
-
-    struct SockHashGuard {
-        map_fd: i32,
-        cookie_a: u64,
-        cookie_b: u64,
-    }
-
-    impl Drop for SockHashGuard {
-        fn drop(&mut self) {
-            let _ = map_delete_elem(self.map_fd, &self.cookie_a.to_ne_bytes());
-            let _ = map_delete_elem(self.map_fd, &self.cookie_b.to_ne_bytes());
-        }
-    }
-
-    async fn drain_pending(
-        src: &mut TcpStream,
-        dst: &mut TcpStream,
-        buf: &mut [u8],
-        observe: &Option<ObserveConnection>,
-        is_tx: bool,
-    ) -> io::Result<bool> {
-        loop {
-            match src.try_read(buf) {
-                Ok(0) => return Ok(true),
-                Ok(n) => {
-                    dst.write_all(&buf[..n]).await?;
-                    if let Some(obs) = observe {
-                        if is_tx {
-                            obs.add_tx(n as u64);
-                        } else {
-                            obs.add_rx(n as u64);
-                        }
-                    }
-                }
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(false),
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
     pub async fn relay_tcp_streams(
         client_tcp: &mut TcpStream,
         server_tcp: &mut TcpStream,
         observe: Option<ObserveConnection>,
     ) -> io::Result<()> {
-        if !DIRECT_DISABLED.load(Ordering::Relaxed) {
-            if let Some(sh) = init_sockhash() {
-                let fd_c = client_tcp.as_raw_fd();
-                let fd_s = server_tcp.as_raw_fd();
-                if let (Ok(ck_c), Ok(ck_s)) = (get_socket_cookie(fd_c), get_socket_cookie(fd_s)) {
-                    let map_fd = sh.map_fd.as_raw_fd();
-                    let r1 = map_update_elem(
-                        map_fd,
-                        &ck_c.to_ne_bytes(),
-                        &(fd_s as u32).to_ne_bytes(),
-                        0,
-                    );
-                    let r2 = map_update_elem(
-                        map_fd,
-                        &ck_s.to_ne_bytes(),
-                        &(fd_c as u32).to_ne_bytes(),
-                        0,
-                    );
-                    if r1.is_ok() && r2.is_ok() {
-                        let guard = SockHashGuard {
-                            map_fd,
-                            cookie_a: ck_c,
-                            cookie_b: ck_s,
-                        };
-                        let mut buf = [0u8; 16384];
-                        // Drain any bytes that arrived in sk_receive_queue before SOCKHASH registration
-                        let c_eof =
-                            drain_pending(client_tcp, server_tcp, &mut buf, &observe, false)
-                                .await?;
-                        let s_eof =
-                            drain_pending(server_tcp, client_tcp, &mut buf, &observe, true).await?;
-
-                        if !c_eof && !s_eof {
-                            loop {
-                                tokio::select! {
-                                    res = client_tcp.readable() => {
-                                        res?;
-                                        if drain_pending(client_tcp, server_tcp, &mut buf, &observe, false).await? {
-                                            break;
-                                        }
-                                    }
-                                    res = server_tcp.readable() => {
-                                        res?;
-                                        if drain_pending(server_tcp, client_tcp, &mut buf, &observe, true).await? {
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        drop(guard);
-                        // Finish any half-closed tail bytes
-                        let _ = tokio::io::copy_bidirectional_with_sizes(
-                            client_tcp, server_tcp, 8192, 8192,
-                        )
-                        .await;
-                        return Ok(());
-                    } else {
-                        let _ = map_delete_elem(map_fd, &ck_c.to_ne_bytes());
-                        let _ = map_delete_elem(map_fd, &ck_s.to_ne_bytes());
-                    }
-                }
-            }
-        }
-
         let (rx, tx) =
             tokio::io::copy_bidirectional_with_sizes(client_tcp, server_tcp, 16384, 16384).await?;
         if let Some(obs) = &observe {
