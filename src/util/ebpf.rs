@@ -778,7 +778,7 @@ mod linux_impl {
         Ok(())
     }
 
-    fn attach_tc_ingress_bpf(ifindex: i32, prog_fd: i32) -> io::Result<()> {
+    fn bind_netlink_socket() -> io::Result<OwnedFd> {
         let fd = unsafe {
             libc::socket(
                 libc::AF_NETLINK,
@@ -789,7 +789,24 @@ mod linux_impl {
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
-        let nl_sock = unsafe { OwnedFd::from_raw_fd(fd) };
+        let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+        unsafe {
+            let mut sa: libc::sockaddr_nl = mem::zeroed();
+            sa.nl_family = libc::AF_NETLINK as u16;
+            if libc::bind(
+                owned.as_raw_fd(),
+                &sa as *const libc::sockaddr_nl as *const libc::sockaddr,
+                mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
+            ) < 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(owned)
+    }
+
+    fn attach_tc_ingress_bpf(ifindex: i32, prog_fd: i32) -> io::Result<()> {
+        let nl_sock = bind_netlink_socket()?;
 
         // 1. RTM_NEWQDISC (36) clsact on ifindex
         let mut tcmsg_qdisc = Vec::with_capacity(20);
@@ -799,17 +816,25 @@ mod linux_impl {
         tcmsg_qdisc.extend_from_slice(&0xfffffff1u32.to_ne_bytes());
         tcmsg_qdisc.extend_from_slice(&0u32.to_ne_bytes());
         tcmsg_qdisc.extend_from_slice(&nla(1, b"clsact\0"));
-        // NLM_F_REQUEST(1) | NLM_F_ACK(4) | NLM_F_CREATE(0x400) | NLM_F_EXCL(0x200)
         let _ = send_netlink_msg(
             nl_sock.as_raw_fd(),
             36,
-            0x0001 | 0x0004 | 0x0400,
+            0x0001 | 0x0004 | 0x0400 | 0x0100,
             1,
             &tcmsg_qdisc,
         );
 
-        // 2. RTM_NEWTFILTER (44) bpf on ingress (parent=0xfffffff2, prio=77, handle=1, proto=ETH_P_ALL)
+        // Remove any prior filter at prio 77 handle 1 first
         let info: u32 = (77u32 << 16) | (0x0003u16.to_be() as u32);
+        let mut tcmsg_del = Vec::with_capacity(20);
+        tcmsg_del.extend_from_slice(&[0u8, 0, 0, 0]);
+        tcmsg_del.extend_from_slice(&ifindex.to_ne_bytes());
+        tcmsg_del.extend_from_slice(&1u32.to_ne_bytes());
+        tcmsg_del.extend_from_slice(&0xfffffff2u32.to_ne_bytes());
+        tcmsg_del.extend_from_slice(&info.to_ne_bytes());
+        let _ = send_netlink_msg(nl_sock.as_raw_fd(), 45, 0x0001 | 0x0004, 2, &tcmsg_del);
+
+        // 2. RTM_NEWTFILTER (44) bpf on ingress (parent=0xfffffff2, prio=77, handle=1, proto=ETH_P_ALL)
         let mut tcmsg_filter = Vec::with_capacity(64);
         tcmsg_filter.extend_from_slice(&[0u8, 0, 0, 0]);
         tcmsg_filter.extend_from_slice(&ifindex.to_ne_bytes());
@@ -825,28 +850,19 @@ mod linux_impl {
         tcmsg_filter.extend_from_slice(&nla(1, b"bpf\0")); // TCA_KIND
         tcmsg_filter.extend_from_slice(&nla(2, &bpf_opts)); // TCA_OPTIONS
 
-        // NLM_F_REQUEST(1) | NLM_F_ACK(4) | NLM_F_CREATE(0x400) | NLM_F_REPLACE(0x100)
         send_netlink_msg(
             nl_sock.as_raw_fd(),
             44,
-            0x0001 | 0x0004 | 0x0400 | 0x0100,
-            2,
+            0x0001 | 0x0004 | 0x0400 | 0x0200 | 0x0100,
+            3,
             &tcmsg_filter,
         )
     }
 
     fn detach_tc_ingress_bpf(ifindex: i32) {
-        let fd = unsafe {
-            libc::socket(
-                libc::AF_NETLINK,
-                libc::SOCK_RAW | libc::SOCK_CLOEXEC,
-                libc::NETLINK_ROUTE,
-            )
-        };
-        if fd < 0 {
+        let Ok(nl_sock) = bind_netlink_socket() else {
             return;
-        }
-        let nl_sock = unsafe { OwnedFd::from_raw_fd(fd) };
+        };
         let info: u32 = (77u32 << 16) | (0x0003u16.to_be() as u32);
         let mut tcmsg_filter = Vec::with_capacity(20);
         tcmsg_filter.extend_from_slice(&[0u8, 0, 0, 0]);
@@ -854,7 +870,7 @@ mod linux_impl {
         tcmsg_filter.extend_from_slice(&1u32.to_ne_bytes());
         tcmsg_filter.extend_from_slice(&0xfffffff2u32.to_ne_bytes());
         tcmsg_filter.extend_from_slice(&info.to_ne_bytes());
-        let _ = send_netlink_msg(nl_sock.as_raw_fd(), 45, 0x0001 | 0x0004, 3, &tcmsg_filter);
+        let _ = send_netlink_msg(nl_sock.as_raw_fd(), 45, 0x0001 | 0x0004, 4, &tcmsg_filter);
     }
 
     fn find_cmd(name: &str) -> String {
@@ -867,35 +883,69 @@ mod linux_impl {
         name.to_string()
     }
 
-    fn configure_mangle_mark_bypass(enable: bool) {
-        let rules: [&[&str]; 3] = [
-            &[
-                "-m",
-                "socket",
-                "--transparent",
-                "-j",
-                "MARK",
-                "--set-xmark",
-                "0x77/0xff",
-            ],
-            &["-m", "socket", "--transparent", "-j", "ACCEPT"],
-            &["-m", "mark", "--mark", "0x78/0xff", "-j", "RETURN"],
-        ];
+    fn ensure_mangle_mark_bypass_rule() {
         for (bin, chain) in [("iptables", "ROG_TP"), ("ip6tables", "ROG6_TP")] {
             let cmd = find_cmd(bin);
-            // Always remove existing copies first so order (1, 2, 3) is deterministic
-            for rule in &rules {
-                let mut args = vec!["-w", "-t", "mangle", "-D", chain];
-                args.extend_from_slice(rule);
-                let _ = Command::new(&cmd).args(&args).output();
+            let exists = Command::new(&cmd)
+                .args([
+                    "-w",
+                    "-t",
+                    "mangle",
+                    "-C",
+                    chain,
+                    "-m",
+                    "mark",
+                    "--mark",
+                    "0x78/0xff",
+                    "-j",
+                    "RETURN",
+                ])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !exists {
+                // Insert at rule #3 (after --dst-type LOCAL and --dport 53 RETURN rules)
+                let _ = Command::new(&cmd)
+                    .args([
+                        "-w",
+                        "-t",
+                        "mangle",
+                        "-I",
+                        chain,
+                        "3",
+                        "-m",
+                        "mark",
+                        "--mark",
+                        "0x78/0xff",
+                        "-j",
+                        "RETURN",
+                    ])
+                    .output();
             }
-            if enable {
-                for (idx, rule) in rules.iter().enumerate() {
-                    let pos = (idx + 1).to_string();
-                    let mut args = vec!["-w", "-t", "mangle", "-I", chain, pos.as_str()];
-                    args.extend_from_slice(rule);
-                    let _ = Command::new(&cmd).args(&args).output();
+        }
+    }
+
+    fn is_private_or_local_ip(ip: IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(v4) => {
+                v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_multicast()
+                    || v4.is_unspecified()
+                    || crate::listener::tproxy::is_local_host_ip(&IpAddr::V4(v4))
+            }
+            IpAddr::V6(v6) => {
+                if let Some(v4) = v6.to_ipv4_mapped() {
+                    return is_private_or_local_ip(IpAddr::V4(v4));
                 }
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_multicast()
+                    || v6.is_unicast_link_local()
+                    || (v6.segments()[0] & 0xfe00) == 0xfc00
+                    || crate::listener::tproxy::is_local_host_ip(&IpAddr::V6(v6))
             }
         }
     }
@@ -927,7 +977,11 @@ mod linux_impl {
         let Ok(mut active) = state.active_cidrs.lock() else {
             return;
         };
-        let new_set: HashSet<IpNetwork> = cidrs.iter().copied().collect();
+        let new_set: HashSet<IpNetwork> = cidrs
+            .iter()
+            .copied()
+            .filter(|c| !is_private_or_local_ip(c.network()))
+            .collect();
 
         for old_cidr in active.difference(&new_set) {
             let (is_v4, key) = encode_cidr_key(*old_cidr);
@@ -1004,7 +1058,7 @@ mod linux_impl {
             );
             let prog = load_bpf_prog(BPF_PROG_TYPE_SCHED_CLS, &bytecode)?;
             attach_tc_ingress_bpf(ifindex, prog.as_raw_fd())?;
-            configure_mangle_mark_bypass(true);
+            ensure_mangle_mark_bypass_rule();
 
             let _ = DIRECT_STATE.set(DirectBpfState {
                 v4_lru,
@@ -1019,7 +1073,7 @@ mod linux_impl {
 
         if let Err(e) = init_res {
             DIRECT_ENABLED.store(false, Ordering::SeqCst);
-            debug!(
+            warn!(
                 "ebpf_direct: kernel TC eBPF offload unavailable on {} ({}), falling back to userspace Direct",
                 ifname, e
             );
@@ -1043,7 +1097,6 @@ mod linux_impl {
                     biased;
                     _ = shutdown.cancelled() => {
                         detach_tc_ingress_bpf(ifindex);
-                        configure_mangle_mark_bypass(false);
                         info!("ebpf_direct: detached TC ingress eBPF fast-path from {}", ifname);
                         break;
                     }
@@ -1063,7 +1116,7 @@ mod linux_impl {
         let Some(state) = DIRECT_STATE.get() else {
             return;
         };
-        if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
+        if is_private_or_local_ip(ip) {
             return;
         }
         let now_ns = monotonic_ns();

@@ -32,7 +32,7 @@ impl Default for DnsConfig {
             disable_aaaa: false,
             suppress_ipv6_ra: true,
             suppress_ipv6_ra_ttl_secs: 300,
-            ebpf_direct_offload: false,
+            ebpf_direct_offload: true,
             upstream_timeout_ms: 2000,
             request_timeout_ms: 6000,
             max_concurrent_requests: 256,

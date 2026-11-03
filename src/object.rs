@@ -121,20 +121,6 @@ impl Object {
                                             return Ok(()); // Exit the task for this connection
                                         }
                                     };
-                                    if config_clone.listener.proto == "tproxy" {
-                                        if let Ok(dst_ip) =
-                                            addr_ref.addr.parse::<std::net::IpAddr>()
-                                        {
-                                            if conn_conf.proto == "tcp" {
-                                                crate::util::ebpf::offload_direct_ip(
-                                                    dst_ip,
-                                                    std::time::Duration::from_secs(600),
-                                                );
-                                            } else {
-                                                crate::util::ebpf::remove_direct_ip(dst_ip);
-                                            }
-                                        }
-                                    }
 
                                     let connector_obj: Arc<Box<dyn RunConnector>>;
                                     {

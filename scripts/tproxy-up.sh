@@ -141,6 +141,9 @@ if [[ "$DO_V4" == true ]]; then
     [[ "$DO_TCP" == true ]] && iptables -w -t mangle -A ROG_OUT -p tcp -j MARK --set-xmark "${FWMARK}/0xff"
     [[ "$DO_UDP" == true ]] && iptables -w -t mangle -A ROG_OUT -p udp -j MARK --set-xmark "${FWMARK}/0xff"
 
+    [[ "$DO_TCP" == true ]] && iptables -w -t mangle -A ROG_TP -p tcp -m socket --transparent --nowildcard -j MARK --set-xmark "${FWMARK}/0xff"
+    [[ "$DO_TCP" == true ]] && iptables -w -t mangle -A ROG_TP -p tcp -m socket --transparent --nowildcard -j ACCEPT
+    iptables -w -t mangle -A ROG_TP -m mark --mark 0x78/0xff -j RETURN
     [[ "$DO_TCP" == true ]] && iptables -w -t mangle -A ROG_TP -p tcp -j TPROXY --on-port "$TPROXY_PORT" --tproxy-mark "${FWMARK}/0xff"
     [[ "$DO_UDP" == true ]] && iptables -w -t mangle -A ROG_TP -p udp -j TPROXY --on-port "$TPROXY_PORT" --tproxy-mark "${FWMARK}/0xff"
 
@@ -197,6 +200,9 @@ if [[ "$DO_V6" == true ]] && command -v ip6tables >/dev/null 2>&1; then
     [[ "$DO_TCP" == true ]] && ip6tables -w -t mangle -A ROG6_OUT -p tcp -j MARK --set-xmark "${FWMARK}/0xff"
     [[ "$DO_UDP" == true ]] && ip6tables -w -t mangle -A ROG6_OUT -p udp -j MARK --set-xmark "${FWMARK}/0xff"
 
+    [[ "$DO_TCP" == true ]] && ip6tables -w -t mangle -A ROG6_TP -p tcp -m socket --transparent --nowildcard -j MARK --set-xmark "${FWMARK}/0xff"
+    [[ "$DO_TCP" == true ]] && ip6tables -w -t mangle -A ROG6_TP -p tcp -m socket --transparent --nowildcard -j ACCEPT
+    ip6tables -w -t mangle -A ROG6_TP -m mark --mark 0x78/0xff -j RETURN
     [[ "$DO_TCP" == true ]] && ip6tables -w -t mangle -A ROG6_TP -p tcp -j TPROXY --on-port "$TPROXY_PORT" --tproxy-mark "${FWMARK}/0xff"
     [[ "$DO_UDP" == true ]] && ip6tables -w -t mangle -A ROG6_TP -p udp -j TPROXY --on-port "$TPROXY_PORT" --tproxy-mark "${FWMARK}/0xff"
 
