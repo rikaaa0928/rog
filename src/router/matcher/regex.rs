@@ -1,83 +1,95 @@
 use ipnetwork::IpNetwork;
-use regex::Regex;
+use regex::RegexSet;
+use std::collections::HashSet;
 use std::net::IpAddr;
 
 use crate::router::matcher::Matcher;
 
 pub(crate) fn regex_matcher_factory(lines: Vec<String>, _data: Vec<u8>) -> Box<dyn Matcher> {
-    let mut inner: Vec<RegexLine> = Vec::with_capacity(lines.len());
+    let mut v4_nets = Vec::new();
+    let mut v6_nets = Vec::new();
+    let mut patterns = Vec::new();
+    let mut hosts = HashSet::new();
+
     for l in lines {
         let trimmed_line = l.trim();
         if trimmed_line.is_empty() {
             continue;
         }
-        inner.push(parse_regex_line(trimmed_line));
+        if let Ok(cidr) = trimmed_line.parse::<IpNetwork>() {
+            match cidr {
+                IpNetwork::V4(v4) => {
+                    let mask = u32::from(v4.mask());
+                    let net = u32::from(v4.ip()) & mask;
+                    v4_nets.push((net, mask));
+                }
+                IpNetwork::V6(v6) => {
+                    let mask = u128::from(v6.mask());
+                    let net = u128::from(v6.ip()) & mask;
+                    v6_nets.push((net, mask));
+                }
+            }
+        } else if regex::Regex::new(trimmed_line).is_ok() {
+            patterns.push(trimmed_line.to_owned());
+        } else {
+            hosts.insert(trimmed_line.trim_matches(['[', ']']).to_owned());
+        }
     }
-    Box::new(RegexMatcher { lines: inner })
+
+    let regex_set = if patterns.is_empty() {
+        None
+    } else {
+        RegexSet::new(&patterns).ok()
+    };
+
+    Box::new(RegexMatcher {
+        regex_set,
+        v4_nets,
+        v6_nets,
+        hosts,
+    })
 }
 
 pub struct RegexMatcher {
-    lines: Vec<RegexLine>,
+    regex_set: Option<RegexSet>,
+    v4_nets: Vec<(u32, u32)>,
+    v6_nets: Vec<(u128, u128)>,
+    hosts: HashSet<String>,
 }
 
 impl Matcher for RegexMatcher {
     fn match_host(&self, host: &str) -> bool {
-        for item in &self.lines {
-            if item.match_line(host) {
-                return true;
-            }
-        }
-        false
-    }
-}
-
-struct RegexLine {
-    regex: Option<Regex>,
-    cidr: Option<IpNetwork>,
-    host: Option<String>,
-}
-
-fn parse_regex_line(line: &str) -> RegexLine {
-    if let Ok(cidr) = line.parse::<IpNetwork>() {
-        return RegexLine {
-            cidr: Some(cidr),
-            regex: None,
-            host: None,
-        };
-    }
-    if let Ok(re) = Regex::new(line) {
-        return RegexLine {
-            regex: Some(re),
-            cidr: None,
-            host: None,
-        };
-    }
-    RegexLine {
-        host: Some(line.to_owned()),
-        cidr: None,
-        regex: None,
-    }
-}
-
-impl RegexLine {
-    fn match_line(&self, host: &str) -> bool {
         let trimmed = host.trim_matches(['[', ']']);
-        if let Ok(ip) = trimmed.parse::<IpAddr>() {
-            if self.cidr.is_some() {
-                return self.cidr.as_ref().unwrap().contains(ip);
+        match trimmed.parse::<IpAddr>() {
+            Ok(IpAddr::V4(v4)) => {
+                let ip_bits = u32::from(v4);
+                for &(net, mask) in &self.v4_nets {
+                    if (ip_bits & mask) == net {
+                        return true;
+                    }
+                }
+                !self.hosts.is_empty()
+                    && (self.hosts.contains(trimmed) || self.hosts.contains(host))
             }
-            return self
-                .host
-                .as_ref()
-                .map(|h| h == host || h == trimmed)
-                .unwrap_or(false);
+            Ok(IpAddr::V6(v6)) => {
+                let ip_bits = u128::from(v6);
+                for &(net, mask) in &self.v6_nets {
+                    if (ip_bits & mask) == net {
+                        return true;
+                    }
+                }
+                !self.hosts.is_empty()
+                    && (self.hosts.contains(trimmed) || self.hosts.contains(host))
+            }
+            Err(_) => {
+                if let Some(ref set) = self.regex_set {
+                    if set.is_match(host) {
+                        return true;
+                    }
+                }
+                !self.hosts.is_empty()
+                    && (self.hosts.contains(trimmed) || self.hosts.contains(host))
+            }
         }
-        if self.regex.is_some() {
-            return self.regex.as_ref().unwrap().is_match(host);
-        }
-        self.host
-            .as_ref()
-            .map(|h| h == host || h == trimmed)
-            .unwrap_or(false)
     }
 }

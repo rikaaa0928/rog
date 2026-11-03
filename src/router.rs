@@ -65,14 +65,16 @@ impl def::RouterSet for DefaultRouter {
                 let domains = table.get_domains(r_name, client, target);
                 let (selected, matched_domain) =
                     router.route_mapped_with_domain(&addr.addr, &domains);
-                log::info!(
-                    "Route listener: {} router: {} ip: {} domains: {:?} -> {}",
-                    l_name,
-                    r_name,
-                    addr.addr,
-                    domains,
-                    selected
-                );
+                if !l_name.is_empty() {
+                    log::info!(
+                        "Route listener: {} router: {} ip: {} domains: {:?} -> {}",
+                        l_name,
+                        r_name,
+                        addr.addr,
+                        domains,
+                        selected
+                    );
+                }
                 return (selected, matched_domain);
             }
         }
@@ -123,5 +125,16 @@ impl DefaultRouter {
             router_set.router_map.insert(r.name.clone(), router);
         }
         router_set
+    }
+
+    pub fn direct_cidrs(
+        &self,
+        r_name: &str,
+        direct_connectors: &std::collections::HashSet<String>,
+    ) -> Vec<ipnetwork::IpNetwork> {
+        self.router_map
+            .get(r_name)
+            .map(|r| r.direct_cidrs(direct_connectors))
+            .unwrap_or_default()
     }
 }

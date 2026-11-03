@@ -28,8 +28,15 @@ impl ExcludeMatcher {
         Self { rules }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+
     pub fn is_match(&self, host: &str) -> bool {
-        let ip = host.parse::<IpAddr>().ok();
+        if self.rules.is_empty() {
+            return false;
+        }
+        let ip = host.trim_matches(['[', ']']).parse::<IpAddr>().ok();
         for rule in &self.rules {
             match rule {
                 ExcludeRule::Ip(rule_ip) => {

@@ -28,6 +28,9 @@ impl Matcher for TypedMatcher {
     fn kind(&self) -> MatchKind {
         self.kind
     }
+    fn cidrs(&self) -> Vec<ipnetwork::IpNetwork> {
+        self.inner.cidrs()
+    }
 }
 pub fn match_kind(format: &str) -> MatchKind {
     match format {
@@ -39,6 +42,10 @@ pub fn match_kind(format: &str) -> MatchKind {
 pub trait Matcher: Send + Sync {
     fn kind(&self) -> MatchKind {
         MatchKind::Regex
+    }
+
+    fn cidrs(&self) -> Vec<ipnetwork::IpNetwork> {
+        Vec::new()
     }
 
     fn match_host(&self, host: &str) -> bool;

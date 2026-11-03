@@ -5,6 +5,7 @@ use std::str;
 
 pub(crate) mod bootstrap;
 pub(crate) mod crypto;
+pub(crate) mod ebpf;
 pub(crate) mod grpc_transport;
 pub(crate) mod h3_frame;
 pub mod parse;

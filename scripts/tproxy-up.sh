@@ -78,7 +78,7 @@ ensure_rule6() {
     ip6tables -w -t "$table" -C "$chain" "$@" 2>/dev/null || ip6tables -w -t "$table" -A "$chain" "$@"
 }
 
-modprobe nf_tproxy_ipv4 nf_tproxy_ipv6 xt_TPROXY xt_socket xt_owner 2>/dev/null || true
+modprobe nf_tproxy_ipv4 nf_tproxy_ipv6 xt_TPROXY xt_socket xt_owner cls_bpf sch_clsact 2>/dev/null || true
 
 if [[ -n "$SYSCTL_CONF" && -f "$SYSCTL_CONF" ]]; then
     sysctl --load="$SYSCTL_CONF" >/dev/null

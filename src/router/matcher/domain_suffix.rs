@@ -55,7 +55,11 @@ impl DomainSuffixTrie {
         if trimmed.is_empty() {
             return false;
         }
-        let lower = trimmed.to_ascii_lowercase();
+        let lower: std::borrow::Cow<'_, str> = if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+            std::borrow::Cow::Owned(trimmed.to_ascii_lowercase())
+        } else {
+            std::borrow::Cow::Borrowed(trimmed)
+        };
         let mut curr = &self.root;
         for label in lower.split('.').rev() {
             if label.is_empty() {

@@ -301,6 +301,38 @@ impl DnsServer {
                             table_ttl,
                             received,
                         );
+                        if table_ttl > 0 {
+                            let (effective_outbound, _) = self
+                                .router
+                                .route_with_domain(
+                                    "",
+                                    &self.cfg.router,
+                                    &crate::util::RunAddr {
+                                        addr: ip.to_string(),
+                                        port: 0,
+                                        udp: false,
+                                    },
+                                    &crate::def::RouteContext {
+                                        client_ip: Some(client.ip()),
+                                        use_dns_mapping: true,
+                                    },
+                                )
+                                .await;
+                            let is_direct = self
+                                .config
+                                .connector
+                                .iter()
+                                .find(|c| c.name == effective_outbound)
+                                .is_some_and(|c| c.proto == "tcp");
+                            if is_direct {
+                                crate::util::ebpf::offload_direct_ip(
+                                    ip,
+                                    Duration::from_secs(u64::from(table_ttl)),
+                                );
+                            } else {
+                                crate::util::ebpf::remove_direct_ip(ip);
+                            }
+                        }
                     }
                     return Ok::<_, io::Error>(packet.data);
                 }

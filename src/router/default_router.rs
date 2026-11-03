@@ -53,6 +53,27 @@ impl DefaultBaseRouter {
         }
     }
 
+    pub(crate) fn direct_cidrs(
+        &self,
+        direct_connectors: &std::collections::HashSet<String>,
+    ) -> Vec<ipnetwork::IpNetwork> {
+        use crate::router::matcher::MatchKind;
+        let mut out = Vec::new();
+        for rule in &self.rules {
+            let Some(data) = self.data_map.get(&rule.name) else {
+                continue;
+            };
+            if data.kind() == MatchKind::Ip {
+                if direct_connectors.contains(&rule.select) && rule.exclude.is_empty() {
+                    out.extend(data.cidrs());
+                } else {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
     pub(crate) fn route_dns(&self, domain: &str) -> crate::def::DnsRouteDecision {
         for rule in &self.rules {
             if let Some(data) = self.data_map.get(&rule.name) {

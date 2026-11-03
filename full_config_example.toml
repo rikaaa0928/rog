@@ -9,6 +9,7 @@
 # disable_aaaa = false # 是否屏蔽 AAAA 查询（返回空 NOERROR）
 # suppress_ipv6_ra = true # 是否自动压制主路由向旁路由活跃客户端下发的 IPv6 RA / RDNSS（默认开启）
 # suppress_ipv6_ra_ttl_secs = 300 # 旁路由活跃客户端保持 RA 压制的无流量过期时长（秒，默认 300）
+# ebpf_direct_offload = true # 是否开启 eBPF TC + SOCKHASH 内核态 Direct 直连快路旁路（默认开启）
 # upstream_timeout_ms = 2000
 # request_timeout_ms = 6000
 

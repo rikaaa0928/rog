@@ -44,6 +44,15 @@ pub async fn handle_raw_udp(
             format!("Connector config '{}' not found for UDP", client_name),
         )
     })?;
+    if config.listener.proto == "tproxy" {
+        if let Ok(dst_ip) = orig_dst_addr.parse::<std::net::IpAddr>() {
+            if conn_conf.proto == "tcp" {
+                crate::util::ebpf::offload_direct_ip(dst_ip, std::time::Duration::from_secs(600));
+            } else {
+                crate::util::ebpf::remove_direct_ip(dst_ip);
+            }
+        }
+    }
     let rewrite_v6_domain =
         if conn_conf.proto != "tcp" && orig_dst_addr.parse::<std::net::Ipv6Addr>().is_ok() {
             mapped_domain

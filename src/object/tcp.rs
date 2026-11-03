@@ -10,11 +10,30 @@ use tokio_util::sync::CancellationToken;
 pub async fn handle_tcp_connection(
     addr: RunAddr,
     cache: Option<Vec<u8>>,
-    client_stream: Box<dyn RunStream>,
-    server_stream: Box<dyn RunStream>,
+    mut client_stream: Box<dyn RunStream>,
+    mut server_stream: Box<dyn RunStream>,
     observe: Option<ObserveConnection>,
 ) -> Result<()> {
     debug!("Post Handshake successful {:?}", addr);
+    if let (Some(c_tcp), Some(s_tcp)) = (
+        client_stream
+            .as_any_mut()
+            .downcast_mut::<crate::stream::tcp::TcpRunStream>(),
+        server_stream
+            .as_any_mut()
+            .downcast_mut::<crate::stream::tcp::TcpRunStream>(),
+    ) {
+        if let Some(c) = cache {
+            use tokio::io::AsyncWriteExt;
+            c_tcp.inner_mut().write_all(c.as_slice()).await?;
+            if let Some(obs) = &observe {
+                obs.add_tx(c.len() as u64);
+            }
+        }
+        return crate::util::ebpf::relay_tcp_streams(c_tcp.inner_mut(), s_tcp.inner_mut(), observe)
+            .await;
+    }
+
     let (mut client_r, mut client_w) = client_stream.split();
     let (mut server_r, mut server_w) = server_stream.split();
     let cancel_token = CancellationToken::new();

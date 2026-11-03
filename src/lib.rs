@@ -65,6 +65,32 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
     .await;
     router.dns_table = dns_table.clone();
     let router = Arc::new(router);
+
+    if let Some(tproxy_listener) = cfg.listener.iter().find(|l| l.proto == "tproxy") {
+        let tproxy_opts = listener::tproxy::TproxyOptions::from_listener(tproxy_listener);
+        let dns_allows_ebpf = cfg
+            .dns
+            .as_ref()
+            .map(|d| d.ebpf_direct_offload)
+            .unwrap_or(true);
+        if tproxy_opts.ebpf_direct_offload && dns_allows_ebpf {
+            let direct_connectors: std::collections::HashSet<String> = cfg
+                .connector
+                .iter()
+                .filter(|c| c.proto == "tcp")
+                .map(|c| c.name.clone())
+                .collect();
+            crate::util::ebpf::enable_ebpf_offload(
+                router.clone(),
+                tproxy_listener.router.clone(),
+                direct_connectors,
+                shutdown.clone(),
+            );
+        } else {
+            crate::util::ebpf::disable_ebpf_offload();
+        }
+    }
+
     // Bind before starting business listeners so failures cannot leave a partial service.
     let dns_server = if let (Some(dns_cfg), Some(table)) = (&cfg.dns, &dns_table) {
         if dns_cfg.suppress_ipv6_ra {

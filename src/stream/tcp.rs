@@ -47,6 +47,10 @@ impl TcpRunStream {
             info: StreamInfo::default(),
         }
     }
+
+    pub fn inner_mut(&mut self) -> &mut TcpStream {
+        &mut self.inner
+    }
 }
 
 // 为 MyTcpStream 实现 MyStream trait

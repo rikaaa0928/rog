@@ -236,6 +236,9 @@ impl DynamicRemoteMatcher {
                         url,
                         count
                     );
+                    if format == consts::FORMAT_CIDR {
+                        crate::util::ebpf::notify_cidr_refresh();
+                    }
                 } else {
                     log::warn!("Unsupported route data format '{}' for '{}'", format, name);
                 }
@@ -253,6 +256,17 @@ impl DynamicRemoteMatcher {
 }
 
 impl Matcher for DynamicRemoteMatcher {
+    fn cidrs(&self) -> Vec<ipnetwork::IpNetwork> {
+        if !self.initialized.load(Ordering::Acquire) {
+            return Vec::new();
+        }
+        if let Ok(guard) = self.inner.read() {
+            guard.as_ref().map(|m| m.cidrs()).unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    }
+
     fn match_host(&self, host: &str) -> bool {
         if !self.initialized.load(Ordering::Acquire) {
             log::warn!(

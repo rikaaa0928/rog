@@ -12,8 +12,14 @@ impl Matcher for DomainKeywordMatcher {
             return false;
         }
         if let Some(ref ac) = self.ac {
-            let lower = host.trim().to_ascii_lowercase();
-            ac.find(&lower).is_some()
+            let trimmed = host.trim();
+            let lower: std::borrow::Cow<'_, str> =
+                if trimmed.bytes().any(|b| b.is_ascii_uppercase()) {
+                    std::borrow::Cow::Owned(trimmed.to_ascii_lowercase())
+                } else {
+                    std::borrow::Cow::Borrowed(trimmed)
+                };
+            ac.find(lower.as_ref()).is_some()
         } else {
             false
         }

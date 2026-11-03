@@ -83,41 +83,56 @@ pub fn parse_endpoint(addr: &str, port: u16) -> Option<SocketAddr> {
 #[cfg(unix)]
 #[allow(dead_code)]
 pub fn is_local_host_ip(ip: &std::net::IpAddr) -> bool {
+    use std::collections::HashSet;
+    use std::sync::{OnceLock, RwLock};
+    use std::time::{Duration, Instant};
+
     if ip.is_loopback() {
         return true;
     }
+
+    static CACHE: OnceLock<RwLock<Option<(Instant, HashSet<std::net::IpAddr>)>>> = OnceLock::new();
+    let lock = CACHE.get_or_init(|| RwLock::new(None));
+    let now = Instant::now();
+
+    if let Ok(guard) = lock.read() {
+        if let Some((ts, ref set)) = *guard {
+            if now.saturating_duration_since(ts) < Duration::from_secs(10) {
+                return set.contains(ip);
+            }
+        }
+    }
+
+    let mut set = HashSet::new();
     unsafe {
         let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
-        if libc::getifaddrs(&mut ifaddrs) != 0 || ifaddrs.is_null() {
-            return false;
-        }
-        let mut cur = ifaddrs;
-        let mut found = false;
-        while !cur.is_null() {
-            let addr = (*cur).ifa_addr;
-            if !addr.is_null() {
-                let family = (*addr).sa_family as libc::c_int;
-                if family == libc::AF_INET {
-                    let sin = &*(addr as *const libc::sockaddr_in);
-                    let if_ip = std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
-                    if std::net::IpAddr::V4(if_ip) == *ip {
-                        found = true;
-                        break;
-                    }
-                } else if family == libc::AF_INET6 {
-                    let sin6 = &*(addr as *const libc::sockaddr_in6);
-                    let if_ip = std::net::Ipv6Addr::from(sin6.sin6_addr.s6_addr);
-                    if std::net::IpAddr::V6(if_ip) == *ip {
-                        found = true;
-                        break;
+        if libc::getifaddrs(&mut ifaddrs) == 0 && !ifaddrs.is_null() {
+            let mut cur = ifaddrs;
+            while !cur.is_null() {
+                let addr = (*cur).ifa_addr;
+                if !addr.is_null() {
+                    let family = (*addr).sa_family as libc::c_int;
+                    if family == libc::AF_INET {
+                        let sin = &*(addr as *const libc::sockaddr_in);
+                        let if_ip = std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
+                        set.insert(std::net::IpAddr::V4(if_ip));
+                    } else if family == libc::AF_INET6 {
+                        let sin6 = &*(addr as *const libc::sockaddr_in6);
+                        let if_ip = std::net::Ipv6Addr::from(sin6.sin6_addr.s6_addr);
+                        set.insert(std::net::IpAddr::V6(if_ip));
                     }
                 }
+                cur = (*cur).ifa_next;
             }
-            cur = (*cur).ifa_next;
+            libc::freeifaddrs(ifaddrs);
         }
-        libc::freeifaddrs(ifaddrs);
-        found
     }
+
+    let found = set.contains(ip);
+    if let Ok(mut guard) = lock.write() {
+        *guard = Some((now, set));
+    }
+    found
 }
 
 #[cfg(not(unix))]
@@ -168,6 +183,7 @@ pub struct TproxyOptions {
     pub udp_max_senders: usize,
     pub suppress_ipv6_ra: bool,
     pub suppress_ipv6_ra_ttl_secs: u64,
+    pub ebpf_direct_offload: bool,
 }
 
 impl TproxyOptions {
@@ -178,6 +194,7 @@ impl TproxyOptions {
         let mut udp_max_senders = DEFAULT_TPROXY_SENDER_LRU_CAP;
         let mut suppress_ipv6_ra = true;
         let mut suppress_ipv6_ra_ttl_secs = 300u64;
+        let mut ebpf_direct_offload = true;
 
         if let Some(ref opts) = listener.options {
             if let Some(m) = opts.get("mode").and_then(|v| v.as_str()) {
@@ -211,6 +228,9 @@ impl TproxyOptions {
                     suppress_ipv6_ra_ttl_secs = ttl as u64;
                 }
             }
+            if let Some(ebpf) = opts.get("ebpf_direct_offload").and_then(|v| v.as_bool()) {
+                ebpf_direct_offload = ebpf;
+            }
         }
 
         Self {
@@ -219,6 +239,7 @@ impl TproxyOptions {
             udp_max_senders,
             suppress_ipv6_ra,
             suppress_ipv6_ra_ttl_secs,
+            ebpf_direct_offload,
         }
     }
 }
@@ -593,6 +614,9 @@ impl TproxyListener {
             );
         } else {
             crate::util::ra_suppress::disable_ra_suppression();
+        }
+        if !options.ebpf_direct_offload {
+            crate::util::ebpf::disable_ebpf_offload();
         }
         let (accept_tx, accept_rx) = tokio::sync::mpsc::channel::<(RunAccStream, SocketAddr)>(1024);
 

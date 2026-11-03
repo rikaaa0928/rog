@@ -1,60 +1,83 @@
 use crate::router::matcher::Matcher;
 use ipnetwork::IpNetwork;
+use std::collections::HashSet;
 use std::net::IpAddr;
 
 pub(crate) fn cidr_matcher_factory(lines: Vec<String>, _data: Vec<u8>) -> Box<dyn Matcher> {
-    let mut inner: Vec<CidrLine> = Vec::with_capacity(lines.len());
+    let mut raw_cidrs = Vec::new();
+    let mut v4_nets = Vec::new();
+    let mut v6_nets = Vec::new();
+    let mut hosts = HashSet::new();
+
     for l in lines {
         let trimmed_line = l.trim();
-        if trimmed_line.is_empty() {
+        if trimmed_line.is_empty() || trimmed_line.starts_with('#') {
             continue;
         }
         if let Ok(cidr) = trimmed_line.parse::<IpNetwork>() {
-            inner.push(CidrLine {
-                cidr: Some(cidr),
-                host: None,
-            });
+            raw_cidrs.push(cidr);
+            match cidr {
+                IpNetwork::V4(v4) => {
+                    let mask = u32::from(v4.mask());
+                    let net = u32::from(v4.ip()) & mask;
+                    v4_nets.push((net, mask));
+                }
+                IpNetwork::V6(v6) => {
+                    let mask = u128::from(v6.mask());
+                    let net = u128::from(v6.ip()) & mask;
+                    v6_nets.push((net, mask));
+                }
+            }
         } else {
-            inner.push(CidrLine {
-                cidr: None,
-                host: Some(trimmed_line.to_string()),
-            });
+            hosts.insert(trimmed_line.trim_matches(['[', ']']).to_string());
         }
     }
-    Box::new(CIDRMatcher { lines: inner })
+
+    Box::new(CIDRMatcher {
+        raw_cidrs,
+        v4_nets,
+        v6_nets,
+        hosts,
+    })
 }
 
 pub struct CIDRMatcher {
-    lines: Vec<CidrLine>,
+    raw_cidrs: Vec<IpNetwork>,
+    v4_nets: Vec<(u32, u32)>,
+    v6_nets: Vec<(u128, u128)>,
+    hosts: HashSet<String>,
 }
 
 impl Matcher for CIDRMatcher {
-    fn match_host(&self, host: &str) -> bool {
-        for item in &self.lines {
-            if item.match_line(host) {
-                return true;
-            }
-        }
-        false
+    fn cidrs(&self) -> Vec<IpNetwork> {
+        self.raw_cidrs.clone()
     }
-}
 
-struct CidrLine {
-    cidr: Option<IpNetwork>,
-    host: Option<String>,
-}
-
-impl CidrLine {
-    fn match_line(&self, line: &str) -> bool {
-        let trimmed = line.trim_matches(['[', ']']);
-        if let Some(cidr) = &self.cidr {
-            if let Ok(ip) = trimmed.parse::<IpAddr>() {
-                return cidr.contains(ip);
+    fn match_host(&self, host: &str) -> bool {
+        let trimmed = host.trim_matches(['[', ']']);
+        match trimmed.parse::<IpAddr>() {
+            Ok(IpAddr::V4(v4)) => {
+                let ip_bits = u32::from(v4);
+                for &(net, mask) in &self.v4_nets {
+                    if (ip_bits & mask) == net {
+                        return true;
+                    }
+                }
+                !self.hosts.is_empty() && self.hosts.contains(trimmed)
+            }
+            Ok(IpAddr::V6(v6)) => {
+                let ip_bits = u128::from(v6);
+                for &(net, mask) in &self.v6_nets {
+                    if (ip_bits & mask) == net {
+                        return true;
+                    }
+                }
+                !self.hosts.is_empty() && self.hosts.contains(trimmed)
+            }
+            Err(_) => {
+                !self.hosts.is_empty()
+                    && (self.hosts.contains(trimmed) || self.hosts.contains(host))
             }
         }
-        self.host
-            .as_ref()
-            .map(|h| h == line || h == trimmed)
-            .unwrap_or(false)
     }
 }
