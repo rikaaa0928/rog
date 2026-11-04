@@ -1,6 +1,7 @@
 use bytes::{Buf, Bytes};
 use std::any::Any;
 use std::io::{self, ErrorKind};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::def::{
@@ -121,28 +122,60 @@ pub enum ClientRecvBody {
     H3 {
         stream: h3::client::RequestStream<h3_quinn::RecvStream, Bytes>,
         headers_received: bool,
+        read_started: bool,
+        on_unresponsive: Option<Arc<dyn Fn() + Send + Sync>>,
     },
     H2 {
         response_fut: Option<h2::client::ResponseFuture>,
         body: Option<h2::RecvStream>,
+        read_started: bool,
+        on_unresponsive: Option<Arc<dyn Fn() + Send + Sync>>,
     },
 }
 
 impl Drop for ClientRecvBody {
     fn drop(&mut self) {
-        if let ClientRecvBody::H2 { body, .. } = self
-            && let Some(mut stream) = body.take()
-            && !stream.is_end_stream()
-            && let Ok(handle) = tokio::runtime::Handle::try_current()
-        {
-            handle.spawn(async move {
-                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
-                    while let Some(Ok(chunk)) = stream.data().await {
-                        let _ = stream.flow_control().release_capacity(chunk.len());
-                    }
-                })
-                .await;
-            });
+        match self {
+            ClientRecvBody::H3 {
+                headers_received,
+                read_started,
+                on_unresponsive,
+                ..
+            } => {
+                if *read_started
+                    && !*headers_received
+                    && let Some(cb) = on_unresponsive.take()
+                {
+                    cb();
+                }
+            }
+            ClientRecvBody::H2 {
+                body,
+                read_started,
+                on_unresponsive,
+                ..
+            } => {
+                if *read_started
+                    && body.is_none()
+                    && let Some(cb) = on_unresponsive.take()
+                {
+                    cb();
+                }
+                if let Some(mut stream) = body.take()
+                    && !stream.is_end_stream()
+                    && let Ok(handle) = tokio::runtime::Handle::try_current()
+                {
+                    handle.spawn(async move {
+                        let _ =
+                            tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+                                while let Some(Ok(chunk)) = stream.data().await {
+                                    let _ = stream.flow_control().release_capacity(chunk.len());
+                                }
+                            })
+                            .await;
+                    });
+                }
+            }
         }
     }
 }
@@ -153,14 +186,37 @@ impl ClientRecvBody {
             ClientRecvBody::H3 {
                 stream,
                 headers_received,
+                read_started,
+                on_unresponsive,
             } => {
                 if !*headers_received {
-                    let resp = stream.recv_response().await.map_err(|e| {
-                        io::Error::new(
-                            ErrorKind::ConnectionAborted,
-                            format!("h3 recv_response error: {e}"),
-                        )
-                    })?;
+                    *read_started = true;
+                    let resp = match tokio::time::timeout(
+                        std::time::Duration::from_secs(8),
+                        stream.recv_response(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(r)) => r,
+                        Ok(Err(e)) => {
+                            if let Some(cb) = on_unresponsive.take() {
+                                cb();
+                            }
+                            return Err(io::Error::new(
+                                ErrorKind::ConnectionAborted,
+                                format!("h3 recv_response error: {e}"),
+                            ));
+                        }
+                        Err(_) => {
+                            if let Some(cb) = on_unresponsive.take() {
+                                cb();
+                            }
+                            return Err(io::Error::new(
+                                ErrorKind::TimedOut,
+                                "h3 recv_response timed out",
+                            ));
+                        }
+                    };
                     if resp.status() != http::StatusCode::OK {
                         return Err(io::Error::new(
                             ErrorKind::PermissionDenied,
@@ -185,17 +241,40 @@ impl ClientRecvBody {
                     )),
                 }
             }
-            ClientRecvBody::H2 { response_fut, body } => {
+            ClientRecvBody::H2 {
+                response_fut,
+                body,
+                read_started,
+                on_unresponsive,
+            } => {
                 if body.is_none() {
+                    *read_started = true;
                     let fut = response_fut
                         .take()
                         .ok_or_else(|| io::Error::other("missing h2 response future"))?;
-                    let resp = fut.await.map_err(|e| {
-                        io::Error::new(
-                            ErrorKind::ConnectionAborted,
-                            format!("h2 response header error: {e}"),
-                        )
-                    })?;
+                    let resp = match tokio::time::timeout(std::time::Duration::from_secs(8), fut)
+                        .await
+                    {
+                        Ok(Ok(r)) => r,
+                        Ok(Err(e)) => {
+                            if let Some(cb) = on_unresponsive.take() {
+                                cb();
+                            }
+                            return Err(io::Error::new(
+                                ErrorKind::ConnectionAborted,
+                                format!("h2 response header error: {e}"),
+                            ));
+                        }
+                        Err(_) => {
+                            if let Some(cb) = on_unresponsive.take() {
+                                cb();
+                            }
+                            return Err(io::Error::new(
+                                ErrorKind::TimedOut,
+                                "h2 response header timed out",
+                            ));
+                        }
+                    };
                     if resp.status() != http::StatusCode::OK {
                         return Err(io::Error::new(
                             ErrorKind::PermissionDenied,

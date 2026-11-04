@@ -74,7 +74,7 @@ endpoint = "127.0.0.1:1081" # 代理服务器地址（未指定 dns 时自动继
 # concurrency_limit = 256
 # concurrency_limit_per_connection = 256
 # connections = 2 # H3 connector 连接池并发连接数（默认 2，移动端建议 1）
-# fallback_h2 = true # H3 connector QUIC 失败时是否自动回退 HTTP/2 over TLS
+# fallback_h2 = true # H3 connector QUIC 失败时是否自动回退 HTTP/2 over TLS（如需跳过 QUIC 直接用 H2 over TLS，可将 endpoint 写为 h2://...）
 # congestion_control = "bbr" # H3 connector 拥塞控制（"bbr" 默认，或 "cubic"）
 
 # 路由数据配置

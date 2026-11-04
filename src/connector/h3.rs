@@ -5,14 +5,12 @@ use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use std::io::{self, ErrorKind};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Mutex;
 
 use crate::connector::grpc::parse_address;
-use crate::def::{
-    RunConnector, RunStream, RunUdpReader, RunUdpWriter, StreamInfo, config,
-};
+use crate::def::{RunConnector, RunStream, RunUdpReader, RunUdpWriter, StreamInfo, config};
 use crate::stream::h3_client::{
     ClientRecvBody, ClientSendBody, H3ClientRunStream, H3UdpClientRunReader, H3UdpClientRunWriter,
 };
@@ -71,6 +69,14 @@ enum ActiveClientConn {
     H2(h2::client::SendRequest<Bytes>),
 }
 
+#[derive(Clone)]
+struct PooledClientConn {
+    id: u64,
+    conn: ActiveClientConn,
+    quinn_conn: Option<quinn::Connection>,
+    _endpoint: Option<quinn::Endpoint>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TransportScheme {
     HttpsOrH3,
@@ -84,17 +90,20 @@ pub struct H3RunConnector {
     authority: String,
     scheme: TransportScheme,
     pw: String,
+    force_h2: bool,
     fallback_h2: bool,
     connect_timeout: Duration,
     stream_window: u32,
     conn_window: u32,
     grpc_opts: GrpcTransportOptions,
     bootstrap_dns: Option<Vec<SocketAddr>>,
+    quinn_client_config: Option<quinn::ClientConfig>,
     quinn_endpoint_v4: Option<quinn::Endpoint>,
     quinn_endpoint_v6: Option<quinn::Endpoint>,
     tls_client_config_h2: Arc<rustls::ClientConfig>,
-    pool: Vec<Arc<Mutex<Option<ActiveClientConn>>>>,
+    pool: Vec<Arc<Mutex<Option<PooledClientConn>>>>,
     rr_index: AtomicUsize,
+    next_conn_id: AtomicU64,
 }
 
 impl H3RunConnector {
@@ -112,10 +121,16 @@ impl H3RunConnector {
             )
         })?;
 
+        let mut force_h2 = false;
         let (scheme, normalized_url) = if let Some(rest) = endpoint_str.strip_prefix("h3://") {
             (TransportScheme::HttpsOrH3, format!("https://{rest}"))
         } else if let Some(rest) = endpoint_str.strip_prefix("h3c://") {
             (TransportScheme::H3Insecure, format!("https://{rest}"))
+        } else if let Some(rest) = endpoint_str.strip_prefix("h2://") {
+            force_h2 = true;
+            (TransportScheme::HttpsOrH3, format!("https://{rest}"))
+        } else if let Some(rest) = endpoint_str.strip_prefix("h2c://") {
+            (TransportScheme::HttpCleartext, format!("http://{rest}"))
         } else if endpoint_str.starts_with("http://") {
             (TransportScheme::HttpCleartext, endpoint_str.clone())
         } else if endpoint_str.starts_with("https://") {
@@ -185,9 +200,7 @@ impl H3RunConnector {
         let conn_window = grpc_opts
             .initial_connection_window_size
             .unwrap_or(DEFAULT_H3_CONN_WINDOW);
-        let connect_timeout = grpc_opts
-            .connect_timeout
-            .unwrap_or(Duration::from_secs(10));
+        let connect_timeout = grpc_opts.connect_timeout.unwrap_or(Duration::from_secs(10));
 
         let ca_pem_path = cfg
             .options
@@ -196,59 +209,60 @@ impl H3RunConnector {
             .and_then(|v| v.as_str())
             .map(str::to_owned);
 
-        let tls_h3 = Self::build_rustls_client_config(insecure, ca_pem_path.as_deref(), vec![b"h3".to_vec()])?;
+        let tls_h3 = Self::build_rustls_client_config(
+            insecure,
+            ca_pem_path.as_deref(),
+            vec![b"h3".to_vec()],
+        )?;
         let tls_h2 = Arc::new(Self::build_rustls_client_config(
             insecure,
             ca_pem_path.as_deref(),
             vec![b"h2".to_vec()],
         )?);
 
-        let (quinn_endpoint_v4, quinn_endpoint_v6) = if scheme != TransportScheme::HttpCleartext {
-            let quic_tls =
-                quinn::crypto::rustls::QuicClientConfig::try_from(tls_h3).map_err(|e| {
-                    io::Error::new(ErrorKind::InvalidInput, format!("quic tls error: {e}"))
-                })?;
-            let mut client_cfg = quinn::ClientConfig::new(Arc::new(quic_tls));
-            let mut transport = quinn::TransportConfig::default();
-            let idle_timeout = grpc_opts
-                .max_idle_timeout
-                .unwrap_or(Duration::from_secs(60));
-            transport.max_idle_timeout(idle_timeout.try_into().ok());
-            transport.keep_alive_interval(grpc_opts.effective_keep_alive_interval());
-            transport.receive_window(quinn::VarInt::from_u32(conn_window));
-            transport.stream_receive_window(quinn::VarInt::from_u32(stream_window));
-            transport.send_window(u64::from(conn_window));
-            if use_bbr {
-                transport.congestion_controller_factory(Arc::new(
-                    quinn::congestion::BbrConfig::default(),
-                ));
-            }
-            client_cfg.transport_config(Arc::new(transport));
+        let (quinn_client_config, quinn_endpoint_v4, quinn_endpoint_v6) =
+            if scheme != TransportScheme::HttpCleartext && !force_h2 {
+                let quic_tls =
+                    quinn::crypto::rustls::QuicClientConfig::try_from(tls_h3).map_err(|e| {
+                        io::Error::new(ErrorKind::InvalidInput, format!("quic tls error: {e}"))
+                    })?;
+                let mut client_cfg = quinn::ClientConfig::new(Arc::new(quic_tls));
+                let mut transport = quinn::TransportConfig::default();
+                let idle_timeout = grpc_opts
+                    .max_idle_timeout
+                    .unwrap_or(Duration::from_secs(60));
+                transport.max_idle_timeout(idle_timeout.try_into().ok());
+                transport.keep_alive_interval(grpc_opts.effective_keep_alive_interval());
+                transport.receive_window(quinn::VarInt::from_u32(conn_window));
+                transport.stream_receive_window(quinn::VarInt::from_u32(stream_window));
+                transport.send_window(u64::from(conn_window));
+                if use_bbr {
+                    transport.congestion_controller_factory(Arc::new(
+                        quinn::congestion::BbrConfig::default(),
+                    ));
+                }
+                client_cfg.transport_config(Arc::new(transport));
 
-            let ep_v4 = quinn::Endpoint::client(SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-                0,
-            ))
-            .ok()
-            .map(|mut ep| {
-                ep.set_default_client_config(client_cfg.clone());
-                ep
-            });
+                let ep_v4 =
+                    quinn::Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))
+                        .ok()
+                        .map(|mut ep| {
+                            ep.set_default_client_config(client_cfg.clone());
+                            ep
+                        });
 
-            let ep_v6 = quinn::Endpoint::client(SocketAddr::new(
-                IpAddr::V6(Ipv6Addr::UNSPECIFIED),
-                0,
-            ))
-            .ok()
-            .map(|mut ep| {
-                ep.set_default_client_config(client_cfg);
-                ep
-            });
+                let ep_v6 =
+                    quinn::Endpoint::client(SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0))
+                        .ok()
+                        .map(|mut ep| {
+                            ep.set_default_client_config(client_cfg.clone());
+                            ep
+                        });
 
-            (ep_v4, ep_v6)
-        } else {
-            (None, None)
-        };
+                (Some(client_cfg), ep_v4, ep_v6)
+            } else {
+                (None, None, None)
+            };
 
         let mut pool = Vec::with_capacity(pool_size);
         for _ in 0..pool_size {
@@ -261,17 +275,20 @@ impl H3RunConnector {
             authority,
             scheme,
             pw,
+            force_h2,
             fallback_h2,
             connect_timeout,
             stream_window,
             conn_window,
             grpc_opts,
             bootstrap_dns,
+            quinn_client_config,
             quinn_endpoint_v4,
             quinn_endpoint_v6,
             tls_client_config_h2: tls_h2,
             pool,
             rr_index: AtomicUsize::new(0),
+            next_conn_id: AtomicU64::new(1),
         })
     }
 
@@ -331,15 +348,33 @@ impl H3RunConnector {
         }
     }
 
-    async fn establish_quinn_h3(&self, addrs: &[SocketAddr]) -> io::Result<ActiveClientConn> {
+    async fn establish_quinn_h3(
+        &self,
+        addrs: &[SocketAddr],
+    ) -> io::Result<(
+        ActiveClientConn,
+        quinn::Connection,
+        Option<quinn::Endpoint>,
+    )> {
         let mut last_err = None;
         for &remote_addr in addrs {
-            let ep = if remote_addr.is_ipv4() {
+            let fresh_ep = self.quinn_client_config.as_ref().and_then(|cfg| {
+                let bind_addr = if remote_addr.is_ipv4() {
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+                } else {
+                    SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0)
+                };
+                quinn::Endpoint::client(bind_addr).ok().map(|mut ep| {
+                    ep.set_default_client_config(cfg.clone());
+                    ep
+                })
+            });
+            let fallback_ep = if remote_addr.is_ipv4() {
                 self.quinn_endpoint_v4.as_ref()
             } else {
                 self.quinn_endpoint_v6.as_ref()
             };
-            let Some(endpoint) = ep else {
+            let Some(endpoint) = fresh_ep.as_ref().or(fallback_ep) else {
                 continue;
             };
             let connecting = match endpoint.connect(remote_addr, &self.host) {
@@ -351,11 +386,10 @@ impl H3RunConnector {
             };
             match tokio::time::timeout(self.connect_timeout, connecting).await {
                 Ok(Ok(quinn_conn)) => {
-                    let h3_quinn_conn = h3_quinn::Connection::new(quinn_conn);
-                    let (mut driver, send_request) =
-                        h3::client::new(h3_quinn_conn).await.map_err(|e| {
-                            io::Error::other(format!("h3 client handshake error: {e}"))
-                        })?;
+                    let h3_quinn_conn = h3_quinn::Connection::new(quinn_conn.clone());
+                    let (mut driver, send_request) = h3::client::new(h3_quinn_conn)
+                        .await
+                        .map_err(|e| io::Error::other(format!("h3 client handshake error: {e}")))?;
                     tokio::spawn(async move {
                         let _ = std::future::poll_fn(|cx| driver.poll_close(cx)).await;
                     });
@@ -363,7 +397,7 @@ impl H3RunConnector {
                         "H3 (QUIC) connection established to {} ({})",
                         self.authority, remote_addr
                     );
-                    return Ok(ActiveClientConn::H3(send_request));
+                    return Ok((ActiveClientConn::H3(send_request), quinn_conn, fresh_ep));
                 }
                 Ok(Err(e)) => {
                     last_err = Some(io::Error::other(format!(
@@ -382,10 +416,19 @@ impl H3RunConnector {
         Err(last_err.unwrap_or_else(|| io::Error::other("no usable address for QUIC H3")))
     }
 
-    async fn establish_h2(&self, addrs: &[SocketAddr], use_tls: bool) -> io::Result<ActiveClientConn> {
+    async fn establish_h2(
+        &self,
+        addrs: &[SocketAddr],
+        use_tls: bool,
+    ) -> io::Result<ActiveClientConn> {
         let mut last_err = None;
         for &remote_addr in addrs {
-            match tokio::time::timeout(self.connect_timeout, tokio::net::TcpStream::connect(remote_addr)).await {
+            match tokio::time::timeout(
+                self.connect_timeout,
+                tokio::net::TcpStream::connect(remote_addr),
+            )
+            .await
+            {
                 Ok(Ok(tcp)) => {
                     let _ = tcp.set_nodelay(self.grpc_opts.tcp_nodelay);
                     if let Some(tcp_keepalive) = self.grpc_opts.tcp_keepalive {
@@ -405,9 +448,10 @@ impl H3RunConnector {
                     if use_tls {
                         let connector =
                             tokio_rustls::TlsConnector::from(self.tls_client_config_h2.clone());
-                        let server_name = ServerName::try_from(self.host.clone()).map_err(|_| {
-                            io::Error::new(ErrorKind::InvalidInput, "invalid TLS server name")
-                        })?;
+                        let server_name =
+                            ServerName::try_from(self.host.clone()).map_err(|_| {
+                                io::Error::new(ErrorKind::InvalidInput, "invalid TLS server name")
+                            })?;
                         let tls_stream = tokio::time::timeout(
                             self.connect_timeout,
                             connector.connect(server_name, tcp),
@@ -459,20 +503,49 @@ impl H3RunConnector {
         Err(last_err.unwrap_or_else(|| io::Error::other("no usable address for H2")))
     }
 
-    async fn create_new_connection(&self) -> io::Result<ActiveClientConn> {
+    async fn create_new_connection(&self) -> io::Result<PooledClientConn> {
         let addrs = self.resolve_target_addrs().await?;
+        let id = self.next_conn_id.fetch_add(1, Ordering::Relaxed);
         match self.scheme {
-            TransportScheme::HttpCleartext => self.establish_h2(&addrs, false).await,
+            TransportScheme::HttpCleartext => {
+                let conn = self.establish_h2(&addrs, false).await?;
+                Ok(PooledClientConn {
+                    id,
+                    conn,
+                    quinn_conn: None,
+                    _endpoint: None,
+                })
+            }
             TransportScheme::HttpsOrH3 | TransportScheme::H3Insecure => {
+                if self.force_h2 {
+                    let conn = self.establish_h2(&addrs, true).await?;
+                    return Ok(PooledClientConn {
+                        id,
+                        conn,
+                        quinn_conn: None,
+                        _endpoint: None,
+                    });
+                }
                 match self.establish_quinn_h3(&addrs).await {
-                    Ok(conn) => Ok(conn),
+                    Ok((conn, quinn_conn, ep)) => Ok(PooledClientConn {
+                        id,
+                        conn,
+                        quinn_conn: Some(quinn_conn),
+                        _endpoint: ep,
+                    }),
                     Err(h3_err) => {
                         if self.fallback_h2 {
                             warn!(
                                 "QUIC H3 connection to {} failed ({}), falling back to HTTP/2 over TLS",
                                 self.authority, h3_err
                             );
-                            self.establish_h2(&addrs, true).await
+                            let conn = self.establish_h2(&addrs, true).await?;
+                            Ok(PooledClientConn {
+                                id,
+                                conn,
+                                quinn_conn: None,
+                                _endpoint: None,
+                            })
                         } else {
                             Err(h3_err)
                         }
@@ -500,11 +573,34 @@ impl H3RunConnector {
 
     async fn try_open_on_conn(
         &self,
-        conn: &mut ActiveClientConn,
+        slot: &Arc<Mutex<Option<PooledClientConn>>>,
+        pooled: &mut PooledClientConn,
         path: &str,
     ) -> io::Result<(ClientRecvBody, ClientSendBody)> {
         let req = self.build_post_request(path)?;
-        match conn {
+        let slot_ref = slot.clone();
+        let conn_id = pooled.id;
+        let quinn_conn = pooled.quinn_conn.clone();
+        let on_unresponsive: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            if let Some(ref qc) = quinn_conn {
+                qc.close(quinn::VarInt::from_u32(0), b"stream_response_timeout");
+            }
+            if let Ok(mut guard) = slot_ref.try_lock() {
+                if guard.as_ref().map(|c| c.id) == Some(conn_id) {
+                    *guard = None;
+                }
+            } else if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let slot_async = slot_ref.clone();
+                handle.spawn(async move {
+                    let mut guard = slot_async.lock().await;
+                    if guard.as_ref().map(|c| c.id) == Some(conn_id) {
+                        *guard = None;
+                    }
+                });
+            }
+        });
+
+        match &mut pooled.conn {
             ActiveClientConn::H3(sender) => {
                 let stream = sender.send_request(req).await.map_err(|e| {
                     io::Error::new(
@@ -517,6 +613,8 @@ impl H3RunConnector {
                     ClientRecvBody::H3 {
                         stream: recv,
                         headers_received: false,
+                        read_started: false,
+                        on_unresponsive: Some(on_unresponsive),
                     },
                     ClientSendBody::new_h3(send),
                 ))
@@ -540,6 +638,8 @@ impl H3RunConnector {
                     ClientRecvBody::H2 {
                         response_fut: Some(resp_fut),
                         body: None,
+                        read_started: false,
+                        on_unresponsive: Some(on_unresponsive),
                     },
                     ClientSendBody::new_h2(send_stream),
                 ))
@@ -553,20 +653,20 @@ impl H3RunConnector {
 
         let existing = { slot.lock().await.clone() };
         if let Some(mut conn) = existing {
-            if let Ok(pair) = self.try_open_on_conn(&mut conn, path).await {
+            if let Ok(pair) = self.try_open_on_conn(slot, &mut conn, path).await {
                 return Ok(pair);
             }
         }
 
         let mut guard = slot.lock().await;
         if let Some(ref mut conn) = *guard {
-            if let Ok(pair) = self.try_open_on_conn(conn, path).await {
+            if let Ok(pair) = self.try_open_on_conn(slot, conn, path).await {
                 return Ok(pair);
             }
         }
 
         let mut fresh_conn = self.create_new_connection().await?;
-        let pair = self.try_open_on_conn(&mut fresh_conn, path).await?;
+        let pair = self.try_open_on_conn(slot, &mut fresh_conn, path).await?;
         *guard = Some(fresh_conn);
         Ok(pair)
     }

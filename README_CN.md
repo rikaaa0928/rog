@@ -216,7 +216,7 @@ keep_alive = true
 keep_alive_interval_secs = 25
 max_idle_timeout_secs = 90
 connections = 2
-fallback_h2 = true
+fallback_h2 = true # 如需跳过 QUIC 直接使用 HTTP/2 over TLS 连接，可将 endpoint 写为 h2://...
 tcp_nodelay = true
 tcp_keepalive_secs = 30
 

@@ -208,7 +208,7 @@ keep_alive = true
 keep_alive_interval_secs = 25
 max_idle_timeout_secs = 90
 connections = 2
-fallback_h2 = true
+fallback_h2 = true # Use h2://... in endpoint to connect directly over HTTP/2 TLS without QUIC
 tcp_nodelay = true
 tcp_keepalive_secs = 30
 
