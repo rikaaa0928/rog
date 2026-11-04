@@ -184,6 +184,7 @@ pub struct TproxyOptions {
     pub suppress_ipv6_ra: bool,
     pub suppress_ipv6_ra_ttl_secs: u64,
     pub ebpf_direct_offload: bool,
+    pub ebpf_direct_connectors: Vec<String>,
 }
 
 impl TproxyOptions {
@@ -195,6 +196,7 @@ impl TproxyOptions {
         let mut suppress_ipv6_ra = true;
         let mut suppress_ipv6_ra_ttl_secs = 300u64;
         let mut ebpf_direct_offload = true;
+        let mut ebpf_direct_connectors = Vec::new();
 
         if let Some(ref opts) = listener.options {
             if let Some(m) = opts.get("mode").and_then(|v| v.as_str()) {
@@ -231,6 +233,20 @@ impl TproxyOptions {
             if let Some(ebpf) = opts.get("ebpf_direct_offload").and_then(|v| v.as_bool()) {
                 ebpf_direct_offload = ebpf;
             }
+            for key in ["ebpf_direct_connectors", "ebpf_direct_connector"] {
+                if let Some(val) = opts.get(key) {
+                    if let Some(arr) = val.as_array() {
+                        for item in arr {
+                            if let Some(s) = item.as_str().map(str::trim).filter(|s| !s.is_empty())
+                            {
+                                ebpf_direct_connectors.push(s.to_string());
+                            }
+                        }
+                    } else if let Some(s) = val.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                        ebpf_direct_connectors.push(s.to_string());
+                    }
+                }
+            }
         }
 
         Self {
@@ -240,6 +256,7 @@ impl TproxyOptions {
             suppress_ipv6_ra,
             suppress_ipv6_ra_ttl_secs,
             ebpf_direct_offload,
+            ebpf_direct_connectors,
         }
     }
 }

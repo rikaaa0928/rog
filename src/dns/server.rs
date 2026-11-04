@@ -38,6 +38,7 @@ pub(crate) struct DnsServer {
     socket: Arc<UdpSocket>,
     cfg: DnsConfig,
     config: Config,
+    ebpf_direct_connectors: std::collections::HashSet<String>,
     router: Arc<dyn RouterSet>,
     table: Arc<IpDomainTable>,
     cache: ConnectorCache,
@@ -74,10 +75,12 @@ impl DnsServer {
             socket.local_addr()?,
             cfg.router
         );
+        let ebpf_direct_connectors = config.resolve_ebpf_direct_connectors();
         Ok(Arc::new(Self {
             socket: Arc::new(socket),
             cfg,
             config,
+            ebpf_direct_connectors,
             router,
             table,
             cache: Mutex::new(HashMap::new()),
@@ -319,11 +322,8 @@ impl DnsServer {
                                 )
                                 .await;
                             let is_direct = self
-                                .config
-                                .connector
-                                .iter()
-                                .find(|c| c.name == effective_outbound)
-                                .is_some_and(|c| c.proto == "tcp");
+                                .ebpf_direct_connectors
+                                .contains(effective_outbound.as_str());
                             if is_direct {
                                 crate::util::ebpf::offload_direct_ip(
                                     ip,

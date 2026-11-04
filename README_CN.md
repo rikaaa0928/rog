@@ -190,6 +190,7 @@ disable_aaaa = false # 如不希望局域网客户端解析 IPv6，可设为 tru
 suppress_ipv6_ra = true # 默认开启：自动向活跃旁路由客户端单播清零主路由 IPv6 RA/RDNSS
 suppress_ipv6_ra_ttl_secs = 300 # 活跃客户端无流量过期移出时间（秒，默认 300）
 ebpf_direct_offload = true # 默认开启：eBPF TC 内核态 Direct 直连快路旁路
+ebpf_direct_connectors = ["Direct"] # 可选：指定由 eBPF 接管的直连 connector 名称；未配置时默认匹配所有 proto = "tcp" 的 connector
 upstream_timeout_ms = 2000
 request_timeout_ms = 8000
 

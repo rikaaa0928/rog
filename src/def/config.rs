@@ -71,7 +71,52 @@ impl Config {
                 "only one tproxy inbound listener is allowed per configuration; use mode = \"tcp+udp\" for both protocols",
             ));
         }
+        for name in self.explicit_ebpf_direct_connectors() {
+            if !self.connector.iter().any(|c| c.name == name) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("unknown ebpf_direct_connectors connector: {name}"),
+                ));
+            }
+        }
         Ok(())
+    }
+
+    pub fn explicit_ebpf_direct_connectors(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        if let Some(dns) = &self.dns {
+            for name in &dns.ebpf_direct_connectors {
+                let trimmed = name.trim();
+                if !trimmed.is_empty() && !names.iter().any(|n| n == trimmed) {
+                    names.push(trimmed.to_string());
+                }
+            }
+        }
+        for listener in self
+            .listener
+            .iter()
+            .filter(|l| l.proto.eq_ignore_ascii_case("tproxy"))
+        {
+            let opts = crate::listener::tproxy::TproxyOptions::from_listener(listener);
+            for name in opts.ebpf_direct_connectors {
+                if !names.iter().any(|n| n == &name) {
+                    names.push(name);
+                }
+            }
+        }
+        names
+    }
+
+    pub fn resolve_ebpf_direct_connectors(&self) -> std::collections::HashSet<String> {
+        let explicit = self.explicit_ebpf_direct_connectors();
+        if !explicit.is_empty() {
+            return explicit.into_iter().collect();
+        }
+        self.connector
+            .iter()
+            .filter(|c| c.proto == "tcp")
+            .map(|c| c.name.clone())
+            .collect()
     }
 }
 
@@ -126,4 +171,106 @@ pub struct RouteData {
     pub format: String,
     pub data: Option<String>,
     pub interval: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::load_config_str;
+
+    #[test]
+    fn test_resolve_ebpf_direct_connectors() {
+        let cfg = load_config_str(
+            r#"
+[dns]
+endpoint = "127.0.0.1:5353"
+router = "main"
+default_servers = ["1.1.1.1:53"]
+
+[[listener]]
+name = "tp"
+endpoint = "[::]:12345"
+proto = "tproxy"
+router = "main"
+
+[[connector]]
+name = "DirectA"
+proto = "tcp"
+
+[[connector]]
+name = "DirectB"
+proto = "tcp"
+
+[[router]]
+name = "main"
+default = "DirectA"
+"#,
+        )
+        .unwrap();
+        let resolved = cfg.resolve_ebpf_direct_connectors();
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved.contains("DirectA"));
+        assert!(resolved.contains("DirectB"));
+
+        let cfg_explicit = load_config_str(
+            r#"
+[dns]
+endpoint = "127.0.0.1:5353"
+router = "main"
+default_servers = ["1.1.1.1:53"]
+ebpf_direct_connectors = ["DirectA"]
+
+[[listener]]
+name = "tp"
+endpoint = "[::]:12345"
+proto = "tproxy"
+router = "main"
+
+[[connector]]
+name = "DirectA"
+proto = "tcp"
+
+[[connector]]
+name = "DirectB"
+proto = "tcp"
+
+[[router]]
+name = "main"
+default = "DirectA"
+"#,
+        )
+        .unwrap();
+        let resolved_explicit = cfg_explicit.resolve_ebpf_direct_connectors();
+        assert_eq!(resolved_explicit.len(), 1);
+        assert!(resolved_explicit.contains("DirectA"));
+        assert!(!resolved_explicit.contains("DirectB"));
+
+        let err = load_config_str(
+            r#"
+[dns]
+endpoint = "127.0.0.1:5353"
+router = "main"
+default_servers = ["1.1.1.1:53"]
+ebpf_direct_connectors = ["NonExistent"]
+
+[[listener]]
+name = "tp"
+endpoint = "[::]:12345"
+proto = "tproxy"
+router = "main"
+
+[[connector]]
+name = "DirectA"
+proto = "tcp"
+
+[[router]]
+name = "main"
+default = "DirectA"
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unknown ebpf_direct_connectors connector: NonExistent")
+        );
+    }
 }

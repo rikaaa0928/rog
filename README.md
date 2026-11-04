@@ -182,6 +182,7 @@ disable_aaaa = false # Set to true to strip AAAA responses if desired
 suppress_ipv6_ra = true # Default true: L2-unicast zero-lifetime RA/RDNSS suppression for active clients
 suppress_ipv6_ra_ttl_secs = 300 # Inactivity expiration in seconds for active client RA suppression (default 300)
 ebpf_direct_offload = true # Default true: eBPF TC ingress kernel fast-path for Direct traffic
+ebpf_direct_connectors = ["Direct"] # Optional: connector names offloaded by eBPF; defaults to all proto = "tcp" connectors when omitted
 upstream_timeout_ms = 2000
 request_timeout_ms = 8000
 

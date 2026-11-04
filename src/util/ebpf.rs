@@ -1080,16 +1080,19 @@ mod linux_impl {
             return;
         }
 
-        info!(
-            "ebpf_direct: attached TC ingress eBPF fast-path on {} (ifindex={}, mark=0x78)",
-            ifname, ifindex
-        );
-
         let notify = CIDR_REFRESH_NOTIFY
             .get_or_init(|| Arc::new(Notify::new()))
             .clone();
         let initial_cidrs = router.direct_cidrs(&router_name, &direct_connectors);
         sync_direct_cidrs(&initial_cidrs);
+
+        info!(
+            "ebpf_direct: attached TC ingress eBPF fast-path on {} (ifindex={}, mark=0x78, connectors={:?}, static_cidrs={})",
+            ifname,
+            ifindex,
+            direct_connectors,
+            initial_cidrs.len()
+        );
 
         tokio::spawn(async move {
             loop {

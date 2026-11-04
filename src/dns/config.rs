@@ -14,6 +14,8 @@ pub struct DnsConfig {
     pub suppress_ipv6_ra: bool,
     pub suppress_ipv6_ra_ttl_secs: u64,
     pub ebpf_direct_offload: bool,
+    #[serde(default, alias = "ebpf_direct_connector")]
+    pub ebpf_direct_connectors: Vec<String>,
     pub upstream_timeout_ms: u64,
     pub request_timeout_ms: u64,
     pub max_concurrent_requests: usize,
@@ -33,6 +35,7 @@ impl Default for DnsConfig {
             suppress_ipv6_ra: true,
             suppress_ipv6_ra_ttl_secs: 300,
             ebpf_direct_offload: true,
+            ebpf_direct_connectors: vec![],
             upstream_timeout_ms: 2000,
             request_timeout_ms: 6000,
             max_concurrent_requests: 256,

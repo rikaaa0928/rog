@@ -10,6 +10,7 @@
 # suppress_ipv6_ra = true # 是否自动压制主路由向旁路由活跃客户端下发的 IPv6 RA / RDNSS（默认开启）
 # suppress_ipv6_ra_ttl_secs = 300 # 旁路由活跃客户端保持 RA 压制的无流量过期时长（秒，默认 300）
 # ebpf_direct_offload = true # 是否开启 eBPF TC 内核态 Direct 直连快路旁路（默认开启）
+# ebpf_direct_connectors = ["direct"] # 可选：显式指定由 eBPF 接管直连快路的 connector 名称列表；未配置时默认接管所有 proto = "tcp" 的 connector
 # upstream_timeout_ms = 2000
 # request_timeout_ms = 6000
 

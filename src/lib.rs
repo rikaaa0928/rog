@@ -74,12 +74,7 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
             .map(|d| d.ebpf_direct_offload)
             .unwrap_or(true);
         if tproxy_opts.ebpf_direct_offload && dns_allows_ebpf {
-            let direct_connectors: std::collections::HashSet<String> = cfg
-                .connector
-                .iter()
-                .filter(|c| c.proto == "tcp")
-                .map(|c| c.name.clone())
-                .collect();
+            let direct_connectors = cfg.resolve_ebpf_direct_connectors();
             crate::util::ebpf::enable_ebpf_offload(
                 router.clone(),
                 tproxy_listener.router.clone(),
