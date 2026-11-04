@@ -6,7 +6,7 @@
 # Positional Arguments (all optional):
 #   TPROXY_PORT : TPROXY listening port (default: 12345, or $ROG_PORT)
 #   FWMARK      : Policy routing fwmark (default: 0x77, or $ROG_FWMARK)
-#   TABLE_ID    : Policy routing table ID (default: 177, or $ROG_TABLE)
+#   TABLE_ID    : Policy routing table ID (default: 2809, or $ROG_TABLE)
 #   MODE        : Intercept protocols: "tcp+udp" (default), "tcp", or "udp" ($ROG_MODE)
 #   FAMILY      : Address family: "dual" (default), "v4", or "v6" ($ROG_FAMILY)
 #
@@ -25,7 +25,7 @@ set -euo pipefail
 
 TPROXY_PORT="${1:-${ROG_PORT:-12345}}"
 FWMARK="${2:-${ROG_FWMARK:-0x77}}"
-TABLE_ID="${3:-${ROG_TABLE:-177}}"
+TABLE_ID="${3:-${ROG_TABLE:-2809}}"
 MODE="$(echo "${4:-${ROG_MODE:-tcp+udp}}" | tr '[:upper:]' '[:lower:]')"
 FAMILY="$(echo "${5:-${ROG_FAMILY:-dual}}" | tr '[:upper:]' '[:lower:]')"
 

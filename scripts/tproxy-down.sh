@@ -8,7 +8,7 @@ set -euo pipefail
 
 TPROXY_PORT="${1:-${ROG_PORT:-12345}}"
 FWMARK="${2:-${ROG_FWMARK:-0x77}}"
-TABLE_ID="${3:-${ROG_TABLE:-177}}"
+TABLE_ID="${3:-${ROG_TABLE:-2809}}"
 FAMILY="$(echo "${5:-${ROG_FAMILY:-dual}}" | tr '[:upper:]' '[:lower:]')"
 
 LAN_IF="${ROG_IFACE:-$(ip -4 route show default | awk '{print $5; exit}')}"
