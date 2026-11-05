@@ -41,7 +41,10 @@ impl LpmDecoder {
         if len > MAX_LPM_FRAME_SIZE {
             return Err(io::Error::new(
                 ErrorKind::InvalidData,
-                format!("LPM frame length {} exceeds max {}", len, MAX_LPM_FRAME_SIZE),
+                format!(
+                    "LPM frame length {} exceeds max {}",
+                    len, MAX_LPM_FRAME_SIZE
+                ),
             ));
         }
         if self.buf.len() < 5 + len {

@@ -38,10 +38,16 @@ impl ClientSendBody {
             return Ok(());
         }
         match self.inner.as_mut() {
-            Some(ClientSendBodyInner::H3(stream)) => stream
-                .send_data(data)
-                .await
-                .map_err(|e| io::Error::new(ErrorKind::BrokenPipe, format!("h3 send error: {e}"))),
+            Some(ClientSendBodyInner::H3(stream)) => {
+                if let Err(e) = stream.send_data(data).await {
+                    self.inner = None;
+                    return Err(io::Error::new(
+                        ErrorKind::BrokenPipe,
+                        format!("h3 send error: {e}"),
+                    ));
+                }
+                Ok(())
+            }
             Some(ClientSendBodyInner::H2(stream)) => {
                 while !data.is_empty() {
                     let want = data.len();
@@ -120,8 +126,9 @@ impl Drop for ClientSendBody {
 
 pub enum ClientRecvBody {
     H3 {
-        stream: h3::client::RequestStream<h3_quinn::RecvStream, Bytes>,
+        stream: Option<h3::client::RequestStream<h3_quinn::RecvStream, Bytes>>,
         headers_received: bool,
+        eof_reached: bool,
         read_started: bool,
         on_unresponsive: Option<Arc<dyn Fn() + Send + Sync>>,
     },
@@ -137,16 +144,30 @@ impl Drop for ClientRecvBody {
     fn drop(&mut self) {
         match self {
             ClientRecvBody::H3 {
+                stream,
                 headers_received,
+                eof_reached,
                 read_started,
                 on_unresponsive,
-                ..
             } => {
                 if *read_started
                     && !*headers_received
                     && let Some(cb) = on_unresponsive.take()
                 {
                     cb();
+                } else if *headers_received
+                    && !*eof_reached
+                    && let Some(mut s) = stream.take()
+                    && let Ok(handle) = tokio::runtime::Handle::try_current()
+                {
+                    handle.spawn(async move {
+                        let _ =
+                            tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+                                while let Ok(Some(_)) = s.recv_data().await {}
+                                let _ = s.recv_trailers().await;
+                            })
+                            .await;
+                    });
                 }
             }
             ClientRecvBody::H2 {
@@ -186,19 +207,24 @@ impl ClientRecvBody {
             ClientRecvBody::H3 {
                 stream,
                 headers_received,
+                eof_reached,
                 read_started,
                 on_unresponsive,
             } => {
+                let s = stream
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("missing h3 recv stream"))?;
                 if !*headers_received {
                     *read_started = true;
                     let resp = match tokio::time::timeout(
                         std::time::Duration::from_secs(8),
-                        stream.recv_response(),
+                        s.recv_response(),
                     )
                     .await
                     {
                         Ok(Ok(r)) => r,
                         Ok(Err(e)) => {
+                            *stream = None;
                             if let Some(cb) = on_unresponsive.take() {
                                 cb();
                             }
@@ -208,6 +234,7 @@ impl ClientRecvBody {
                             ));
                         }
                         Err(_) => {
+                            *stream = None;
                             if let Some(cb) = on_unresponsive.take() {
                                 cb();
                             }
@@ -218,6 +245,7 @@ impl ClientRecvBody {
                         }
                     };
                     if resp.status() != http::StatusCode::OK {
+                        *eof_reached = true;
                         return Err(io::Error::new(
                             ErrorKind::PermissionDenied,
                             format!("h3 server returned HTTP {}", resp.status()),
@@ -225,7 +253,7 @@ impl ClientRecvBody {
                     }
                     *headers_received = true;
                 }
-                match stream.recv_data().await {
+                match s.recv_data().await {
                     Ok(Some(mut buf)) => {
                         let len = buf.remaining();
                         if len == 0 {
@@ -234,11 +262,18 @@ impl ClientRecvBody {
                             Ok(Some(buf.copy_to_bytes(len)))
                         }
                     }
-                    Ok(None) => Ok(None),
-                    Err(e) => Err(io::Error::new(
-                        ErrorKind::ConnectionReset,
-                        format!("h3 recv_data error: {e}"),
-                    )),
+                    Ok(None) => {
+                        let _ = s.recv_trailers().await;
+                        *eof_reached = true;
+                        Ok(None)
+                    }
+                    Err(e) => {
+                        *eof_reached = true;
+                        Err(io::Error::new(
+                            ErrorKind::ConnectionReset,
+                            format!("h3 recv_data error: {e}"),
+                        ))
+                    }
                 }
             }
             ClientRecvBody::H2 {

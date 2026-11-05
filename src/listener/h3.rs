@@ -6,8 +6,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::select;
-use tokio::sync::mpsc::{self, Receiver};
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::{self, Receiver};
 
 use crate::def::{RunAccStream, RunAcceptor, RunListener, RunStream};
 use crate::object::config::ObjectConfig;
@@ -82,9 +82,8 @@ impl H3Listener {
         .map_err(|e| io::Error::other(format!("failed to generate self-signed cert: {e}")))?;
 
         let cert_der = certified.cert.der().clone();
-        let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
-            certified.key_pair.serialize_der(),
-        ));
+        let key_der =
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
         Ok((vec![cert_der], key_der))
     }
 
@@ -129,9 +128,7 @@ impl H3Listener {
         transport.send_window(u64::from(conn_win));
         transport.max_concurrent_bidi_streams(quinn::VarInt::from_u32(max_streams));
         transport.max_concurrent_uni_streams(quinn::VarInt::from_u32(max_streams));
-        transport.congestion_controller_factory(Arc::new(
-            quinn::congestion::BbrConfig::default(),
-        ));
+        transport.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
 
         server_config.transport_config(Arc::new(transport));
         Ok(server_config)
@@ -312,20 +309,19 @@ impl RunListener for H3Listener {
                                     return;
                                 }
                             };
-                            let mut h3_conn: h3::server::Connection<
-                                h3_quinn::Connection,
-                                Bytes,
-                            > = match h3::server::Connection::new(h3_quinn::Connection::new(
-                                quinn_conn,
-                            ))
-                            .await
-                            {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    trace!("Direct H3 init error from {}: {e}", peer_addr);
-                                    return;
-                                }
-                            };
+                            let mut h3_builder = h3::server::builder();
+                            h3_builder.send_grease(false);
+                            let mut h3_conn: h3::server::Connection<h3_quinn::Connection, Bytes> =
+                                match h3_builder
+                                    .build(h3_quinn::Connection::new(quinn_conn))
+                                    .await
+                                {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        trace!("Direct H3 init error from {}: {e}", peer_addr);
+                                        return;
+                                    }
+                                };
 
                             loop {
                                 match h3_conn.accept().await {
@@ -334,16 +330,16 @@ impl RunListener for H3Listener {
                                         let udp_tx = udp_tx.clone();
                                         let auth = auth.clone();
                                         tokio::spawn(async move {
-                                            let (req, mut stream) =
-                                                match resolver.resolve_request().await {
-                                                    Ok(pair) => pair,
-                                                    Err(e) => {
-                                                        trace!(
-                                                            "Direct H3 resolve_request error: {e}"
-                                                        );
-                                                        return;
-                                                    }
-                                                };
+                                            let (req, mut stream) = match resolver
+                                                .resolve_request()
+                                                .await
+                                            {
+                                                Ok(pair) => pair,
+                                                Err(e) => {
+                                                    trace!("Direct H3 resolve_request error: {e}");
+                                                    return;
+                                                }
+                                            };
 
                                             let path = req.uri().path().to_string();
                                             let Some((is_udp, legacy_pb)) =

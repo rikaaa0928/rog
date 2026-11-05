@@ -47,9 +47,16 @@ impl ServerSendBody {
             return Ok(());
         }
         match self.inner.as_mut() {
-            Some(ServerSendBodyInner::H3(stream)) => stream.send_data(data).await.map_err(|e| {
-                io::Error::new(ErrorKind::BrokenPipe, format!("h3 server send error: {e}"))
-            }),
+            Some(ServerSendBodyInner::H3(stream)) => {
+                if let Err(e) = stream.send_data(data).await {
+                    self.inner = None;
+                    return Err(io::Error::new(
+                        ErrorKind::BrokenPipe,
+                        format!("h3 server send error: {e}"),
+                    ));
+                }
+                Ok(())
+            }
             Some(ServerSendBodyInner::H2(stream)) => {
                 while !data.is_empty() {
                     let want = data.len();
@@ -100,8 +107,9 @@ impl ServerSendBody {
             let trailers = build_grpc_ok_trailers();
             match inner {
                 ServerSendBodyInner::H3(mut stream) => {
-                    let _ = stream.send_trailers(trailers).await;
-                    let _ = stream.finish().await;
+                    if stream.send_trailers(trailers).await.is_ok() {
+                        let _ = stream.finish().await;
+                    }
                 }
                 ServerSendBodyInner::H2(mut stream) => {
                     let _ = stream.send_trailers(trailers);
@@ -120,8 +128,9 @@ impl Drop for ServerSendBody {
                 ServerSendBodyInner::H3(mut stream) => {
                     if let Ok(handle) = tokio::runtime::Handle::try_current() {
                         handle.spawn(async move {
-                            let _ = stream.send_trailers(trailers).await;
-                            let _ = stream.finish().await;
+                            if stream.send_trailers(trailers).await.is_ok() {
+                                let _ = stream.finish().await;
+                            }
                         });
                     }
                 }

@@ -387,7 +387,10 @@ impl H3RunConnector {
             match tokio::time::timeout(self.connect_timeout, connecting).await {
                 Ok(Ok(quinn_conn)) => {
                     let h3_quinn_conn = h3_quinn::Connection::new(quinn_conn.clone());
-                    let (mut driver, send_request) = h3::client::new(h3_quinn_conn)
+                    let mut h3_builder = h3::client::builder();
+                    h3_builder.send_grease(false);
+                    let (mut driver, send_request) = h3_builder
+                        .build(h3_quinn_conn)
                         .await
                         .map_err(|e| io::Error::other(format!("h3 client handshake error: {e}")))?;
                     tokio::spawn(async move {
@@ -611,8 +614,9 @@ impl H3RunConnector {
                 let (send, recv) = stream.split();
                 Ok((
                     ClientRecvBody::H3 {
-                        stream: recv,
+                        stream: Some(recv),
                         headers_received: false,
+                        eof_reached: false,
                         read_started: false,
                         on_unresponsive: Some(on_unresponsive),
                     },
