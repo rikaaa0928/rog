@@ -38,16 +38,10 @@ impl ClientSendBody {
             return Ok(());
         }
         match self.inner.as_mut() {
-            Some(ClientSendBodyInner::H3(stream)) => {
-                if let Err(e) = stream.send_data(data).await {
-                    self.inner = None;
-                    return Err(io::Error::new(
-                        ErrorKind::BrokenPipe,
-                        format!("h3 send error: {e}"),
-                    ));
-                }
-                Ok(())
-            }
+            Some(ClientSendBodyInner::H3(stream)) => stream
+                .send_data(data)
+                .await
+                .map_err(|e| io::Error::new(ErrorKind::BrokenPipe, format!("h3 send error: {e}"))),
             Some(ClientSendBodyInner::H2(stream)) => {
                 while !data.is_empty() {
                     let want = data.len();
@@ -161,12 +155,22 @@ impl Drop for ClientRecvBody {
                     && let Ok(handle) = tokio::runtime::Handle::try_current()
                 {
                     handle.spawn(async move {
-                        let _ =
-                            tokio::time::timeout(std::time::Duration::from_secs(5), async move {
-                                while let Ok(Some(_)) = s.recv_data().await {}
+                        let _ = tokio::time::timeout(
+                            std::time::Duration::from_millis(1500),
+                            async move {
+                                let mut drained = 0usize;
+                                while let Ok(Some(mut buf)) = s.recv_data().await {
+                                    let len = buf.remaining();
+                                    buf.advance(len);
+                                    drained += len;
+                                    if drained > 64 * 1024 {
+                                        return;
+                                    }
+                                }
                                 let _ = s.recv_trailers().await;
-                            })
-                            .await;
+                            },
+                        )
+                        .await;
                     });
                 }
             }
@@ -187,13 +191,20 @@ impl Drop for ClientRecvBody {
                     && let Ok(handle) = tokio::runtime::Handle::try_current()
                 {
                     handle.spawn(async move {
-                        let _ =
-                            tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+                        let _ = tokio::time::timeout(
+                            std::time::Duration::from_millis(1500),
+                            async move {
+                                let mut drained = 0usize;
                                 while let Some(Ok(chunk)) = stream.data().await {
                                     let _ = stream.flow_control().release_capacity(chunk.len());
+                                    drained += chunk.len();
+                                    if drained > 64 * 1024 {
+                                        break;
+                                    }
                                 }
-                            })
-                            .await;
+                            },
+                        )
+                        .await;
                     });
                 }
             }

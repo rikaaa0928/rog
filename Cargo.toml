@@ -1,6 +1,6 @@
 [package]
 name = "rog"
-version = "0.1.18-dev.22"
+version = "0.1.18-dev.23"
 edition = "2024"
 
 [dependencies]
@@ -65,3 +65,8 @@ strip = "symbols"
 
 [dev-dependencies]
 serde_json = "1"
+
+[patch.crates-io]
+h3 = { git = "https://github.com/hyperium/h3.git", rev = "14a14224242862de31e780a7907fe8839b893fd6" }
+h3-quinn = { git = "https://github.com/hyperium/h3.git", rev = "14a14224242862de31e780a7907fe8839b893fd6" }
+
