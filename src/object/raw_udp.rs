@@ -33,6 +33,7 @@ pub async fn handle_raw_udp(
             },
             &crate::def::RouteContext {
                 client_ip: first_packet.meta.src_addr.parse().ok(),
+                client_port: Some(first_packet.meta.src_port),
                 use_dns_mapping: config.listener.proto == "tproxy",
             },
         )

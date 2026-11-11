@@ -106,6 +106,7 @@ impl Object {
                                             addr_ref,
                                             &crate::def::RouteContext {
                                                 client_ip: Some(peer_addr.ip()),
+                                                client_port: Some(peer_addr.port()),
                                                 use_dns_mapping: config_clone.listener.proto
                                                     == "tproxy",
                                             },

@@ -1,7 +1,7 @@
 use super::table::canonical;
 use hickory_proto::{
     op::{Message, MessageType, OpCode, ResponseCode},
-    rr::{DNSClass, RData, RecordType},
+    rr::{DNSClass, RData, RecordType, rdata::svcb::SvcParamValue},
 };
 use std::{collections::HashSet, net::IpAddr};
 pub fn error_reply(query: &Message, code: ResponseCode) -> Vec<u8> {
@@ -47,6 +47,47 @@ pub fn valid_response(query: &Message, response: &Message) -> bool {
                 && a.query_class() == b.query_class()
         }
 }
+pub fn cname_chain(query: &Message, response: &Message) -> Vec<(String, u32)> {
+    if response.truncated() || response.response_code() != ResponseCode::NoError {
+        return vec![];
+    }
+    let Some(q) = query.query() else {
+        return vec![];
+    };
+    let mut owner = canonical(&q.name().to_ascii());
+    let mut ttl = u32::MAX;
+    let mut seen = HashSet::new();
+    let mut chain = Vec::new();
+    for _ in 0..=16 {
+        if !seen.insert(owner.clone()) {
+            return vec![];
+        }
+        let aliases: Vec<_> = response
+            .answers()
+            .iter()
+            .filter(|r| {
+                r.dns_class() == DNSClass::IN
+                    && canonical(&r.name().to_ascii()) == owner
+                    && matches!(r.data(), RData::CNAME(_))
+            })
+            .collect();
+        if !aliases.is_empty() {
+            if aliases.len() != 1 || seen.len() > 16 {
+                return vec![];
+            }
+            let r = aliases[0];
+            ttl = ttl.min(r.ttl());
+            if let RData::CNAME(name) = r.data() {
+                owner = canonical(&name.0.to_ascii());
+                chain.push((owner.clone(), ttl));
+            }
+            continue;
+        }
+        return chain;
+    }
+    vec![]
+}
+
 pub fn addresses(query: &Message, response: &Message) -> Vec<(IpAddr, u32)> {
     if response.truncated() || response.response_code() != ResponseCode::NoError {
         return vec![];
@@ -81,30 +122,103 @@ pub fn addresses(query: &Message, response: &Message) -> Vec<(IpAddr, u32)> {
             }
             continue;
         }
-        return response
-            .answers()
-            .iter()
-            .filter_map(|r| {
-                if r.dns_class() != DNSClass::IN || canonical(&r.name().to_ascii()) != owner {
-                    return None;
+        let qtype = q.query_type();
+        let mut out = Vec::new();
+        let mut svcb_targets = HashSet::new();
+        for r in response.answers() {
+            if r.dns_class() != DNSClass::IN || canonical(&r.name().to_ascii()) != owner {
+                continue;
+            }
+            let rec_ttl = ttl.min(r.ttl());
+            match r.data() {
+                RData::A(a) if qtype == RecordType::A || qtype == RecordType::ANY => {
+                    out.push((IpAddr::V4(a.0), rec_ttl));
                 }
-                let ip = match r.data() {
-                    RData::A(a)
-                        if q.query_type() == RecordType::A || q.query_type() == RecordType::ANY =>
-                    {
-                        IpAddr::V4(a.0)
+                RData::AAAA(a) if qtype == RecordType::AAAA || qtype == RecordType::ANY => {
+                    out.push((IpAddr::V6(a.0), rec_ttl));
+                }
+                RData::HTTPS(https)
+                    if qtype == RecordType::HTTPS || qtype == RecordType::ANY =>
+                {
+                    let svcb = &https.0;
+                    let target = if svcb.target_name().is_root() {
+                        owner.clone()
+                    } else {
+                        canonical(&svcb.target_name().to_ascii())
+                    };
+                    svcb_targets.insert((target, rec_ttl));
+                    for (_, param) in svcb.svc_params() {
+                        match param {
+                            SvcParamValue::Ipv4Hint(hint) => {
+                                for a in &hint.0 {
+                                    out.push((IpAddr::V4(a.0), rec_ttl));
+                                }
+                            }
+                            SvcParamValue::Ipv6Hint(hint) => {
+                                for aaaa in &hint.0 {
+                                    out.push((IpAddr::V6(aaaa.0), rec_ttl));
+                                }
+                            }
+                            _ => {}
+                        }
                     }
-                    RData::AAAA(a)
-                        if q.query_type() == RecordType::AAAA
-                            || q.query_type() == RecordType::ANY =>
-                    {
-                        IpAddr::V6(a.0)
+                }
+                RData::SVCB(svcb)
+                    if qtype == RecordType::SVCB || qtype == RecordType::ANY =>
+                {
+                    let target = if svcb.target_name().is_root() {
+                        owner.clone()
+                    } else {
+                        canonical(&svcb.target_name().to_ascii())
+                    };
+                    svcb_targets.insert((target, rec_ttl));
+                    for (_, param) in svcb.svc_params() {
+                        match param {
+                            SvcParamValue::Ipv4Hint(hint) => {
+                                for a in &hint.0 {
+                                    out.push((IpAddr::V4(a.0), rec_ttl));
+                                }
+                            }
+                            SvcParamValue::Ipv6Hint(hint) => {
+                                for aaaa in &hint.0 {
+                                    out.push((IpAddr::V6(aaaa.0), rec_ttl));
+                                }
+                            }
+                            _ => {}
+                        }
                     }
-                    _ => return None,
+                }
+                _ => {}
+            }
+        }
+        if !svcb_targets.is_empty() {
+            for r in response.answers().iter().chain(response.additionals().iter()) {
+                if r.dns_class() != DNSClass::IN {
+                    continue;
+                }
+                let r_name = canonical(&r.name().to_ascii());
+                let Some((_, base_ttl)) = svcb_targets.iter().find(|(t, _)| *t == r_name) else {
+                    continue;
                 };
-                Some((ip, ttl.min(r.ttl())))
-            })
-            .collect();
+                let rec_ttl = (*base_ttl).min(r.ttl());
+                match r.data() {
+                    RData::A(a) => {
+                        let ip = IpAddr::V4(a.0);
+                        if !out.iter().any(|(existing, _)| *existing == ip) {
+                            out.push((ip, rec_ttl));
+                        }
+                    }
+                    RData::AAAA(a) => {
+                        let ip = IpAddr::V6(a.0);
+                        if !out.iter().any(|(existing, _)| *existing == ip) {
+                            out.push((ip, rec_ttl));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        return out;
     }
     vec![]
 }
@@ -151,6 +265,7 @@ mod tests {
         ));
         assert!(valid_response(&q, &r));
         assert_eq!(addresses(&q, &r), vec![("1.1.1.1".parse().unwrap(), 10)]);
+        assert_eq!(cname_chain(&q, &r), vec![("b.example".to_string(), 10)]);
         r.set_id(43);
         assert!(!valid_response(&q, &r));
         r.set_id(42).set_truncated(true);
@@ -176,5 +291,58 @@ mod tests {
         let mut bad = q;
         bad.add_query(bad.queries()[0].clone());
         assert_eq!(query_error(&bad), Some(ResponseCode::FormErr));
+    }
+    #[test]
+    fn https_svcb_hints_and_cname_only() {
+        use hickory_proto::rr::rdata::{
+            AAAA, HTTPS,
+            svcb::{IpHint, SVCB, SvcParamKey, SvcParamValue},
+        };
+        let mut q = Message::new();
+        q.set_id(7).add_query(Query::query(
+            Name::from_ascii("chat.example.com.").unwrap(),
+            RecordType::HTTPS,
+        ));
+        let mut r = Message::new();
+        r.set_id(7)
+            .set_message_type(MessageType::Response)
+            .add_query(q.queries()[0].clone());
+        r.add_answer(Record::from_rdata(
+            Name::from_ascii("chat.example.com.").unwrap(),
+            300,
+            RData::CNAME(CNAME(Name::from_ascii("chat.cdn.example.net.").unwrap())),
+        ));
+        let svcb = SVCB::new(
+            1,
+            Name::root(),
+            vec![
+                (
+                    SvcParamKey::Ipv4Hint,
+                    SvcParamValue::Ipv4Hint(IpHint(vec![A("104.21.53.236".parse().unwrap())])),
+                ),
+                (
+                    SvcParamKey::Ipv6Hint,
+                    SvcParamValue::Ipv6Hint(IpHint(vec![AAAA(
+                        "2606:4700:3034::6815:35ec".parse().unwrap(),
+                    )])),
+                ),
+            ],
+        );
+        r.add_answer(Record::from_rdata(
+            Name::from_ascii("chat.cdn.example.net.").unwrap(),
+            120,
+            RData::HTTPS(HTTPS(svcb)),
+        ));
+        assert_eq!(
+            cname_chain(&q, &r),
+            vec![("chat.cdn.example.net".to_string(), 300)]
+        );
+        assert_eq!(
+            addresses(&q, &r),
+            vec![
+                ("104.21.53.236".parse().unwrap(), 120),
+                ("2606:4700:3034::6815:35ec".parse().unwrap(), 120),
+            ]
+        );
     }
 }

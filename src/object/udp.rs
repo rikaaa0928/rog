@@ -91,13 +91,18 @@ pub async fn handle_udp_connection(
         return Ok(());
     }
     let client_name = router
-        .route(
+        .route_with_context(
             config.listener.name.as_str(),
             config.listener.router.as_str(),
             &RunAddr {
                 addr: udp_packet.meta.dst_addr.clone(),
                 port: udp_packet.meta.dst_port,
-                udp: false,
+                udp: true,
+            },
+            &crate::def::RouteContext {
+                client_ip: Some(src_addr.ip()),
+                client_port: Some(src_addr.port()),
+                use_dns_mapping: false,
             },
         )
         .await;

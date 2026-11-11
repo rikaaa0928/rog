@@ -64,6 +64,7 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
     )
     .await;
     router.dns_table = dns_table.clone();
+    router.ebpf_direct_connectors = cfg.resolve_ebpf_direct_connectors();
     let router = Arc::new(router);
 
     if let Some(tproxy_listener) = cfg.listener.iter().find(|l| l.proto == "tproxy") {

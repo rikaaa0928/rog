@@ -103,6 +103,7 @@ pub trait RunListener: Send {
 #[derive(Default)]
 pub struct RouteContext {
     pub client_ip: Option<std::net::IpAddr>,
+    pub client_port: Option<u16>,
     pub use_dns_mapping: bool,
 }
 

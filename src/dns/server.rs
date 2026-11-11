@@ -172,7 +172,22 @@ impl DnsServer {
         deadline: tokio::time::Instant,
     ) -> io::Result<Vec<u8>> {
         let domain = canonical(&query.query().unwrap().name().to_ascii());
-        let decision = self.router.route_dns(&self.cfg.router, &domain).await?;
+        let mut decision = self.router.route_dns(&self.cfg.router, &domain).await?;
+        if decision.matched_rule.is_none() {
+            for parent in self
+                .table
+                .get_cname_parents(&self.cfg.router, client.ip(), &domain)
+            {
+                if let Ok(parent_decision) =
+                    self.router.route_dns(&self.cfg.router, &parent).await
+                {
+                    if parent_decision.matched_rule.is_some() {
+                        decision = parent_decision;
+                        break;
+                    }
+                }
+            }
+        }
         let matched_cfg = self
             .config
             .connector
@@ -294,6 +309,21 @@ impl DnsServer {
                         return Err(io::Error::other("DNS upstream failed"));
                     }
                     let received = Instant::now();
+                    for (cname_target, cname_ttl) in message::cname_chain(query, &response) {
+                        let table_ttl = if cname_ttl > 0 {
+                            cname_ttl.max(3600)
+                        } else {
+                            0
+                        };
+                        self.table.record_cname(
+                            &self.cfg.router,
+                            client.ip(),
+                            &cname_target,
+                            &domain,
+                            table_ttl,
+                            received,
+                        );
+                    }
                     for (ip, ttl) in message::addresses(query, &response) {
                         let table_ttl = if ttl > 0 { ttl.max(3600) } else { 0 };
                         self.table.record(
@@ -317,6 +347,7 @@ impl DnsServer {
                                     },
                                     &crate::def::RouteContext {
                                         client_ip: Some(client.ip()),
+                                        client_port: Some(client.port()),
                                         use_dns_mapping: true,
                                     },
                                 )
@@ -325,9 +356,10 @@ impl DnsServer {
                                 .ebpf_direct_connectors
                                 .contains(effective_outbound.as_str());
                             if is_direct {
+                                let ebpf_ttl = (table_ttl / 2).max(60);
                                 crate::util::ebpf::offload_direct_ip(
                                     ip,
-                                    Duration::from_secs(u64::from(table_ttl)),
+                                    Duration::from_secs(u64::from(ebpf_ttl)),
                                 );
                             } else {
                                 crate::util::ebpf::remove_direct_ip(ip);
@@ -530,6 +562,7 @@ exclude=[]
                 },
                 &crate::def::RouteContext {
                     client_ip: Some(client.local_addr().unwrap().ip()),
+                    client_port: Some(client.local_addr().unwrap().port()),
                     use_dns_mapping: true,
                 },
             )
