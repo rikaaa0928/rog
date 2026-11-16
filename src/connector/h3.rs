@@ -2,11 +2,12 @@ use bytes::Bytes;
 use log::{debug, error, info, warn};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+use std::any::Any;
 use std::io::{self, ErrorKind};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use crate::connector::grpc::parse_address;
@@ -22,6 +23,9 @@ use crate::util::h3_frame::{
 const DEFAULT_H3_STREAM_WINDOW: u32 = 8 * 1024 * 1024;
 const DEFAULT_H3_CONN_WINDOW: u32 = 16 * 1024 * 1024;
 const DEFAULT_H2_MAX_FRAME_SIZE: u32 = 64 * 1024;
+const H3_STALL_FALLBACK_THRESHOLD: usize = 2;
+const H3_DATA_STALL_COOLDOWN: Duration = Duration::from_secs(120);
+const H3_HANDSHAKE_FAIL_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 struct NoCertVerification;
@@ -69,12 +73,47 @@ enum ActiveClientConn {
     H2(h2::client::SendRequest<Bytes>),
 }
 
+struct ConnKeepAlive {
+    _conn: ActiveClientConn,
+    _endpoint: Option<quinn::Endpoint>,
+}
+
 #[derive(Clone)]
 struct PooledClientConn {
     id: u64,
     conn: ActiveClientConn,
     quinn_conn: Option<quinn::Connection>,
-    _endpoint: Option<quinn::Endpoint>,
+    keep_alive: Arc<ConnKeepAlive>,
+    is_h3: bool,
+}
+
+impl PooledClientConn {
+    fn new(
+        id: u64,
+        conn: ActiveClientConn,
+        quinn_conn: Option<quinn::Connection>,
+        endpoint: Option<quinn::Endpoint>,
+        is_h3: bool,
+    ) -> Self {
+        let keep_alive = Arc::new(ConnKeepAlive {
+            _conn: conn.clone(),
+            _endpoint: endpoint,
+        });
+        Self {
+            id,
+            conn,
+            quinn_conn,
+            keep_alive,
+            is_h3,
+        }
+    }
+
+    fn is_alive(&self) -> bool {
+        match self.quinn_conn {
+            Some(ref qc) => qc.close_reason().is_none(),
+            None => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -104,6 +143,10 @@ pub struct H3RunConnector {
     pool: Vec<Arc<Mutex<Option<PooledClientConn>>>>,
     rr_index: AtomicUsize,
     next_conn_id: AtomicU64,
+    start_instant: Instant,
+    consecutive_h3_stalls: Arc<AtomicUsize>,
+    last_stalled_conn_id: Arc<AtomicU64>,
+    h3_cooldown_until_ms: Arc<AtomicU64>,
 }
 
 impl H3RunConnector {
@@ -289,7 +332,25 @@ impl H3RunConnector {
             pool,
             rr_index: AtomicUsize::new(0),
             next_conn_id: AtomicU64::new(1),
+            start_instant: Instant::now(),
+            consecutive_h3_stalls: Arc::new(AtomicUsize::new(0)),
+            last_stalled_conn_id: Arc::new(AtomicU64::new(0)),
+            h3_cooldown_until_ms: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    fn elapsed_ms(&self) -> u64 {
+        self.start_instant.elapsed().as_millis() as u64
+    }
+
+    fn is_h3_in_cooldown(&self) -> bool {
+        let until = self.h3_cooldown_until_ms.load(Ordering::Relaxed);
+        until > 0 && self.elapsed_ms() < until
+    }
+
+    fn enter_h3_cooldown(&self, duration: Duration) {
+        let until = self.elapsed_ms().saturating_add(duration.as_millis() as u64);
+        self.h3_cooldown_until_ms.store(until, Ordering::Relaxed);
     }
 
     fn build_rustls_client_config(
@@ -507,35 +568,26 @@ impl H3RunConnector {
     }
 
     async fn create_new_connection(&self) -> io::Result<PooledClientConn> {
-        let addrs = self.resolve_target_addrs().await?;
+        let mut addrs = self.resolve_target_addrs().await?;
         let id = self.next_conn_id.fetch_add(1, Ordering::Relaxed);
+        if addrs.len() > 1 {
+            let rot = (id.saturating_sub(1) as usize) % addrs.len();
+            addrs.rotate_left(rot);
+        }
         match self.scheme {
             TransportScheme::HttpCleartext => {
                 let conn = self.establish_h2(&addrs, false).await?;
-                Ok(PooledClientConn {
-                    id,
-                    conn,
-                    quinn_conn: None,
-                    _endpoint: None,
-                })
+                Ok(PooledClientConn::new(id, conn, None, None, false))
             }
             TransportScheme::HttpsOrH3 | TransportScheme::H3Insecure => {
-                if self.force_h2 {
+                if self.force_h2 || (self.fallback_h2 && self.is_h3_in_cooldown()) {
                     let conn = self.establish_h2(&addrs, true).await?;
-                    return Ok(PooledClientConn {
-                        id,
-                        conn,
-                        quinn_conn: None,
-                        _endpoint: None,
-                    });
+                    return Ok(PooledClientConn::new(id, conn, None, None, false));
                 }
                 match self.establish_quinn_h3(&addrs).await {
-                    Ok((conn, quinn_conn, ep)) => Ok(PooledClientConn {
-                        id,
-                        conn,
-                        quinn_conn: Some(quinn_conn),
-                        _endpoint: ep,
-                    }),
+                    Ok((conn, quinn_conn, ep)) => {
+                        Ok(PooledClientConn::new(id, conn, Some(quinn_conn), ep, true))
+                    }
                     Err(h3_err) => {
                         if self.fallback_h2 {
                             warn!(
@@ -543,12 +595,8 @@ impl H3RunConnector {
                                 self.authority, h3_err
                             );
                             let conn = self.establish_h2(&addrs, true).await?;
-                            Ok(PooledClientConn {
-                                id,
-                                conn,
-                                quinn_conn: None,
-                                _endpoint: None,
-                            })
+                            self.enter_h3_cooldown(H3_HANDSHAKE_FAIL_COOLDOWN);
+                            Ok(PooledClientConn::new(id, conn, None, None, false))
                         } else {
                             Err(h3_err)
                         }
@@ -580,14 +628,38 @@ impl H3RunConnector {
         pooled: &mut PooledClientConn,
         path: &str,
     ) -> io::Result<(ClientRecvBody, ClientSendBody)> {
+        if !pooled.is_alive() {
+            return Err(io::Error::new(
+                ErrorKind::ConnectionReset,
+                "pooled connection already closed",
+            ));
+        }
+
         let req = self.build_post_request(path)?;
         let slot_ref = slot.clone();
         let conn_id = pooled.id;
-        let quinn_conn = pooled.quinn_conn.clone();
+        let is_h3 = pooled.is_h3;
+        let force_h2 = self.force_h2;
+        let fallback_h2 = self.fallback_h2;
+        let authority = self.authority.clone();
+        let start_instant = self.start_instant;
+        let h3_stalls = self.consecutive_h3_stalls.clone();
+        let last_stalled_conn_id = self.last_stalled_conn_id.clone();
+        let h3_cooldown_until_ms = self.h3_cooldown_until_ms.clone();
+
+        let on_headers: Arc<dyn Fn() + Send + Sync> = if is_h3 {
+            let h3_stalls = h3_stalls.clone();
+            Arc::new(move || {
+                h3_stalls.store(0, Ordering::Relaxed);
+            })
+        } else {
+            Arc::new(|| {})
+        };
+
         let on_unresponsive: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            if let Some(ref qc) = quinn_conn {
-                qc.close(quinn::VarInt::from_u32(0), b"stream_response_timeout");
-            }
+            // Only evict the connection from the pool slot so new streams open a fresh
+            // connection; in-flight healthy streams keep their own ConnKeepAlive guard and
+            // are not terminated by a sibling stream's stall/timeout.
             if let Ok(mut guard) = slot_ref.try_lock() {
                 if guard.as_ref().map(|c| c.id) == Some(conn_id) {
                     *guard = None;
@@ -601,7 +673,29 @@ impl H3RunConnector {
                     }
                 });
             }
+
+            if is_h3
+                && !force_h2
+                && fallback_h2
+                && last_stalled_conn_id.swap(conn_id, Ordering::AcqRel) != conn_id
+            {
+                let stalls = h3_stalls.fetch_add(1, Ordering::Relaxed) + 1;
+                if stalls >= H3_STALL_FALLBACK_THRESHOLD {
+                    let until = (start_instant.elapsed().as_millis() as u64)
+                        .saturating_add(H3_DATA_STALL_COOLDOWN.as_millis() as u64);
+                    h3_cooldown_until_ms.store(until, Ordering::Relaxed);
+                    h3_stalls.store(0, Ordering::Relaxed);
+                    warn!(
+                        "H3 QUIC {} stalled {} consecutive times after handshake; switching to HTTP/2 over TLS fallback for {}s",
+                        authority,
+                        stalls,
+                        H3_DATA_STALL_COOLDOWN.as_secs()
+                    );
+                }
+            }
         });
+
+        let conn_guard: Arc<dyn Any + Send + Sync> = pooled.keep_alive.clone();
 
         match &mut pooled.conn {
             ActiveClientConn::H3(sender) => {
@@ -617,10 +711,11 @@ impl H3RunConnector {
                         stream: Some(recv),
                         headers_received: false,
                         eof_reached: false,
-                        read_started: false,
+                        on_headers: Some(on_headers),
                         on_unresponsive: Some(on_unresponsive),
+                        _conn_guard: Some(conn_guard.clone()),
                     },
-                    ClientSendBody::new_h3(send),
+                    ClientSendBody::new_h3(send, Some(conn_guard)),
                 ))
             }
             ActiveClientConn::H2(sender) => {
@@ -642,31 +737,63 @@ impl H3RunConnector {
                     ClientRecvBody::H2 {
                         response_fut: Some(resp_fut),
                         body: None,
-                        read_started: false,
+                        on_headers: Some(on_headers),
                         on_unresponsive: Some(on_unresponsive),
+                        _conn_guard: Some(conn_guard.clone()),
                     },
-                    ClientSendBody::new_h2(send_stream),
+                    ClientSendBody::new_h2(send_stream, Some(conn_guard)),
                 ))
             }
         }
     }
 
-    async fn open_bidi_stream(&self, path: &str) -> io::Result<(ClientRecvBody, ClientSendBody)> {
-        let idx = self.rr_index.fetch_add(1, Ordering::Relaxed) % self.pool.len();
-        let slot = &self.pool[idx];
+    async fn clear_slot_if_same(&self, slot: &Arc<Mutex<Option<PooledClientConn>>>, conn_id: u64) {
+        let mut guard = slot.lock().await;
+        if guard.as_ref().map(|c| c.id) == Some(conn_id) {
+            *guard = None;
+        }
+    }
 
-        let existing = { slot.lock().await.clone() };
-        if let Some(mut conn) = existing {
-            if let Ok(pair) = self.try_open_on_conn(slot, &mut conn, path).await {
-                return Ok(pair);
+    async fn open_bidi_stream(&self, path: &str) -> io::Result<(ClientRecvBody, ClientSendBody)> {
+        let start = self.rr_index.fetch_add(1, Ordering::Relaxed) % self.pool.len();
+
+        // Fast pass: reuse any unlocked, alive pooled slot before blocking on connection setup.
+        for offset in 0..self.pool.len() {
+            let slot = &self.pool[(start + offset) % self.pool.len()];
+            let existing = match slot.try_lock() {
+                Ok(mut guard) => {
+                    if let Some(ref conn) = *guard {
+                        if conn.is_alive() {
+                            Some(conn.clone())
+                        } else {
+                            *guard = None;
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                Err(_) => None,
+            };
+            if let Some(mut conn) = existing {
+                let conn_id = conn.id;
+                if let Ok(pair) = self.try_open_on_conn(slot, &mut conn, path).await {
+                    return Ok(pair);
+                }
+                self.clear_slot_if_same(slot, conn_id).await;
             }
         }
 
+        // Slow pass: serialize connection creation on the chosen slot.
+        let slot = &self.pool[start];
         let mut guard = slot.lock().await;
         if let Some(ref mut conn) = *guard {
-            if let Ok(pair) = self.try_open_on_conn(slot, conn, path).await {
-                return Ok(pair);
+            if conn.is_alive() {
+                if let Ok(pair) = self.try_open_on_conn(slot, conn, path).await {
+                    return Ok(pair);
+                }
             }
+            *guard = None;
         }
 
         let mut fresh_conn = self.create_new_connection().await?;
@@ -716,5 +843,205 @@ impl RunConnector for H3RunConnector {
             Box::new(H3UdpClientRunReader::new(recv, src_host, src_port)),
             Box::new(H3UdpClientRunWriter::new(send)),
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::def::{RunAccStream, RunListener};
+    use crate::listener::h3::H3Listener;
+    use crate::object::config::ObjectConfig;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::time::Duration;
+
+    fn free_port() -> u16 {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        probe.local_addr().unwrap().port()
+    }
+
+    async fn spawn_test_h3_listener(port: u16) -> Arc<Box<dyn crate::def::RunAcceptor>> {
+        let listener_cfg = config::Listener {
+            name: "test-h3".to_string(),
+            proto: "h3".to_string(),
+            endpoint: format!("127.0.0.1:{port}"),
+            router: "default".to_string(),
+            user: None,
+            pw: Some("secret123".to_string()),
+            options: None,
+        };
+        let obj_cfg = ObjectConfig {
+            server_id: "test".to_string(),
+            listener: listener_cfg,
+            connector: HashMap::new(),
+        };
+        let h3_listener = H3Listener::new(obj_cfg);
+        let acceptor = Arc::new(h3_listener.listen(&format!("127.0.0.1:{port}")).await.unwrap());
+        let acc_clone = acceptor.clone();
+        tokio::spawn(async move {
+            while let Ok((acc_stream, _)) = acc_clone.accept().await {
+                let acc_inner = acc_clone.clone();
+                tokio::spawn(async move {
+                    if let RunAccStream::TCPStream(mut s) = acc_stream {
+                        if let Ok((addr, init)) = acc_inner.handshake(s.as_mut()).await {
+                            let mut buf = [0u8; 1024];
+                            let n = if let Some(init_bytes) = init {
+                                buf[..init_bytes.len()].copy_from_slice(&init_bytes);
+                                init_bytes.len()
+                            } else {
+                                s.read(&mut buf).await.unwrap_or(0)
+                            };
+                            if n > 0 {
+                                let reply = format!(
+                                    "ok:{}:{}:{}",
+                                    addr.addr,
+                                    addr.port,
+                                    String::from_utf8_lossy(&buf[..n])
+                                );
+                                let _ = s.write(reply.as_bytes()).await;
+                            }
+                            while let Ok(m) = s.read(&mut buf).await {
+                                if m == 0 {
+                                    break;
+                                }
+                                let _ = s.write(&buf[..m]).await;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        acceptor
+    }
+
+    #[tokio::test]
+    async fn test_client_abort_before_headers_preserves_pooled_quic_and_h2() {
+        let port = free_port();
+        let _acc = spawn_test_h3_listener(port).await;
+
+        for endpoint in [format!("h3c://127.0.0.1:{port}"), format!("h2c://127.0.0.1:{port}")] {
+            let mut opts = HashMap::new();
+            opts.insert("connections".to_string(), toml::Value::Integer(1));
+            let conn_cfg = config::Connector {
+                name: "out".to_string(),
+                proto: "h3".to_string(),
+                endpoint: Some(endpoint.clone()),
+                user: None,
+                pw: Some("secret123".to_string()),
+                dns: None,
+                options: Some(opts),
+            };
+            let connector = H3RunConnector::new(&conn_cfg).await.unwrap();
+
+            // Establish connection with sibling stream A (not yet closed)
+            let mut stream_a = connector.connect("1.1.1.1:443".to_string()).await.unwrap();
+            let first_conn_id = connector.pool[0].lock().await.as_ref().unwrap().id;
+            assert_eq!(first_conn_id, 1);
+
+            // Stream B starts reading (waiting for response headers) and gets aborted immediately
+            let mut stream_b = connector.connect("2.2.2.2:443".to_string()).await.unwrap();
+            let mut tmp = [0u8; 64];
+            let _ = tokio::time::timeout(Duration::from_millis(1), stream_b.read(&mut tmp)).await;
+            drop(stream_b);
+
+            // Pooled connection ID must NOT have been evicted or incremented!
+            let pooled_id_after_abort = connector.pool[0].lock().await.as_ref().map(|c| c.id);
+            assert_eq!(
+                pooled_id_after_abort,
+                Some(first_conn_id),
+                "aborting stream_b before headers evicted pool for {endpoint}"
+            );
+            assert_eq!(connector.next_conn_id.load(Ordering::Relaxed), 2);
+
+            // Sibling stream A must complete cleanly on the same connection
+            stream_a.write(b"hello").await.unwrap();
+            let mut rbuf = [0u8; 256];
+            let n = stream_a.read(&mut rbuf).await.unwrap();
+            assert_eq!(
+                std::str::from_utf8(&rbuf[..n]).unwrap(),
+                "ok:1.1.1.1:443:hello"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unresponsive_evicts_slot_without_killing_sibling_and_triggers_h2_cooldown() {
+        let port = free_port();
+        let _acc = spawn_test_h3_listener(port).await;
+
+        let mut opts = HashMap::new();
+        opts.insert("connections".to_string(), toml::Value::Integer(1));
+        opts.insert("fallback_h2".to_string(), toml::Value::Boolean(true));
+        let conn_cfg = config::Connector {
+            name: "out".to_string(),
+            proto: "h3".to_string(),
+            endpoint: Some(format!("h3c://127.0.0.1:{port}")),
+            user: None,
+            pw: Some("secret123".to_string()),
+            dns: None,
+            options: Some(opts),
+        };
+        let connector = H3RunConnector::new(&conn_cfg).await.unwrap();
+
+        // Open stream_a on conn #1 and complete initial header + first chunk exchange
+        let mut stream_a = connector.connect("1.1.1.1:443".to_string()).await.unwrap();
+        stream_a.write(b"first").await.unwrap();
+        let mut rbuf = [0u8; 256];
+        let n = stream_a.read(&mut rbuf).await.unwrap();
+        assert_eq!(
+            std::str::from_utf8(&rbuf[..n]).unwrap(),
+            "ok:1.1.1.1:443:first"
+        );
+
+        // Simulate an unresponsive/stalled stream on conn #1 (via internal try_open_on_conn callback)
+        {
+            let mut conn = connector.pool[0].lock().await.clone().unwrap();
+            let (mut recv, _send) = connector
+                .try_open_on_conn(&connector.pool[0], &mut conn, H3_RAW_STREAM_PATH)
+                .await
+                .unwrap();
+            if let ClientRecvBody::H3 {
+                ref mut on_unresponsive,
+                ..
+            } = recv
+            {
+                if let Some(cb) = on_unresponsive.take() {
+                    cb();
+                }
+            }
+        }
+        // Pool slot is evicted for new streams, NOT yet in cooldown (1 strike < 2)
+        assert!(connector.pool[0].lock().await.is_none());
+        assert!(!connector.is_h3_in_cooldown());
+
+        // Healthy sibling stream_a on evicted conn #1 must STILL send/receive cleanly!
+        stream_a.write(b"still-alive").await.unwrap();
+        let n = stream_a.read(&mut rbuf).await.unwrap();
+        assert_eq!(
+            std::str::from_utf8(&rbuf[..n]).unwrap(),
+            "still-alive"
+        );
+
+        // Next connect opens conn #2; simulate a second stalled connection -> triggers H2 cooldown
+        let _stream_c = connector.connect("3.3.3.3:443".to_string()).await.unwrap();
+        {
+            let mut conn = connector.pool[0].lock().await.clone().unwrap();
+            assert_eq!(conn.id, 2);
+            let (mut recv, _send) = connector
+                .try_open_on_conn(&connector.pool[0], &mut conn, H3_RAW_STREAM_PATH)
+                .await
+                .unwrap();
+            if let ClientRecvBody::H3 {
+                ref mut on_unresponsive,
+                ..
+            } = recv
+            {
+                if let Some(cb) = on_unresponsive.take() {
+                    cb();
+                }
+            }
+        }
+        assert!(connector.is_h3_in_cooldown());
     }
 }

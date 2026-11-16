@@ -18,18 +18,27 @@ pub enum ClientSendBodyInner {
 
 pub struct ClientSendBody {
     inner: Option<ClientSendBodyInner>,
+    _conn_guard: Option<Arc<dyn Any + Send + Sync>>,
 }
 
 impl ClientSendBody {
-    pub fn new_h3(stream: h3::client::RequestStream<h3_quinn::SendStream<Bytes>, Bytes>) -> Self {
+    pub fn new_h3(
+        stream: h3::client::RequestStream<h3_quinn::SendStream<Bytes>, Bytes>,
+        conn_guard: Option<Arc<dyn Any + Send + Sync>>,
+    ) -> Self {
         Self {
             inner: Some(ClientSendBodyInner::H3(stream)),
+            _conn_guard: conn_guard,
         }
     }
 
-    pub fn new_h2(stream: h2::SendStream<Bytes>) -> Self {
+    pub fn new_h2(
+        stream: h2::SendStream<Bytes>,
+        conn_guard: Option<Arc<dyn Any + Send + Sync>>,
+    ) -> Self {
         Self {
             inner: Some(ClientSendBodyInner::H2(stream)),
+            _conn_guard: conn_guard,
         }
     }
 
@@ -123,14 +132,16 @@ pub enum ClientRecvBody {
         stream: Option<h3::client::RequestStream<h3_quinn::RecvStream, Bytes>>,
         headers_received: bool,
         eof_reached: bool,
-        read_started: bool,
+        on_headers: Option<Arc<dyn Fn() + Send + Sync>>,
         on_unresponsive: Option<Arc<dyn Fn() + Send + Sync>>,
+        _conn_guard: Option<Arc<dyn Any + Send + Sync>>,
     },
     H2 {
         response_fut: Option<h2::client::ResponseFuture>,
         body: Option<h2::RecvStream>,
-        read_started: bool,
+        on_headers: Option<Arc<dyn Fn() + Send + Sync>>,
         on_unresponsive: Option<Arc<dyn Fn() + Send + Sync>>,
+        _conn_guard: Option<Arc<dyn Any + Send + Sync>>,
     },
 }
 
@@ -141,16 +152,15 @@ impl Drop for ClientRecvBody {
                 stream,
                 headers_received,
                 eof_reached,
-                read_started,
-                on_unresponsive,
+                ..
             } => {
-                if *read_started
-                    && !*headers_received
-                    && let Some(cb) = on_unresponsive.take()
-                {
-                    cb();
-                } else if *headers_received
-                    && !*eof_reached
+                if !*headers_received {
+                    // Client aborted/closed before server headers arrived: cancel only this
+                    // stream without evicting or killing the shared QUIC connection.
+                    if let Some(mut s) = stream.take() {
+                        s.stop_sending(h3::error::Code::H3_REQUEST_CANCELLED);
+                    }
+                } else if !*eof_reached
                     && let Some(mut s) = stream.take()
                     && let Ok(handle) = tokio::runtime::Handle::try_current()
                 {
@@ -164,6 +174,7 @@ impl Drop for ClientRecvBody {
                                     buf.advance(len);
                                     drained += len;
                                     if drained > 64 * 1024 {
+                                        s.stop_sending(h3::error::Code::H3_REQUEST_CANCELLED);
                                         return;
                                     }
                                 }
@@ -174,18 +185,7 @@ impl Drop for ClientRecvBody {
                     });
                 }
             }
-            ClientRecvBody::H2 {
-                body,
-                read_started,
-                on_unresponsive,
-                ..
-            } => {
-                if *read_started
-                    && body.is_none()
-                    && let Some(cb) = on_unresponsive.take()
-                {
-                    cb();
-                }
+            ClientRecvBody::H2 { body, .. } => {
                 if let Some(mut stream) = body.take()
                     && !stream.is_end_stream()
                     && let Ok(handle) = tokio::runtime::Handle::try_current()
@@ -219,14 +219,14 @@ impl ClientRecvBody {
                 stream,
                 headers_received,
                 eof_reached,
-                read_started,
+                on_headers,
                 on_unresponsive,
+                ..
             } => {
                 let s = stream
                     .as_mut()
                     .ok_or_else(|| io::Error::other("missing h3 recv stream"))?;
                 if !*headers_received {
-                    *read_started = true;
                     let resp = match tokio::time::timeout(
                         std::time::Duration::from_secs(8),
                         s.recv_response(),
@@ -235,7 +235,9 @@ impl ClientRecvBody {
                     {
                         Ok(Ok(r)) => r,
                         Ok(Err(e)) => {
-                            *stream = None;
+                            if let Some(mut s) = stream.take() {
+                                s.stop_sending(h3::error::Code::H3_REQUEST_CANCELLED);
+                            }
                             if let Some(cb) = on_unresponsive.take() {
                                 cb();
                             }
@@ -245,7 +247,9 @@ impl ClientRecvBody {
                             ));
                         }
                         Err(_) => {
-                            *stream = None;
+                            if let Some(mut s) = stream.take() {
+                                s.stop_sending(h3::error::Code::H3_REQUEST_CANCELLED);
+                            }
                             if let Some(cb) = on_unresponsive.take() {
                                 cb();
                             }
@@ -257,12 +261,17 @@ impl ClientRecvBody {
                     };
                     if resp.status() != http::StatusCode::OK {
                         *eof_reached = true;
+                        *on_unresponsive = None;
                         return Err(io::Error::new(
                             ErrorKind::PermissionDenied,
                             format!("h3 server returned HTTP {}", resp.status()),
                         ));
                     }
                     *headers_received = true;
+                    *on_unresponsive = None;
+                    if let Some(cb) = on_headers.take() {
+                        cb();
+                    }
                 }
                 match s.recv_data().await {
                     Ok(Some(mut buf)) => {
@@ -290,11 +299,11 @@ impl ClientRecvBody {
             ClientRecvBody::H2 {
                 response_fut,
                 body,
-                read_started,
+                on_headers,
                 on_unresponsive,
+                ..
             } => {
                 if body.is_none() {
-                    *read_started = true;
                     let fut = response_fut
                         .take()
                         .ok_or_else(|| io::Error::other("missing h2 response future"))?;
@@ -322,10 +331,15 @@ impl ClientRecvBody {
                         }
                     };
                     if resp.status() != http::StatusCode::OK {
+                        *on_unresponsive = None;
                         return Err(io::Error::new(
                             ErrorKind::PermissionDenied,
                             format!("h2 server returned HTTP {}", resp.status()),
                         ));
+                    }
+                    *on_unresponsive = None;
+                    if let Some(cb) = on_headers.take() {
+                        cb();
                     }
                     *body = Some(resp.into_body());
                 }
