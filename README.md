@@ -215,7 +215,7 @@ tcp_keepalive_secs = 30
 [[connector]]
 name = "Direct"
 proto = "tcp"
-dns = ["114.114.114.114:53", "223.5.5.5:53"]
+dns = ["system", "223.5.5.5:53"] # "system" (or "$system") resolves the host OS default DNS dynamically (skipping loopback/self)
 
 [[data]]
 name = "lan_and_cn_cidr"

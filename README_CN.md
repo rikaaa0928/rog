@@ -223,7 +223,7 @@ tcp_keepalive_secs = 30
 [[connector]]
 name = "Direct"
 proto = "tcp"
-dns = ["114.114.114.114:53", "223.5.5.5:53"] # 国内直连出口指定国内 DNS
+dns = ["system", "223.5.5.5:53"] # "system"（或 "$system"）自动使用本机系统默认 DNS（自动跳过回环与自身监听），223.5.5.5 作兜底
 
 [[data]]
 name = "lan_and_cn_cidr"

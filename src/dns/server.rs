@@ -1,5 +1,5 @@
 use super::{
-    config::{DnsConfig, servers},
+    config::{DnsConfig, servers_with_listener},
     message,
     table::{IpDomainTable, canonical},
 };
@@ -117,6 +117,7 @@ struct Counters {
 }
 pub(crate) struct DnsServer {
     socket: Arc<UdpSocket>,
+    bind_addr: SocketAddr,
     cfg: DnsConfig,
     config: Config,
     ebpf_direct_connectors: std::collections::HashSet<String>,
@@ -156,15 +157,17 @@ impl DnsServer {
         sock.set_nonblocking(true)?;
         sock.bind(&bind_addr.into())?;
         let socket = UdpSocket::from_std(sock.into())?;
+        let local_addr = socket.local_addr()?;
         log::info!(
             "DNS listening on {} router {}",
-            socket.local_addr()?,
+            local_addr,
             cfg.router
         );
         let ebpf_direct_connectors = config.resolve_ebpf_direct_connectors();
         let cache_cap = NonZeroUsize::new(cfg.mapping_capacity.clamp(256, 16384)).unwrap();
         Ok(Arc::new(Self {
             socket: Arc::new(socket),
+            bind_addr: local_addr,
             cfg,
             config,
             ebpf_direct_connectors,
@@ -481,7 +484,7 @@ impl DnsServer {
         query: &Message,
         deadline: tokio::time::Instant,
     ) -> io::Result<(Vec<u8>, Message)> {
-        let upstreams = servers(chosen)?;
+        let upstreams = servers_with_listener(chosen, Some(self.bind_addr))?;
         if upstreams.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,

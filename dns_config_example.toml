@@ -13,8 +13,9 @@ disable_aaaa = false
 [[connector]]
 name = "direct"
 proto = "tcp"
-dns = ["114.114.114.114:53", "223.5.5.5:53"]
+dns = ["system", "223.5.5.5:53"]
 # Notes on DNS fallback order:
+# - Use "system" (or "$system") in dns lists to resolve the host's default OS DNS servers dynamically (filtering loopback/self-listener addresses).
 # - connector.dns falls back to dns.default_servers when omitted.
 # - connector.options.bootstrap_dns falls back to dns.bootstrap_servers -> connector.dns -> dns.default_servers when omitted.
 

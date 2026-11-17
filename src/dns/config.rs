@@ -1,6 +1,12 @@
 use crate::def::config::Config;
+use hickory_resolver::config::ResolverConfig;
 use serde::Deserialize;
-use std::{io, net::SocketAddr};
+use std::{
+    io,
+    net::SocketAddr,
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant, SystemTime},
+};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
@@ -49,9 +55,141 @@ impl Default for DnsConfig {
 pub fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
 }
-pub fn servers(values: &[String]) -> io::Result<Vec<SocketAddr>> {
+
+pub fn is_system_placeholder(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.eq_ignore_ascii_case("system") || trimmed.eq_ignore_ascii_case("$system")
+}
+
+fn points_to_listener(addr: SocketAddr, bind: SocketAddr) -> bool {
+    addr.port() == bind.port()
+        && (addr.ip() == bind.ip()
+            || (bind.ip().is_unspecified()
+                && crate::listener::tproxy::is_local_host_ip(&addr.ip()))
+            || (bind.ip().is_loopback() && addr.ip().is_loopback()))
+}
+
+fn extract_valid_system_v4_addrs(cfg: &ResolverConfig, out: &mut Vec<SocketAddr>) {
+    for ns in cfg.name_servers() {
+        let addr = ns.socket_addr;
+        if addr.is_ipv4()
+            && addr.port() != 0
+            && !addr.ip().is_unspecified()
+            && !addr.ip().is_multicast()
+            && !addr.ip().is_loopback()
+            && !out.contains(&addr)
+        {
+            out.push(addr);
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CachedSystemDns {
+    checked_at: Instant,
+    resolv_mtime: Option<SystemTime>,
+    systemd_mtime: Option<SystemTime>,
+    addrs: Vec<SocketAddr>,
+}
+
+fn system_dns_addrs_raw() -> Vec<SocketAddr> {
+    static SYSTEM_DNS_CACHE: OnceLock<Mutex<Option<CachedSystemDns>>> = OnceLock::new();
+    let cache = SYSTEM_DNS_CACHE.get_or_init(|| Mutex::new(None));
+    let now = Instant::now();
+
+    #[cfg(unix)]
+    let (resolv_mtime, systemd_mtime) = (
+        std::fs::metadata("/etc/resolv.conf")
+            .ok()
+            .and_then(|m| m.modified().ok()),
+        std::fs::metadata("/run/systemd/resolve/resolv.conf")
+            .ok()
+            .and_then(|m| m.modified().ok()),
+    );
+    #[cfg(not(unix))]
+    let (resolv_mtime, systemd_mtime): (Option<SystemTime>, Option<SystemTime>) = (None, None);
+
+    let prev_addrs = if let Ok(guard) = cache.lock()
+        && let Some(ref cached) = *guard
+    {
+        if now.saturating_duration_since(cached.checked_at) < Duration::from_secs(10)
+            && cached.resolv_mtime == resolv_mtime
+            && cached.systemd_mtime == systemd_mtime
+        {
+            return cached.addrs.clone();
+        }
+        Some(cached.addrs.clone())
+    } else {
+        None
+    };
+
+    let mut addrs = Vec::new();
+    if let Ok((cfg, _)) = hickory_resolver::system_conf::read_system_conf() {
+        extract_valid_system_v4_addrs(&cfg, &mut addrs);
+    }
+    #[cfg(unix)]
+    if addrs.is_empty() {
+        for path in [
+            "/run/systemd/resolve/resolv.conf",
+            "/var/run/systemd/resolve/resolv.conf",
+        ] {
+            if let Ok(bytes) = std::fs::read(path)
+                && let Ok((cfg, _)) = hickory_resolver::system_conf::parse_resolv_conf(&bytes)
+            {
+                extract_valid_system_v4_addrs(&cfg, &mut addrs);
+                if !addrs.is_empty() {
+                    break;
+                }
+            }
+        }
+    }
+
+    if prev_addrs.as_ref() != Some(&addrs) && !addrs.is_empty() {
+        log::info!("DNS system placeholder resolved to {:?}", addrs);
+    }
+
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some(CachedSystemDns {
+            checked_at: now,
+            resolv_mtime,
+            systemd_mtime,
+            addrs: addrs.clone(),
+        });
+    }
+    addrs
+}
+
+pub(crate) fn resolve_servers_with<F>(
+    values: &[String],
+    exclude_listener: Option<SocketAddr>,
+    system_fn: F,
+) -> io::Result<Vec<SocketAddr>>
+where
+    F: Fn() -> Vec<SocketAddr>,
+{
     let mut result = vec![];
+    let mut used_system = false;
     for value in values {
+        if is_system_placeholder(value) {
+            used_system = true;
+            for addr in system_fn() {
+                if !addr.is_ipv4()
+                    || addr.port() == 0
+                    || addr.ip().is_unspecified()
+                    || addr.ip().is_multicast()
+                    || addr.ip().is_loopback()
+                {
+                    continue;
+                }
+                if exclude_listener.is_some_and(|bind| points_to_listener(addr, bind)) {
+                    continue;
+                }
+                if !result.contains(&addr) {
+                    result.push(addr);
+                }
+            }
+            continue;
+        }
         let addr: SocketAddr = value
             .parse()
             .map_err(|_| invalid(format!("invalid UDP DNS server: {value}")))?;
@@ -68,7 +206,23 @@ pub fn servers(values: &[String]) -> io::Result<Vec<SocketAddr>> {
             result.push(addr);
         }
     }
+    if used_system && result.is_empty() {
+        return Err(invalid(
+            "system DNS placeholder ('system') found no usable non-local IPv4 DNS server",
+        ));
+    }
     Ok(result)
+}
+
+pub fn servers(values: &[String]) -> io::Result<Vec<SocketAddr>> {
+    resolve_servers_with(values, None, system_dns_addrs_raw)
+}
+
+pub(crate) fn servers_with_listener(
+    values: &[String],
+    exclude_listener: Option<SocketAddr>,
+) -> io::Result<Vec<SocketAddr>> {
+    resolve_servers_with(values, exclude_listener, system_dns_addrs_raw)
 }
 impl DnsConfig {
     pub fn validate(&self, config: &Config) -> io::Result<()> {
@@ -146,15 +300,15 @@ impl DnsConfig {
             }
             selected.push(rule.select.as_str());
         }
-        let defaults = servers(&self.default_servers)?;
+        let defaults = servers_with_listener(&self.default_servers, Some(bind))?;
         let bootstraps = if self.bootstrap_servers.is_empty() {
             None
         } else {
-            Some(servers(&self.bootstrap_servers)?)
+            Some(servers_with_listener(&self.bootstrap_servers, Some(bind))?)
         };
         for connector in &config.connector {
             if let Some(dns) = &connector.dns {
-                servers(dns)?;
+                servers_with_listener(dns, Some(bind))?;
             }
         }
         for name in selected {
@@ -198,7 +352,7 @@ impl DnsConfig {
                         } else if let Some(conn_dns) =
                             connector.dns.as_ref().filter(|v| !v.is_empty())
                         {
-                            Some(servers(conn_dns)?)
+                            Some(servers_with_listener(conn_dns, Some(bind))?)
                         } else {
                             Some(defaults.clone())
                         }
@@ -207,12 +361,7 @@ impl DnsConfig {
                 };
                 if let Some(bootstrap) = bootstrap {
                     for addr in bootstrap {
-                        if addr.port() == bind.port()
-                            && (addr.ip() == bind.ip()
-                                || (bind.ip().is_unspecified()
-                                    && crate::listener::tproxy::is_local_host_ip(&addr.ip()))
-                                || (bind.ip().is_loopback() && addr.ip().is_loopback()))
-                        {
+                        if points_to_listener(addr, bind) {
                             return Err(invalid("bootstrap DNS points to the local DNS listener"));
                         }
                     }
@@ -225,16 +374,11 @@ impl DnsConfig {
         }
         for connector in &config.connector {
             if let Some(values) = &connector.dns {
-                all.extend(servers(values)?);
+                all.extend(servers_with_listener(values, Some(bind))?);
             }
         }
         for addr in all {
-            if addr.port() == bind.port()
-                && (addr.ip() == bind.ip()
-                    || (bind.ip().is_unspecified()
-                        && crate::listener::tproxy::is_local_host_ip(&addr.ip()))
-                    || (bind.ip().is_loopback() && addr.ip().is_loopback()))
-            {
+            if points_to_listener(addr, bind) {
                 return Err(invalid("DNS upstream points to the local DNS listener"));
             }
         }
@@ -350,5 +494,56 @@ default = "proxy_default"
             .unwrap()
             .unwrap();
         assert_eq!(b_default2, vec!["223.5.5.5:53".parse().unwrap()]);
+    }
+
+    #[test]
+    fn system_dns_placeholder_expansion_and_filtering() {
+        let resolv = b"
+nameserver 127.0.0.53
+nameserver ::1
+nameserver 240e:40:8000::10
+nameserver 192.168.1.1
+nameserver 192.168.1.1
+nameserver 192.168.0.71
+";
+        let (parsed_cfg, _) = hickory_resolver::system_conf::parse_resolv_conf(resolv).unwrap();
+        let mut sys_addrs = Vec::new();
+        extract_valid_system_v4_addrs(&parsed_cfg, &mut sys_addrs);
+        assert_eq!(
+            sys_addrs,
+            vec![
+                "192.168.1.1:53".parse().unwrap(),
+                "192.168.0.71:53".parse().unwrap()
+            ]
+        );
+
+        let bind_addr: SocketAddr = "192.168.0.71:53".parse().unwrap();
+        let resolved = resolve_servers_with(
+            &["system".to_string(), "223.5.5.5:53".to_string()],
+            Some(bind_addr),
+            || sys_addrs.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolved,
+            vec![
+                "192.168.1.1:53".parse().unwrap(),
+                "223.5.5.5:53".parse().unwrap()
+            ]
+        );
+
+        // Fallback works even if system resolves to empty (e.g. stub-only resolv.conf)
+        let fallback_only = resolve_servers_with(
+            &["$SYSTEM".to_string(), "223.5.5.5:53".to_string()],
+            Some(bind_addr),
+            Vec::new,
+        )
+        .unwrap();
+        assert_eq!(fallback_only, vec!["223.5.5.5:53".parse().unwrap()]);
+
+        // Only placeholder with no usable server must fail clearly
+        assert!(
+            resolve_servers_with(&["system".to_string()], Some(bind_addr), Vec::new).is_err()
+        );
     }
 }

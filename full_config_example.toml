@@ -39,11 +39,12 @@ router = "main_router" # 引用下面定义的路由器
 # 连接器配置
 # 注：当启用了 [dns] 时：
 # - connector.dns 未配置时自动回退使用 dns.default_servers；
+# - connector.dns / dns.default_servers / dns.bootstrap_servers / bootstrap_dns 中可使用占位符 "system"（或 "$system"）自动读取本机系统默认 DNS（自动跳过回环及自身监听地址）；
 # - connector.options.bootstrap_dns 未配置时按 dns.bootstrap_servers -> connector.dns -> dns.default_servers 顺序自动回退。
 [[connector]]
 name = "direct"
 proto = "tcp"
-dns = ["114.114.114.114:53", "223.5.5.5:53"] # 国内直连出口可单独指定国内 DNS
+dns = ["system", "223.5.5.5:53"] # 使用本机默认 DNS（如路由器 DHCP 下发的 DNS），223.5.5.5 作兜底
 # endpoint = "example.com:80" # 可选，如果需要固定连接到某个端点
 
 [[connector]]
