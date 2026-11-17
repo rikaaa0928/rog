@@ -22,6 +22,10 @@ pub struct DnsConfig {
     pub ebpf_direct_offload: bool,
     #[serde(default, alias = "ebpf_direct_connector")]
     pub ebpf_direct_connectors: Vec<String>,
+    #[serde(default, alias = "cache_persist_stale")]
+    pub stale_while_revalidate: bool,
+    pub cache_idle_evict_secs: u64,
+    pub cache_refresh_retries: u32,
     pub upstream_timeout_ms: u64,
     pub request_timeout_ms: u64,
     pub max_concurrent_requests: usize,
@@ -42,6 +46,9 @@ impl Default for DnsConfig {
             suppress_ipv6_ra_ttl_secs: 300,
             ebpf_direct_offload: true,
             ebpf_direct_connectors: vec![],
+            stale_while_revalidate: false,
+            cache_idle_evict_secs: 86400,
+            cache_refresh_retries: 3,
             upstream_timeout_ms: 2000,
             request_timeout_ms: 6000,
             max_concurrent_requests: 256,
@@ -244,6 +251,7 @@ impl DnsConfig {
             || self.mapping_max_ttl_secs == 0
             || self.mapping_cleanup_interval_secs == 0
             || self.suppress_ipv6_ra_ttl_secs == 0
+            || self.cache_idle_evict_secs == 0
         {
             return Err(invalid("DNS timeouts and capacities must be positive"));
         }
@@ -252,6 +260,8 @@ impl DnsConfig {
             || self.request_timeout_ms > 86_400_000
             || self.mapping_cleanup_interval_secs > 86_400
             || self.mapping_max_ttl_secs > u32::MAX as u64
+            || self.cache_idle_evict_secs > 365 * 86_400
+            || self.cache_refresh_retries > 10
         {
             return Err(invalid(
                 "DNS time or concurrency limit exceeds supported bounds",
@@ -545,5 +555,49 @@ nameserver 192.168.0.71
         assert!(
             resolve_servers_with(&["system".to_string()], Some(bind_addr), Vec::new).is_err()
         );
+    }
+
+    #[test]
+    fn stale_while_revalidate_defaults_and_bounds() {
+        let base = r#"
+listener = []
+
+[dns]
+endpoint = "127.0.0.1:5353"
+router = "main"
+default_servers = ["1.1.1.1:53"]
+
+[[connector]]
+name = "direct"
+proto = "tcp"
+
+[[router]]
+name = "main"
+default = "direct"
+"#;
+        let cfg = crate::load_config_str(base).unwrap();
+        let dns = cfg.dns.as_ref().unwrap();
+        assert!(!dns.stale_while_revalidate);
+        assert_eq!(dns.cache_idle_evict_secs, 86400);
+        assert_eq!(dns.cache_refresh_retries, 3);
+
+        let enabled = format!(
+            "{base}\n"
+        )
+        .replace(
+            "default_servers = [\"1.1.1.1:53\"]",
+            "default_servers = [\"1.1.1.1:53\"]\nstale_while_revalidate = true\ncache_idle_evict_secs = 604800\ncache_refresh_retries = 4",
+        );
+        let cfg_on = crate::load_config_str(&enabled).unwrap();
+        let dns_on = cfg_on.dns.as_ref().unwrap();
+        assert!(dns_on.stale_while_revalidate);
+        assert_eq!(dns_on.cache_idle_evict_secs, 604800);
+        assert_eq!(dns_on.cache_refresh_retries, 4);
+
+        let bad_idle = enabled.replace("cache_idle_evict_secs = 604800", "cache_idle_evict_secs = 0");
+        assert!(crate::load_config_str(&bad_idle).is_err());
+
+        let bad_retries = enabled.replace("cache_refresh_retries = 4", "cache_refresh_retries = 11");
+        assert!(crate::load_config_str(&bad_retries).is_err());
     }
 }

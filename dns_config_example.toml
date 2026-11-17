@@ -9,6 +9,9 @@ router = "main"
 default_servers = ["4.2.2.1:53", "1.1.1.1:53"]
 bootstrap_servers = ["114.114.114.114:53", "223.5.5.5:53"]
 disable_aaaa = false
+# stale_while_revalidate = false # When true, expired cache replies immediately and refreshes asynchronously with retries; entries stay until idle > cache_idle_evict_secs.
+# cache_idle_evict_secs = 86400
+# cache_refresh_retries = 3
 
 [[connector]]
 name = "direct"

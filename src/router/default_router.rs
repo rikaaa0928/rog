@@ -125,7 +125,7 @@ impl DefaultBaseRouter {
     pub(crate) async fn route(&self, addr: &RunAddr) -> (String, String) {
         for rule in &self.rules {
             let mut hosts = vec![addr.addr.clone().to_string()];
-            if rule.domain_to_ip {
+            if rule.domain_to_ip && addr.addr.parse::<std::net::IpAddr>().is_err() {
                 let dns = rule.dns.as_deref().unwrap_or("");
                 match self.resolver.resolve_ip(addr.addr.as_str(), dns).await {
                     Ok(ips) => {

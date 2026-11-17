@@ -3,8 +3,11 @@
 # 独立 UDP DNS 服务配置（可选，常与 TPROXY 配合使用）
 # [dns]
 # endpoint = "[::]:53" # 支持 IPv4/IPv6 双栈监听
-# router = "main_router" # 复用下面定义的路由器规则进行 DNS 分流与 IP->域名学习
+# router = "main_router" # 复用下面定义的路由器规则选择上游 DNS 服务器、进行 IP->域名学习，并按上游 DNS 服务器 IP 路由请求
 # default_servers = ["1.1.1.1:53", "8.8.8.8:53"] # 默认上游 UDP DNS（未被 connector.dns 覆盖时使用）
+# stale_while_revalidate = false # 默认关闭；开启后本地缓存不再按原 TTL/短宽限期淘汰（仅在超长时间未访问后按 cache_idle_evict_secs 释放内存），过期请求直接复用缓存并触发带重试的异步后台刷新
+# cache_idle_evict_secs = 86400 # stale_while_revalidate 开启时，连续未访问超过该秒数才淘汰释放内存（默认 86400）
+# cache_refresh_retries = 3 # stale_while_revalidate 开启时，异步刷新失败后的最大重试次数（默认 3）
 # bootstrap_servers = ["114.114.114.114:53", "223.5.5.5:53"] # 可选：直连解析代理节点自身域名使用的 DNS
 # disable_aaaa = false # 是否屏蔽 AAAA 查询（返回空 NOERROR）
 # suppress_ipv6_ra = true # 是否自动压制主路由向旁路由活跃客户端下发的 IPv6 RA / RDNSS（默认开启）

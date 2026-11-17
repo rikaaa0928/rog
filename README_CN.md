@@ -507,10 +507,12 @@ ip -4 route flush table 2809 2>/dev/null || true
 
 ## 独立 UDP DNS 服务
 
-在配置中增加 `[dns]` 即可启动独立 UDP DNS 服务（支持监听双栈 `"[::]:53"`），客户端直接把 DNS 指向 rog 所在机器。DNS 复用 `dns.router` 引用的现有业务规则，跳过纯 IP 规则并禁止 `domain_to_ip`；每条查询按域名匹配规则选择上游 DNS：
-- 当命中的 connector 配置了专属 `dns`（且不同于 `dns.default_servers`，如国内直连 `Direct` 配置 `["114.114.114.114:53", "223.5.5.5:53"]`）时，通过该 connector 查询其专属 DNS；
-- 当命中的代理 connector 未配置专属 `dns`（或与 `dns.default_servers` 相同）时，默认复用路由器 `default` 出口查询 `dns.default_servers`。
-- 支持配置 `disable_aaaa = true` 屏蔽 `AAAA` 记录（直接返回空 `NOERROR` 响应），默认为 `false`。
+在配置中增加 `[dns]` 即可启动独立 UDP DNS 服务（支持监听双栈 `"[::]:53"`），客户端直接把 DNS 指向 rog 所在机器。DNS 复用 `dns.router` 引用的现有规则（跳过纯 IP 规则并禁止 `domain_to_ip`）来确定选用的上游 DNS 服务器列表：
+- 当命中的 connector 配置了专属 `dns`（且不同于 `dns.default_servers`，如国内直连 `Direct` 配置 `["system", "223.5.5.5:53"]`）时，选用其专属 DNS；
+- 当命中的代理 connector 未配置专属 `dns`（或与 `dns.default_servers` 相同）或未命中规则时，选用 `dns.default_servers`；
+- 确定好上游 DNS 服务器 IP 后，直接将该 DNS 服务器 IP（`ip:port`）过一遍普通 `dns.router` 路由规则来决定出站（例如直接在路由规则里为 `1.1.1.1/32`、`8.8.8.8/32` 指定出站，不再强行绑死到查询域名的出站）；
+- 支持配置 `disable_aaaa = true` 屏蔽 `AAAA` 记录（直接返回空 `NOERROR` 响应），默认为 `false`；
+- 可选开启 `stale_while_revalidate = true`（默认关闭）：开启后缓存条目不再随原 TTL 到期被淘汰（仅当连续闲置超过 `cache_idle_evict_secs` 默认 86400 秒时清理释放内存），超过原 TTL 的请求到来时直接复用旧缓存 0ms 响应，并在后台去重触发带重试（`cache_refresh_retries` 默认 3 次）的异步刷新。
 
 参考 `dns_config_example.toml` 和 `full_config_example.toml`。本机测试示例监听 `127.0.0.1:5353`，可使用 `dig @127.0.0.1 -p 5353 example.com` 验证；生产环境通常监听 `"[::]:53"`。TPROXY 和 DNS 在同一进程使用同一个 `router` 时，会自动共享真實 IP（IPv4/IPv6）→ 域名映射表：
 - TPROXY 收到客户端连接后，自动根据目标 IP 反查已学习的域名进行域名规则分流；

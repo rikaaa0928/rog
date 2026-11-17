@@ -417,10 +417,11 @@ ip -4 route flush table 2809 2>/dev/null || true
 
 ## Independent UDP DNS Service
 
-Add a `[dns]` section to enable the built-in UDP DNS server (supports dual-stack `"[::]:53"`). It reuses the routing rules from `dns.router` (skipping IP-only rules) to route DNS queries and learns real IP (A/AAAA) → domain mappings in `IpDomainTable`:
-- When a matched connector defines a custom `dns` list (such as `Direct` with domestic DNS `["114.114.114.114:53", "223.5.5.5:53"]`), queries are sent via that connector to its `dns` servers.
-- Otherwise, queries use `dns.default_servers` via the router's default outbound connector.
+Add a `[dns]` section to enable the built-in UDP DNS server (supports dual-stack `"[::]:53"`). It matches the queried domain against `dns.router` (skipping IP-only rules) to choose upstream DNS servers and learn real IP (A/AAAA) → domain mappings in `IpDomainTable`:
+- When a matched connector defines a custom `dns` list (such as `Direct` with domestic DNS `["system", "223.5.5.5:53"]`), queries target that connector's `dns` servers; otherwise, queries target `dns.default_servers`.
+- Each chosen upstream DNS server IP is then routed normally through `dns.router` (e.g., via explicit CIDR rules for `1.1.1.1/32` or `8.8.8.8/32`), rather than forcing the domain's matched connector outbound.
 - Set `disable_aaaa = true` to return empty `NOERROR` responses for `AAAA` queries (defaults to `false`).
+- Optional `stale_while_revalidate = true` (default `false`): keeps cached entries until idle longer than `cache_idle_evict_secs` (default `86400`), serves stale entries immediately when past TTL, and triggers a deduplicated async refresh with `cache_refresh_retries` (default `3`) retries.
 - When paired with a `tproxy` listener sharing the same `router` in the same process, `rog` automatically maps destination IPs back to learned domain names for domain-based routing, and rewrites IPv6 target addresses back to domain names when forwarding through non-direct proxy connectors.
 
 ## DNS Mapping Observation
