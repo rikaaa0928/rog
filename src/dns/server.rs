@@ -7,32 +7,113 @@ use crate::{
     connector,
     def::{RouterSet, RunConnector, UDPMeta, UDPPacket, config::Config},
 };
-use hickory_proto::op::{Message, MessageType, ResponseCode};
+use hickory_proto::{
+    op::{Message, MessageType, ResponseCode},
+    rr::{DNSClass, RData, Record, RecordType},
+};
+use lru::LruCache;
 use std::{
     collections::HashMap,
     io,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
+    num::NonZeroUsize,
     sync::{
-        Arc,
+        Arc, Mutex as StdMutex,
         atomic::{AtomicU64, Ordering},
     },
     time::Instant,
 };
 use tokio::{
     net::UdpSocket,
-    sync::{Mutex, Semaphore},
-    task::JoinSet,
+    sync::{Mutex, Semaphore, watch},
+    task::{JoinHandle, JoinSet},
     time::{Duration, timeout_at},
 };
 use tokio_util::sync::CancellationToken;
 
+const MAX_NODATA_CACHE_SECS: u64 = 300;
+const STALE_GRACE_SECS: u64 = 1800;
+const STALE_REFRESH_GRACE_MS: u64 = 250;
+const STALE_REPLY_TTL_SECS: u32 = 30;
+const HEDGE_MAX_DELAY_MS: u64 = 250;
+const MAX_BG_PREFETCH_TASKS: usize = 32;
+
 type ConnectorCache = Mutex<HashMap<String, Arc<Box<dyn RunConnector>>>>;
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct ResponseCacheKey {
+    domain: String,
+    qtype: RecordType,
+    qclass: DNSClass,
+    outbound: String,
+    recursion_desired: bool,
+    has_edns: bool,
+    checking_disabled: bool,
+    dnssec_ok: bool,
+}
+
+#[derive(Clone)]
+struct CachedResponse {
+    response: Message,
+    cnames: Vec<(String, u32)>,
+    addresses: Vec<(IpAddr, u32)>,
+    inserted_at: Instant,
+    fresh_ttl: Duration,
+    stale_until: Instant,
+}
+
+#[derive(Clone)]
+enum InflightState {
+    Pending,
+    Cached(CachedResponse),
+    Raw(Vec<u8>),
+    Failed,
+}
+
+struct InflightGuard {
+    inflight: Arc<StdMutex<HashMap<ResponseCacheKey, watch::Sender<InflightState>>>>,
+    key: ResponseCacheKey,
+    tx: watch::Sender<InflightState>,
+    completed: bool,
+}
+
+impl InflightGuard {
+    fn complete(&mut self, state: InflightState) {
+        self.completed = true;
+        let _ = self.tx.send(state);
+        let mut map = self.inflight.lock().unwrap();
+        if map
+            .get(&self.key)
+            .is_some_and(|cur| cur.same_channel(&self.tx))
+        {
+            map.remove(&self.key);
+        }
+    }
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            let _ = self.tx.send(InflightState::Failed);
+            let mut map = self.inflight.lock().unwrap();
+            if map
+                .get(&self.key)
+                .is_some_and(|cur| cur.same_channel(&self.tx))
+            {
+                map.remove(&self.key);
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct Counters {
     received: AtomicU64,
     overloaded: AtomicU64,
     completed: AtomicU64,
     failed: AtomicU64,
+    cache_hits: AtomicU64,
+    stale_hits: AtomicU64,
 }
 pub(crate) struct DnsServer {
     socket: Arc<UdpSocket>,
@@ -42,6 +123,11 @@ pub(crate) struct DnsServer {
     router: Arc<dyn RouterSet>,
     table: Arc<IpDomainTable>,
     cache: ConnectorCache,
+    response_cache: StdMutex<LruCache<ResponseCacheKey, CachedResponse>>,
+    inflight: Arc<StdMutex<HashMap<ResponseCacheKey, watch::Sender<InflightState>>>>,
+    prefetch_permits: Arc<Semaphore>,
+    bg_shutdown: CancellationToken,
+    bg_handles: StdMutex<Vec<JoinHandle<()>>>,
     counters: Counters,
 }
 impl DnsServer {
@@ -76,6 +162,7 @@ impl DnsServer {
             cfg.router
         );
         let ebpf_direct_connectors = config.resolve_ebpf_direct_connectors();
+        let cache_cap = NonZeroUsize::new(cfg.mapping_capacity.clamp(256, 16384)).unwrap();
         Ok(Arc::new(Self {
             socket: Arc::new(socket),
             cfg,
@@ -84,6 +171,11 @@ impl DnsServer {
             router,
             table,
             cache: Mutex::new(HashMap::new()),
+            response_cache: StdMutex::new(LruCache::new(cache_cap)),
+            inflight: Arc::new(StdMutex::new(HashMap::new())),
+            prefetch_permits: Arc::new(Semaphore::new(MAX_BG_PREFETCH_TASKS)),
+            bg_shutdown: CancellationToken::new(),
+            bg_handles: StdMutex::new(Vec::new()),
             counters: Counters::default(),
         }))
     }
@@ -97,7 +189,10 @@ impl DnsServer {
             tokio::select! {
                 biased;
                 _=shutdown.cancelled()=>break Ok(()),
-                _=cleanup.tick()=>self.table.prune_expired(),
+                _=cleanup.tick()=>{
+                    self.table.prune_expired();
+                    self.prune_response_cache();
+                },
                 Some(result)=tasks.join_next(), if !tasks.is_empty()=>{ if let Err(error)=result { log::warn!("DNS request task failed: {error}"); } },
                 received=self.socket.recv_from(&mut buffer)=>{
                     let (len,client)=match received { Ok(v)=>v,Err(e)=>break Err(e) };
@@ -108,18 +203,26 @@ impl DnsServer {
                 }
             }
         };
+        self.bg_shutdown.cancel();
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}
+        let handles = std::mem::take(&mut *self.bg_handles.lock().unwrap());
+        for handle in handles {
+            handle.abort();
+            let _ = handle.await;
+        }
         log::info!(
-            "DNS stopped received={} completed={} failed={} overloaded={}",
+            "DNS stopped received={} completed={} failed={} overloaded={} cache_hits={} stale_hits={}",
             self.counters.received.load(Ordering::Relaxed),
             self.counters.completed.load(Ordering::Relaxed),
             self.counters.failed.load(Ordering::Relaxed),
-            self.counters.overloaded.load(Ordering::Relaxed)
+            self.counters.overloaded.load(Ordering::Relaxed),
+            self.counters.cache_hits.load(Ordering::Relaxed),
+            self.counters.stale_hits.load(Ordering::Relaxed)
         );
         result
     }
-    async fn handle(&self, client: SocketAddr, data: Vec<u8>) {
+    async fn handle(self: Arc<Self>, client: SocketAddr, data: Vec<u8>) {
         crate::util::ra_suppress::note_client_ip(client.ip());
         let query = match Message::from_vec(&data) {
             Ok(q) => q,
@@ -148,7 +251,11 @@ impl DnsServer {
         }
         let deadline =
             tokio::time::Instant::now() + Duration::from_millis(self.cfg.request_timeout_ms);
-        let result = timeout_at(deadline, self.forward(client, &data, &query, deadline)).await;
+        let result = timeout_at(
+            deadline,
+            self.clone().forward(client, &data, &query, deadline),
+        )
+        .await;
         let reply = match result {
             Ok(Ok(data)) => {
                 self.counters.completed.fetch_add(1, Ordering::Relaxed);
@@ -164,8 +271,499 @@ impl DnsServer {
             log::debug!("DNS client reply failed: {e}");
         }
     }
-    async fn forward(
+    fn cache_key(
+        query: &Message,
+        domain: &str,
+        outbound_name: &str,
+    ) -> Option<ResponseCacheKey> {
+        let q = query.query()?;
+        let edns = query.extensions().as_ref();
+        if edns.is_some_and(|e| !e.options().as_ref().is_empty()) {
+            return None;
+        }
+        Some(ResponseCacheKey {
+            domain: domain.to_string(),
+            qtype: q.query_type(),
+            qclass: q.query_class(),
+            outbound: outbound_name.to_string(),
+            recursion_desired: query.recursion_desired(),
+            has_edns: edns.is_some(),
+            checking_disabled: query.checking_disabled(),
+            dnssec_ok: edns.is_some_and(|e| e.flags().dnssec_ok),
+        })
+    }
+    fn cache_fresh_ttl(&self, response: &Message) -> Option<Duration> {
+        if response.truncated() || response.response_code() != ResponseCode::NoError {
+            return None;
+        }
+        let max_ttl = self.cfg.mapping_max_ttl_secs;
+        if !response.answers().is_empty() {
+            let min_ttl = response.answers().iter().map(|r| r.ttl()).min()?;
+            if min_ttl == 0 {
+                return None;
+            }
+            return Some(Duration::from_secs((min_ttl as u64).clamp(1, max_ttl)));
+        }
+        let soa_ttl = response
+            .name_servers()
+            .iter()
+            .filter_map(|r| match r.data() {
+                RData::SOA(soa) => Some(r.ttl().min(soa.minimum())),
+                _ => None,
+            })
+            .min()?;
+        if soa_ttl == 0 {
+            return None;
+        }
+        Some(Duration::from_secs(
+            (soa_ttl as u64).clamp(5, MAX_NODATA_CACHE_SECS.min(max_ttl)),
+        ))
+    }
+    fn build_cached_reply(
+        cached: &CachedResponse,
+        query: &Message,
+        now: Instant,
+        is_stale: bool,
+    ) -> Option<Vec<u8>> {
+        let mut msg = cached.response.clone();
+        msg.set_id(query.id());
+        msg.set_recursion_desired(query.recursion_desired());
+        if let Some(q) = query.query() {
+            msg.take_queries();
+            msg.add_query(q.clone());
+        }
+        let elapsed = now.saturating_duration_since(cached.inserted_at).as_secs() as u32;
+        let adjust = |r: &mut Record| {
+            if r.record_type() != RecordType::OPT {
+                let ttl = if is_stale {
+                    r.ttl().min(STALE_REPLY_TTL_SECS).max(1)
+                } else {
+                    r.ttl().saturating_sub(elapsed).max(1)
+                };
+                r.set_ttl(ttl);
+            }
+        };
+        for r in msg.answers_mut() {
+            adjust(r);
+        }
+        for r in msg.name_servers_mut() {
+            adjust(r);
+        }
+        for r in msg.additionals_mut() {
+            adjust(r);
+        }
+        if query.extensions().is_none() {
+            *msg.extensions_mut() = None;
+        }
+        let bytes = msg.to_vec().ok()?;
+        let max_payload = query
+            .extensions()
+            .as_ref()
+            .map(|e| usize::from(e.max_payload().max(512)))
+            .unwrap_or(512);
+        if bytes.len() > max_payload {
+            return None;
+        }
+        Some(bytes)
+    }
+    fn patch_raw_reply(mut raw: Vec<u8>, query: &Message) -> Vec<u8> {
+        if raw.len() >= 12 {
+            raw[0..2].copy_from_slice(&query.id().to_be_bytes());
+            if query.recursion_desired() {
+                raw[2] |= 1;
+            } else {
+                raw[2] &= !1;
+            }
+        }
+        raw
+    }
+    fn prune_response_cache(&self) {
+        let now = Instant::now();
+        let mut cache = self.response_cache.lock().unwrap();
+        let expired: Vec<_> = cache
+            .iter()
+            .filter_map(|(k, v)| (now > v.stale_until).then(|| k.clone()))
+            .collect();
+        for k in expired {
+            cache.pop(&k);
+        }
+    }
+    fn track_bg_handle(&self, handle: JoinHandle<()>) {
+        let mut handles = self.bg_handles.lock().unwrap();
+        handles.retain(|h| !h.is_finished());
+        handles.push(handle);
+    }
+    async fn learn_records(
         &self,
+        client: SocketAddr,
+        domain: &str,
+        cnames: &[(String, u32)],
+        addresses: &[(IpAddr, u32)],
+        received: Instant,
+    ) {
+        for (cname_target, cname_ttl) in cnames {
+            let table_ttl = if *cname_ttl > 0 {
+                (*cname_ttl).max(3600)
+            } else {
+                0
+            };
+            self.table.record_cname(
+                &self.cfg.router,
+                client.ip(),
+                cname_target,
+                domain,
+                table_ttl,
+                received,
+            );
+        }
+        for &(ip, ttl) in addresses {
+            let table_ttl = if ttl > 0 { ttl.max(3600) } else { 0 };
+            self.table
+                .record(&self.cfg.router, client.ip(), ip, domain, table_ttl, received);
+            if table_ttl > 0 {
+                let (effective_outbound, _) = self
+                    .router
+                    .route_with_domain(
+                        "",
+                        &self.cfg.router,
+                        &crate::util::RunAddr {
+                            addr: ip.to_string(),
+                            port: 0,
+                            udp: false,
+                        },
+                        &crate::def::RouteContext {
+                            client_ip: Some(client.ip()),
+                            client_port: Some(client.port()),
+                            use_dns_mapping: true,
+                        },
+                    )
+                    .await;
+                let is_direct = self
+                    .ebpf_direct_connectors
+                    .contains(effective_outbound.as_str());
+                if is_direct {
+                    let ebpf_ttl = (table_ttl / 2).max(60);
+                    crate::util::ebpf::offload_direct_ip(
+                        ip,
+                        Duration::from_secs(u64::from(ebpf_ttl)),
+                    );
+                } else {
+                    crate::util::ebpf::remove_direct_ip(ip);
+                }
+            }
+        }
+    }
+    async fn get_connector(
+        &self,
+        outbound_name: &str,
+        cfg: &crate::def::config::Connector,
+    ) -> io::Result<Arc<Box<dyn RunConnector>>> {
+        let cached = { self.cache.lock().await.get(outbound_name).cloned() };
+        match cached {
+            Some(c) => Ok(c),
+            None => {
+                let fresh = Arc::new(connector::create(cfg).await?);
+                let mut cache = self.cache.lock().await;
+                Ok(cache
+                    .entry(outbound_name.to_string())
+                    .or_insert(fresh)
+                    .clone())
+            }
+        }
+    }
+    async fn query_upstreams_hedged(
+        &self,
+        outbound_name: &str,
+        cfg: &crate::def::config::Connector,
+        chosen: &[String],
+        client: SocketAddr,
+        bytes: &[u8],
+        query: &Message,
+        deadline: tokio::time::Instant,
+    ) -> io::Result<(Vec<u8>, Message)> {
+        let upstreams = servers(chosen)?;
+        if upstreams.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "no DNS upstream configured",
+            ));
+        }
+        let connector = self.get_connector(outbound_name, cfg).await?;
+        let norm_client = SocketAddr::new(super::table::normalize(client.ip()), client.port());
+        let hedge_delay =
+            Duration::from_millis((self.cfg.upstream_timeout_ms / 4).clamp(1, HEDGE_MAX_DELAY_MS));
+        let upstream_timeout = Duration::from_millis(self.cfg.upstream_timeout_ms);
+
+        let mut tasks = JoinSet::new();
+        let mut next_idx = 0usize;
+        let spawn_attempt = |tasks: &mut JoinSet<io::Result<(Vec<u8>, Message)>>,
+                             upstream: SocketAddr| {
+            let connector = connector.clone();
+            let bytes = bytes.to_vec();
+            let query = query.clone();
+            let attempt_deadline = (tokio::time::Instant::now() + upstream_timeout).min(deadline);
+            tasks.spawn(async move {
+                let fut = async {
+                    let (mut reader, writer) = connector
+                        .udp_tunnel(norm_client.to_string())
+                        .await?
+                        .ok_or_else(|| io::Error::other("DNS connector has no UDP tunnel"))?;
+                    writer
+                        .write(UDPPacket {
+                            meta: UDPMeta {
+                                src_addr: norm_client.ip().to_string(),
+                                src_port: norm_client.port(),
+                                dst_addr: upstream.ip().to_string(),
+                                dst_port: upstream.port(),
+                            },
+                            data: bytes,
+                        })
+                        .await?;
+                    loop {
+                        let packet = reader.read().await?;
+                        if packet.meta.dst_addr.parse::<IpAddr>().ok() != Some(upstream.ip())
+                            || packet.meta.dst_port != upstream.port()
+                        {
+                            continue;
+                        }
+                        if packet.data.len() > 65535 {
+                            continue;
+                        }
+                        let response = match Message::from_vec(&packet.data) {
+                            Ok(r) => r,
+                            Err(_) => continue,
+                        };
+                        if !message::valid_response(&query, &response) {
+                            continue;
+                        }
+                        if !response.truncated()
+                            && matches!(
+                                response.response_code(),
+                                ResponseCode::ServFail | ResponseCode::Refused
+                            )
+                        {
+                            return Err(io::Error::other("DNS upstream failed"));
+                        }
+                        return Ok((packet.data, response));
+                    }
+                };
+                match timeout_at(attempt_deadline, fut).await {
+                    Ok(res) => res,
+                    Err(_) => Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("DNS upstream {upstream} timed out"),
+                    )),
+                }
+            });
+        };
+
+        spawn_attempt(&mut tasks, upstreams[next_idx]);
+        next_idx += 1;
+        let mut next_hedge_at = tokio::time::Instant::now() + hedge_delay;
+
+        loop {
+            if next_idx < upstreams.len() {
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
+                    // Deadline reached; wait on already-spawned tasks or abort below
+                    while let Some(res) = tasks.join_next().await {
+                        if let Ok(Ok(ok)) = res {
+                            return Ok(ok);
+                        }
+                    }
+                    break;
+                }
+                let sleep_until = next_hedge_at.min(deadline);
+                tokio::select! {
+                    biased;
+                    joined = tasks.join_next(), if !tasks.is_empty() => {
+                        match joined {
+                            Some(Ok(Ok(ok))) => return Ok(ok),
+                            Some(Ok(Err(e))) => {
+                                log::debug!("DNS upstream attempt failed early outbound={outbound_name}: {e}");
+                                spawn_attempt(&mut tasks, upstreams[next_idx]);
+                                next_idx += 1;
+                                next_hedge_at = tokio::time::Instant::now() + hedge_delay;
+                            }
+                            Some(Err(e)) => {
+                                log::debug!("DNS upstream task join error: {e}");
+                                spawn_attempt(&mut tasks, upstreams[next_idx]);
+                                next_idx += 1;
+                                next_hedge_at = tokio::time::Instant::now() + hedge_delay;
+                            }
+                            None => {}
+                        }
+                    }
+                    _ = tokio::time::sleep_until(sleep_until) => {
+                        if tokio::time::Instant::now() >= deadline {
+                            break;
+                        }
+                        spawn_attempt(&mut tasks, upstreams[next_idx]);
+                        next_idx += 1;
+                        next_hedge_at = tokio::time::Instant::now() + hedge_delay;
+                    }
+                }
+            } else {
+                match tasks.join_next().await {
+                    Some(Ok(Ok(ok))) => return Ok(ok),
+                    Some(Ok(Err(e))) => {
+                        log::debug!("DNS upstream attempt failed outbound={outbound_name}: {e}");
+                    }
+                    Some(Err(e)) => {
+                        log::debug!("DNS upstream task join error: {e}");
+                    }
+                    None => break,
+                }
+            }
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "all DNS upstreams failed",
+        ))
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_singleflight_leader(
+        self: &Arc<Self>,
+        key: ResponseCacheKey,
+        outbound_name: String,
+        outbound_cfg: crate::def::config::Connector,
+        chosen: Vec<String>,
+        client: SocketAddr,
+        bytes: Vec<u8>,
+        query: Message,
+    ) -> watch::Receiver<InflightState> {
+        let (tx, rx) = watch::channel(InflightState::Pending);
+        {
+            let mut map = self.inflight.lock().unwrap();
+            if let Some(existing) = map.get(&key) {
+                return existing.subscribe();
+            }
+            map.insert(key.clone(), tx.clone());
+        }
+        let server = self.clone();
+        let inflight = self.inflight.clone();
+        let shutdown = self.bg_shutdown.clone();
+        let handle = tokio::spawn(async move {
+            let mut guard = InflightGuard {
+                inflight,
+                key: key.clone(),
+                tx,
+                completed: false,
+            };
+            let leader_deadline =
+                tokio::time::Instant::now() + Duration::from_millis(server.cfg.request_timeout_ms);
+            let res = tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => return,
+                res = server.query_upstreams_hedged(
+                    &outbound_name,
+                    &outbound_cfg,
+                    &chosen,
+                    client,
+                    &bytes,
+                    &query,
+                    leader_deadline,
+                ) => res,
+            };
+            match res {
+                Ok((raw_data, response)) => {
+                    let cnames = message::cname_chain(&query, &response);
+                    let addresses = message::addresses(&query, &response);
+                    if let Some(fresh_ttl) = server.cache_fresh_ttl(&response) {
+                        let now = Instant::now();
+                        let stale_until = now
+                            + fresh_ttl
+                            + Duration::from_secs(STALE_GRACE_SECS);
+                        let cached = CachedResponse {
+                            response,
+                            cnames,
+                            addresses,
+                            inserted_at: now,
+                            fresh_ttl,
+                            stale_until,
+                        };
+                        server.response_cache.lock().unwrap().put(key, cached.clone());
+                        guard.complete(InflightState::Cached(cached));
+                    } else {
+                        guard.complete(InflightState::Raw(raw_data));
+                    }
+                }
+                Err(_) => {
+                    guard.complete(InflightState::Failed);
+                }
+            }
+        });
+        self.track_bg_handle(handle);
+        rx
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn maybe_spawn_prefetch(
+        self: &Arc<Self>,
+        key: ResponseCacheKey,
+        outbound_name: String,
+        outbound_cfg: crate::def::config::Connector,
+        chosen: Vec<String>,
+        client: SocketAddr,
+        bytes: Vec<u8>,
+        query: Message,
+    ) {
+        if self.inflight.lock().unwrap().contains_key(&key) {
+            return;
+        }
+        let Ok(permit) = self.prefetch_permits.clone().try_acquire_owned() else {
+            return;
+        };
+        let mut rx = self.spawn_singleflight_leader(
+            key,
+            outbound_name,
+            outbound_cfg,
+            chosen,
+            client,
+            bytes,
+            query,
+        );
+        let shutdown = self.bg_shutdown.clone();
+        let handle = tokio::spawn(async move {
+            let _permit = permit;
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => {},
+                _ = rx.wait_for(|v| !matches!(v, InflightState::Pending)) => {},
+            }
+        });
+        self.track_bg_handle(handle);
+    }
+    async fn wait_singleflight(
+        &self,
+        mut rx: watch::Receiver<InflightState>,
+        wait_deadline: tokio::time::Instant,
+    ) -> io::Result<InflightState> {
+        match timeout_at(
+            wait_deadline,
+            rx.wait_for(|v| !matches!(v, InflightState::Pending)),
+        )
+        .await
+        {
+            Ok(Ok(state)) => {
+                let s = state.clone();
+                if matches!(s, InflightState::Failed | InflightState::Pending) {
+                    Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "all DNS upstreams failed",
+                    ))
+                } else {
+                    Ok(s)
+                }
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "DNS upstream timed out",
+            )),
+        }
+    }
+    async fn forward(
+        self: Arc<Self>,
         client: SocketAddr,
         bytes: &[u8],
         query: &Message,
@@ -200,7 +798,7 @@ impl DnsServer {
         if self.cfg.disable_aaaa
             && query
                 .query()
-                .is_some_and(|q| q.query_type() == hickory_proto::rr::RecordType::AAAA)
+                .is_some_and(|q| q.query_type() == RecordType::AAAA)
         {
             return Ok(message::error_reply(query, ResponseCode::NoError));
         }
@@ -251,139 +849,116 @@ impl DnsServer {
             decision.outbound,
             outbound_name
         );
-        for upstream in servers(chosen)? {
-            let attempt_deadline = (tokio::time::Instant::now()
-                + Duration::from_millis(self.cfg.upstream_timeout_ms))
-            .min(deadline);
-            let outbound_key = outbound_name.clone();
-            let attempt = async {
-                let cached = { self.cache.lock().await.get(&outbound_key).cloned() };
-                let connector = match cached {
-                    Some(c) => c,
-                    None => {
-                        let fresh = Arc::new(connector::create(cfg).await?);
-                        let mut cache = self.cache.lock().await;
-                        cache.entry(outbound_key.clone()).or_insert(fresh).clone()
+
+        let now = Instant::now();
+        let mut stale_entry: Option<CachedResponse> = None;
+        if let Some(key) = Self::cache_key(query, &domain, &outbound_name) {
+            let lookup = {
+                let mut cache = self.response_cache.lock().unwrap();
+                cache.get(&key).cloned()
+            };
+            if let Some(entry) = lookup {
+                let elapsed = now.saturating_duration_since(entry.inserted_at);
+                if elapsed < entry.fresh_ttl {
+                    if elapsed.saturating_mul(4) >= entry.fresh_ttl.saturating_mul(3) {
+                        self.maybe_spawn_prefetch(
+                            key.clone(),
+                            outbound_name.clone(),
+                            cfg.clone(),
+                            chosen.clone(),
+                            client,
+                            bytes.to_vec(),
+                            query.clone(),
+                        );
                     }
-                };
-                let norm_client =
-                    SocketAddr::new(super::table::normalize(client.ip()), client.port());
-                let (mut reader, writer) = connector
-                    .udp_tunnel(norm_client.to_string())
-                    .await?
-                    .ok_or_else(|| io::Error::other("DNS connector has no UDP tunnel"))?;
-                writer
-                    .write(UDPPacket {
-                        meta: UDPMeta {
-                            src_addr: norm_client.ip().to_string(),
-                            src_port: norm_client.port(),
-                            dst_addr: upstream.ip().to_string(),
-                            dst_port: upstream.port(),
-                        },
-                        data: bytes.to_vec(),
-                    })
-                    .await?;
-                loop {
-                    let packet = reader.read().await?;
-                    if packet.meta.dst_addr.parse::<std::net::IpAddr>().ok() != Some(upstream.ip())
-                        || packet.meta.dst_port != upstream.port()
-                    {
-                        continue;
-                    }
-                    if packet.data.len() > 65535 {
-                        continue;
-                    }
-                    let response = match Message::from_vec(&packet.data) {
-                        Ok(r) => r,
-                        Err(_) => continue,
-                    };
-                    if !message::valid_response(query, &response) {
-                        continue;
-                    }
-                    if !response.truncated()
-                        && matches!(
-                            response.response_code(),
-                            ResponseCode::ServFail | ResponseCode::Refused
+                    if let Some(wire) = Self::build_cached_reply(&entry, query, now, false) {
+                        self.counters.cache_hits.fetch_add(1, Ordering::Relaxed);
+                        self.learn_records(
+                            client,
+                            &domain,
+                            &entry.cnames,
+                            &entry.addresses,
+                            now,
                         )
-                    {
-                        return Err(io::Error::other("DNS upstream failed"));
+                        .await;
+                        return Ok(wire);
                     }
-                    let received = Instant::now();
-                    for (cname_target, cname_ttl) in message::cname_chain(query, &response) {
-                        let table_ttl = if cname_ttl > 0 {
-                            cname_ttl.max(3600)
-                        } else {
-                            0
-                        };
-                        self.table.record_cname(
-                            &self.cfg.router,
-                            client.ip(),
-                            &cname_target,
-                            &domain,
-                            table_ttl,
-                            received,
-                        );
+                } else if now <= entry.stale_until {
+                    stale_entry = Some(entry);
+                }
+            }
+
+            let rx = self.spawn_singleflight_leader(
+                key,
+                outbound_name.clone(),
+                cfg.clone(),
+                chosen.clone(),
+                client,
+                bytes.to_vec(),
+                query.clone(),
+            );
+            let wait_deadline = if stale_entry.is_some() {
+                (tokio::time::Instant::now() + Duration::from_millis(STALE_REFRESH_GRACE_MS))
+                    .min(deadline)
+            } else {
+                deadline
+            };
+            match self.wait_singleflight(rx, wait_deadline).await {
+                Ok(InflightState::Cached(entry)) => {
+                    let learn_now = Instant::now();
+                    self.learn_records(
+                        client,
+                        &domain,
+                        &entry.cnames,
+                        &entry.addresses,
+                        learn_now,
+                    )
+                    .await;
+                    if let Some(wire) = Self::build_cached_reply(&entry, query, learn_now, false) {
+                        return Ok(wire);
                     }
-                    for (ip, ttl) in message::addresses(query, &response) {
-                        let table_ttl = if ttl > 0 { ttl.max(3600) } else { 0 };
-                        self.table.record(
-                            &self.cfg.router,
-                            client.ip(),
-                            ip,
-                            &domain,
-                            table_ttl,
-                            received,
-                        );
-                        if table_ttl > 0 {
-                            let (effective_outbound, _) = self
-                                .router
-                                .route_with_domain(
-                                    "",
-                                    &self.cfg.router,
-                                    &crate::util::RunAddr {
-                                        addr: ip.to_string(),
-                                        port: 0,
-                                        udp: false,
-                                    },
-                                    &crate::def::RouteContext {
-                                        client_ip: Some(client.ip()),
-                                        client_port: Some(client.port()),
-                                        use_dns_mapping: true,
-                                    },
-                                )
-                                .await;
-                            let is_direct = self
-                                .ebpf_direct_connectors
-                                .contains(effective_outbound.as_str());
-                            if is_direct {
-                                let ebpf_ttl = (table_ttl / 2).max(60);
-                                crate::util::ebpf::offload_direct_ip(
-                                    ip,
-                                    Duration::from_secs(u64::from(ebpf_ttl)),
-                                );
-                            } else {
-                                crate::util::ebpf::remove_direct_ip(ip);
-                            }
+                }
+                Ok(InflightState::Raw(raw_data)) => {
+                    if let Ok(resp) = Message::from_vec(&raw_data) {
+                        let cnames = message::cname_chain(query, &resp);
+                        let addresses = message::addresses(query, &resp);
+                        self.learn_records(client, &domain, &cnames, &addresses, Instant::now())
+                            .await;
+                    }
+                    return Ok(Self::patch_raw_reply(raw_data, query));
+                }
+                Ok(InflightState::Pending | InflightState::Failed) | Err(_) => {
+                    if let Some(entry) = stale_entry {
+                        if let Some(wire) = Self::build_cached_reply(&entry, query, now, true) {
+                            self.counters.stale_hits.fetch_add(1, Ordering::Relaxed);
+                            self.learn_records(
+                                client,
+                                &domain,
+                                &entry.cnames,
+                                &entry.addresses,
+                                now,
+                            )
+                            .await;
+                            return Ok(wire);
                         }
                     }
-                    return Ok::<_, io::Error>(packet.data);
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "all DNS upstreams failed",
+                    ));
                 }
-            };
-            match timeout_at(attempt_deadline, attempt).await {
-                Ok(Ok(data)) => return Ok(data),
-                result => log::debug!(
-                    "DNS upstream={upstream} outbound={} failed={result:?}",
-                    decision.outbound
-                ),
-            }
-            if tokio::time::Instant::now() >= deadline {
-                break;
             }
         }
-        Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            "all DNS upstreams failed",
-        ))
+
+        // Fallback path for queries carrying non-cacheable EDNS options (e.g. NSID / ECS)
+        let (raw_data, response) = self
+            .query_upstreams_hedged(&outbound_name, cfg, chosen, client, bytes, query, deadline)
+            .await?;
+        let cnames = message::cname_chain(query, &response);
+        let addresses = message::addresses(query, &response);
+        self.learn_records(client, &domain, &cnames, &addresses, Instant::now())
+            .await;
+        Ok(raw_data)
     }
 }
 
@@ -698,5 +1273,235 @@ exclude=[]
         task.await.unwrap().unwrap();
         drop(server);
         assert!(UdpSocket::bind(addr).await.is_ok());
+    }
+
+    async fn mock_custom(
+        ip: Arc<StdMutex<&'static str>>,
+        ttl: u32,
+        delay_ms: Arc<AtomicU64>,
+        hits: Arc<AtomicU64>,
+        blackhole: Arc<std::sync::atomic::AtomicBool>,
+    ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let mut buf = vec![0; 65535];
+            loop {
+                let (n, c) = socket.recv_from(&mut buf).await.unwrap();
+                hits.fetch_add(1, Ordering::Relaxed);
+                if blackhole.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let d = delay_ms.load(Ordering::Relaxed);
+                if d > 0 {
+                    tokio::time::sleep(Duration::from_millis(d)).await;
+                }
+                let q = Message::from_vec(&buf[..n]).unwrap();
+                let cur_ip: std::net::Ipv4Addr = ip.lock().unwrap().parse().unwrap();
+                let mut r = Message::new();
+                r.set_id(q.id())
+                    .set_message_type(MessageType::Response)
+                    .set_response_code(ResponseCode::NoError)
+                    .add_query(q.queries()[0].clone())
+                    .add_answer(Record::from_rdata(
+                        q.queries()[0].name().clone(),
+                        ttl,
+                        RData::A(A(cur_ip)),
+                    ));
+                socket.send_to(&r.to_vec().unwrap(), c).await.unwrap();
+            }
+        });
+        (addr, task)
+    }
+
+    #[tokio::test]
+    async fn hedged_upstream_avoids_slow_first_server() {
+        let hits1 = Arc::new(AtomicU64::new(0));
+        let hits2 = Arc::new(AtomicU64::new(0));
+        let (s1, t1) = mock_custom(
+            Arc::new(StdMutex::new("1.1.1.1")),
+            60,
+            Arc::new(AtomicU64::new(0)),
+            hits1.clone(),
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        )
+        .await;
+        let (s2, t2) = mock_custom(
+            Arc::new(StdMutex::new("2.2.2.2")),
+            60,
+            Arc::new(AtomicU64::new(5)),
+            hits2.clone(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .await;
+        let mut cfg = configuration(s1, s2);
+        let settings = cfg.dns.as_mut().unwrap();
+        settings.upstream_timeout_ms = 2000;
+        settings.request_timeout_ms = 4000;
+        settings.endpoint = "127.0.0.1:0".into();
+
+        let router = Arc::new(
+            DefaultRouter::new(&cfg.router, cfg.data.as_ref().unwrap(), Resolver::new()).await,
+        );
+        let server = DnsServer::bind(
+            settings.clone(),
+            cfg,
+            router,
+            Arc::new(IpDomainTable::new(100, 10, 100)),
+        )
+        .await
+        .unwrap();
+        let addr = server.socket.local_addr().unwrap();
+        let token = CancellationToken::new();
+        let task = tokio::spawn(server.run(token.clone()));
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let start = Instant::now();
+        let resp = send(&client, addr, "hedged.example", 42).await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(
+            resp.answers()[0].data(),
+            &RData::A(A("2.2.2.2".parse().unwrap()))
+        );
+        assert!(
+            elapsed < Duration::from_millis(600),
+            "hedged query should avoid full 2000ms timeout, took {elapsed:?}"
+        );
+        assert_eq!(hits1.load(Ordering::Relaxed), 1);
+        assert_eq!(hits2.load(Ordering::Relaxed), 1);
+
+        token.cancel();
+        task.await.unwrap().unwrap();
+        t1.abort();
+        t2.abort();
+    }
+
+    #[tokio::test]
+    async fn response_cache_isolation_and_singleflight_coalescing() {
+        let hits = Arc::new(AtomicU64::new(0));
+        let (s1, t1) = mock_custom(
+            Arc::new(StdMutex::new("9.9.9.9")),
+            60,
+            Arc::new(AtomicU64::new(60)),
+            hits.clone(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .await;
+        let mut cfg = configuration(s1, s1);
+        let settings = cfg.dns.as_mut().unwrap();
+        settings.upstream_timeout_ms = 2000;
+        settings.request_timeout_ms = 4000;
+        settings.endpoint = "127.0.0.1:0".into();
+
+        let table = Arc::new(IpDomainTable::new(100, 10, 100));
+        let router = Arc::new(
+            DefaultRouter::new(&cfg.router, cfg.data.as_ref().unwrap(), Resolver::new()).await,
+        );
+        let server = DnsServer::bind(settings.clone(), cfg, router, table.clone())
+            .await
+            .unwrap();
+        let addr = server.socket.local_addr().unwrap();
+        let token = CancellationToken::new();
+        let task = tokio::spawn(server.clone().run(token.clone()));
+
+        let c1 = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let c2 = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let c3 = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let (r1, r2, r3) = tokio::join!(
+            send(&c1, addr, "sf.example", 101),
+            send(&c2, addr, "sf.example", 102),
+            send(&c3, addr, "sf.example", 103)
+        );
+        assert_eq!(r1.id(), 101);
+        assert_eq!(r2.id(), 102);
+        assert_eq!(r3.id(), 103);
+        assert_eq!(hits.load(Ordering::Relaxed), 1);
+
+        // Wait a beat and query again from a 4th client socket -> cache hit (still 1 upstream hit!)
+        let c4 = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let r4 = send(&c4, addr, "sf.example", 104).await;
+        assert_eq!(r4.id(), 104);
+        assert_eq!(hits.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            table.get_domains("main", "127.0.0.1".parse().unwrap(), "9.9.9.9".parse().unwrap()),
+            vec!["sf.example"]
+        );
+
+        token.cancel();
+        task.await.unwrap().unwrap();
+        t1.abort();
+    }
+
+    #[tokio::test]
+    async fn stale_grace_fallback_and_background_refresh() {
+        let ip_ref = Arc::new(StdMutex::new("10.10.10.1"));
+        let delay_ms = Arc::new(AtomicU64::new(0));
+        let hits = Arc::new(AtomicU64::new(0));
+        let (s1, t1) = mock_custom(
+            ip_ref.clone(),
+            1,
+            delay_ms.clone(),
+            hits.clone(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .await;
+        let mut cfg = configuration(s1, s1);
+        let settings = cfg.dns.as_mut().unwrap();
+        settings.upstream_timeout_ms = 2000;
+        settings.request_timeout_ms = 4000;
+        settings.endpoint = "127.0.0.1:0".into();
+
+        let router = Arc::new(
+            DefaultRouter::new(&cfg.router, cfg.data.as_ref().unwrap(), Resolver::new()).await,
+        );
+        let server = DnsServer::bind(
+            settings.clone(),
+            cfg,
+            router,
+            Arc::new(IpDomainTable::new(100, 10, 100)),
+        )
+        .await
+        .unwrap();
+        let addr = server.socket.local_addr().unwrap();
+        let token = CancellationToken::new();
+        let task = tokio::spawn(server.clone().run(token.clone()));
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let first = send(&client, addr, "stale.example", 201).await;
+        assert_eq!(
+            first.answers()[0].data(),
+            &RData::A(A("10.10.10.1".parse().unwrap()))
+        );
+
+        // Let the 1s TTL expire, then make upstream take 450ms (> 250ms stale grace) with new IP
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        *ip_ref.lock().unwrap() = "10.10.10.2";
+        delay_ms.store(450, Ordering::Relaxed);
+
+        let start = Instant::now();
+        let second = send(&client, addr, "stale.example", 202).await;
+        let elapsed = start.elapsed();
+        assert_eq!(
+            second.answers()[0].data(),
+            &RData::A(A("10.10.10.1".parse().unwrap()))
+        );
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "stale grace should return within ~250ms, took {elapsed:?}"
+        );
+        assert_eq!(server.counters.stale_hits.load(Ordering::Relaxed), 1);
+
+        // Wait for the background singleflight leader to finish refreshing cache with 10.10.10.2
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        let third = send(&client, addr, "stale.example", 203).await;
+        assert_eq!(
+            third.answers()[0].data(),
+            &RData::A(A("10.10.10.2".parse().unwrap()))
+        );
+
+        token.cancel();
+        task.await.unwrap().unwrap();
+        t1.abort();
     }
 }
