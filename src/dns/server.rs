@@ -131,7 +131,6 @@ pub(crate) struct DnsServer {
     bind_addr: SocketAddr,
     cfg: DnsConfig,
     config: Config,
-    ebpf_direct_connectors: std::collections::HashSet<String>,
     router: Arc<dyn RouterSet>,
     table: Arc<IpDomainTable>,
     cache: ConnectorCache,
@@ -174,14 +173,12 @@ impl DnsServer {
             local_addr,
             cfg.router
         );
-        let ebpf_direct_connectors = config.resolve_ebpf_direct_connectors();
         let cache_cap = NonZeroUsize::new(cfg.mapping_capacity.clamp(256, 16384)).unwrap();
         Ok(Arc::new(Self {
             socket: Arc::new(socket),
             bind_addr: local_addr,
             cfg,
             config,
-            ebpf_direct_connectors,
             router,
             table,
             cache: Mutex::new(HashMap::new()),
@@ -446,35 +443,12 @@ impl DnsServer {
             self.table
                 .record(&self.cfg.router, client.ip(), ip, domain, table_ttl, received);
             if table_ttl > 0 {
-                let (effective_outbound, _) = self
-                    .router
-                    .route_with_domain(
-                        "",
-                        &self.cfg.router,
-                        &crate::util::RunAddr {
-                            addr: ip.to_string(),
-                            port: 0,
-                            udp: false,
-                        },
-                        &crate::def::RouteContext {
-                            client_ip: Some(client.ip()),
-                            client_port: Some(client.port()),
-                            use_dns_mapping: true,
-                        },
-                    )
-                    .await;
-                let is_direct = self
-                    .ebpf_direct_connectors
-                    .contains(effective_outbound.as_str());
-                if is_direct {
-                    let ebpf_ttl = (table_ttl / 2).max(60);
-                    crate::util::ebpf::offload_direct_ip(
-                        ip,
-                        Duration::from_secs(u64::from(ebpf_ttl)),
-                    );
-                } else {
-                    crate::util::ebpf::remove_direct_ip(ip);
-                }
+                let ebpf_ttl = (table_ttl / 2).max(60);
+                self.router.sync_ebpf_direct_ip(
+                    &self.cfg.router,
+                    ip,
+                    Duration::from_secs(u64::from(ebpf_ttl)),
+                );
             }
         }
     }

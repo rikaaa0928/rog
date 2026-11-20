@@ -22,9 +22,11 @@ struct Record {
     observed: Instant,
 }
 type Key = (String, IpAddr, IpAddr);
+type IpDomainKey = (String, IpAddr);
 type CnameKey = (String, IpAddr, String);
 pub struct IpDomainTable {
     entries: Mutex<HashMap<Key, Vec<Record>>>,
+    by_ip: Mutex<HashMap<IpDomainKey, HashMap<String, Instant>>>,
     cnames: Mutex<HashMap<CnameKey, Vec<Record>>>,
     capacity: usize,
     per_ip: usize,
@@ -53,6 +55,7 @@ impl IpDomainTable {
     pub fn new(capacity: usize, per_ip: usize, max_ttl: u64) -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
+            by_ip: Mutex::new(HashMap::new()),
             cnames: Mutex::new(HashMap::new()),
             capacity,
             per_ip,
@@ -191,88 +194,157 @@ impl IpDomainTable {
         if !domains.contains(&domain) {
             domains.insert(0, domain);
         }
-        let key = (router.to_owned(), normalize(client), normalize(target));
-        let mut entries = self.entries.lock().unwrap();
-        entries.retain(|_, records| {
-            records.retain(|r| r.expires > now);
-            !records.is_empty()
-        });
-        if !entries.contains_key(&key) && entries.len() >= self.capacity {
-            if let Some(oldest) = entries
-                .iter()
-                .min_by_key(|(_, rs)| rs.iter().map(|r| r.observed).max())
-                .map(|(k, _)| k.clone())
-            {
-                entries.remove(&oldest);
-            }
-        }
-        let records = entries.entry(key).or_default();
-        for dom in domains {
-            if let Some(record) = records.iter_mut().find(|r| r.domain == dom) {
-                record.ttl = record.ttl.max(ttl_dur);
-                record.expires = record.expires.max(expires);
-                record.observed = now;
-                continue;
-            }
-            if records.len() >= self.per_ip {
-                let oldest = records
-                    .iter()
-                    .enumerate()
-                    .min_by_key(|(_, r)| r.observed)
-                    .unwrap()
-                    .0;
-                records.remove(oldest);
-            }
-            records.push(Record {
-                domain: dom,
-                ttl: ttl_dur,
-                expires,
-                observed: now,
+        let target = normalize(target);
+        let key = (router.to_owned(), normalize(client), target);
+        let mut evicted_ip: Option<IpDomainKey> = None;
+        let recorded_domains = {
+            let mut entries = self.entries.lock().unwrap();
+            entries.retain(|_, records| {
+                records.retain(|r| r.expires > now);
+                !records.is_empty()
             });
+            if !entries.contains_key(&key) && entries.len() >= self.capacity {
+                if let Some(oldest) = entries
+                    .iter()
+                    .min_by_key(|(_, rs)| rs.iter().map(|r| r.observed).max())
+                    .map(|(k, _)| k.clone())
+                {
+                    entries.remove(&oldest);
+                    if !entries
+                        .keys()
+                        .any(|(r, _, t)| r == &oldest.0 && t == &oldest.2)
+                    {
+                        evicted_ip = Some((oldest.0, oldest.2));
+                    }
+                }
+            }
+            let records = entries.entry(key).or_default();
+            for dom in &domains {
+                if let Some(record) = records.iter_mut().find(|r| r.domain == *dom) {
+                    record.ttl = record.ttl.max(ttl_dur);
+                    record.expires = record.expires.max(expires);
+                    record.observed = now;
+                    continue;
+                }
+                if records.len() >= self.per_ip {
+                    let oldest = records
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|(_, r)| r.observed)
+                        .unwrap()
+                        .0;
+                    records.remove(oldest);
+                }
+                records.push(Record {
+                    domain: dom.clone(),
+                    ttl: ttl_dur,
+                    expires,
+                    observed: now,
+                });
+            }
+            domains
+        };
+        let mut by_ip = self.by_ip.lock().unwrap();
+        if let Some(evicted) = evicted_ip {
+            by_ip.remove(&evicted);
         }
+        let ip_key = (router.to_owned(), target);
+        if !by_ip.contains_key(&ip_key) && by_ip.len() >= self.capacity {
+            by_ip.retain(|_, m| {
+                m.retain(|_, &mut exp| exp > now);
+                !m.is_empty()
+            });
+            if !by_ip.contains_key(&ip_key)
+                && by_ip.len() >= self.capacity
+                && let Some(oldest) = by_ip
+                    .iter()
+                    .min_by_key(|(_, m)| m.values().copied().max())
+                    .map(|(k, _)| k.clone())
+            {
+                by_ip.remove(&oldest);
+            }
+        }
+        let ip_domains = by_ip.entry(ip_key).or_default();
+        for dom in recorded_domains {
+            ip_domains
+                .entry(dom)
+                .and_modify(|exp| *exp = (*exp).max(expires))
+                .or_insert(expires);
+        }
+    }
+    pub fn get_all_domains_for_ip(&self, router: &str, target: IpAddr) -> Vec<String> {
+        let now = Instant::now();
+        let target = normalize(target);
+        let by_ip = self.by_ip.lock().unwrap();
+        let Some(domains) = by_ip.get(&(router.to_owned(), target)) else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = domains
+            .iter()
+            .filter_map(|(dom, &exp)| (exp > now).then(|| dom.clone()))
+            .collect();
+        out.sort();
+        out
     }
     pub fn get_domains(&self, router: &str, client: IpAddr, target: IpAddr) -> Vec<String> {
         let now = Instant::now();
         let client = normalize(client);
         let target = normalize(target);
-        let mut entries = self.entries.lock().unwrap();
-        if let Some(records) = entries.get_mut(&(router.into(), client, target)) {
-            records.retain(|r| r.expires > now);
-            if !records.is_empty() {
-                let mut domains = Vec::with_capacity(records.len());
-                for rec in records.iter_mut() {
-                    if let Some(new_expires) = now.checked_add(rec.ttl) {
-                        rec.expires = rec.expires.max(new_expires);
+        let mut refreshed: Vec<(String, Instant)> = Vec::new();
+        let mut domains = Vec::new();
+        {
+            let mut entries = self.entries.lock().unwrap();
+            if let Some(records) = entries.get_mut(&(router.into(), client, target)) {
+                records.retain(|r| r.expires > now);
+                if !records.is_empty() {
+                    domains.reserve(records.len());
+                    for rec in records.iter_mut() {
+                        if let Some(new_expires) = now.checked_add(rec.ttl) {
+                            rec.expires = rec.expires.max(new_expires);
+                        }
+                        rec.observed = now;
+                        domains.push(rec.domain.clone());
+                        refreshed.push((rec.domain.clone(), rec.expires));
                     }
-                    rec.observed = now;
-                    domains.push(rec.domain.clone());
+                    domains.sort();
+                }
+            }
+            if domains.is_empty() {
+                // Dual-stack / IPv6 privacy address fallback:
+                // A client may query DNS over IPv4 and connect to AAAA over IPv6 (or vice versa),
+                // or query DNS from a SLAAC IPv6 address and connect from a temporary IPv6 address.
+                for ((r, c, t), records) in entries.iter_mut() {
+                    if r == router
+                        && *t == target
+                        && (client.is_ipv6() || target.is_ipv6() || c.is_ipv6() != client.is_ipv6())
+                    {
+                        records.retain(|rec| rec.expires > now);
+                        for rec in records.iter_mut() {
+                            if let Some(new_expires) = now.checked_add(rec.ttl) {
+                                rec.expires = rec.expires.max(new_expires);
+                            }
+                            rec.observed = now;
+                            if !domains.contains(&rec.domain) {
+                                domains.push(rec.domain.clone());
+                            }
+                            refreshed.push((rec.domain.clone(), rec.expires));
+                        }
+                    }
                 }
                 domains.sort();
-                return domains;
             }
         }
-        // Dual-stack / IPv6 privacy address fallback:
-        // A client may query DNS over IPv4 and connect to AAAA over IPv6 (or vice versa),
-        // or query DNS from a SLAAC IPv6 address and connect from a temporary IPv6 address.
-        let mut domains = Vec::new();
-        for ((r, c, t), records) in entries.iter_mut() {
-            if r == router
-                && *t == target
-                && (client.is_ipv6() || target.is_ipv6() || c.is_ipv6() != client.is_ipv6())
-            {
-                records.retain(|rec| rec.expires > now);
-                for rec in records.iter_mut() {
-                    if let Some(new_expires) = now.checked_add(rec.ttl) {
-                        rec.expires = rec.expires.max(new_expires);
-                    }
-                    rec.observed = now;
-                    if !domains.contains(&rec.domain) {
-                        domains.push(rec.domain.clone());
-                    }
+        if !refreshed.is_empty() {
+            let mut by_ip = self.by_ip.lock().unwrap();
+            if let Some(ip_domains) = by_ip.get_mut(&(router.to_owned(), target)) {
+                for (dom, exp) in refreshed {
+                    ip_domains
+                        .entry(dom)
+                        .and_modify(|cur| *cur = (*cur).max(exp))
+                        .or_insert(exp);
                 }
             }
         }
-        domains.sort();
         domains
     }
     /// Read-only snapshot: excludes expired records without changing routing state.
@@ -326,6 +398,10 @@ impl IpDomainTable {
         self.entries.lock().unwrap().retain(|_, rs| {
             rs.retain(|r| r.expires > now);
             !rs.is_empty()
+        });
+        self.by_ip.lock().unwrap().retain(|_, m| {
+            m.retain(|_, &mut exp| exp > now);
+            !m.is_empty()
         });
         self.cnames.lock().unwrap().retain(|_, rs| {
             rs.retain(|r| r.expires > now);
@@ -466,5 +542,34 @@ mod tests {
             .find(|e| e.target_ip == active_ip)
             .unwrap();
         assert!(ntp_entry.ttl_remaining_ms > 50_000);
+    }
+
+    #[test]
+    fn get_all_domains_for_ip_aggregates_across_clients() {
+        let t = IpDomainTable::new(16, 4, 3600);
+        let c1: IpAddr = "192.168.0.48".parse().unwrap();
+        let c2: IpAddr = "192.168.0.121".parse().unwrap();
+        let shared_ip: IpAddr = "141.147.149.97".parse().unwrap();
+        let now = Instant::now();
+        t.record("main", c1, shared_ip, "llm.rikaaa0928.moe", 60, now);
+        t.record(
+            "main",
+            c2,
+            shared_ip,
+            "ragents-api.ip.rikaaa0928.moe",
+            60,
+            now,
+        );
+        // Per-client views remain isolated while global IP view sees all active domains.
+        assert_eq!(t.get_domains("main", c1, shared_ip), vec!["llm.rikaaa0928.moe"]);
+        assert_eq!(
+            t.get_domains("main", c2, shared_ip),
+            vec!["ragents-api.ip.rikaaa0928.moe"]
+        );
+        assert_eq!(
+            t.get_all_domains_for_ip("main", shared_ip),
+            vec!["llm.rikaaa0928.moe", "ragents-api.ip.rikaaa0928.moe"]
+        );
+        assert!(t.get_all_domains_for_ip("other", shared_ip).is_empty());
     }
 }

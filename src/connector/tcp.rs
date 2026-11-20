@@ -31,6 +31,7 @@ impl RunConnector for TcpRunConnector {
                 return Err(e);
             }
         };
+        let _ = tcp_stream.set_nodelay(true);
         let mut stream = TcpRunStream::new(tcp_stream);
         stream.set_info(&mut |x| x.protocol_name = "tcp".to_string());
         Ok(Box::new(stream))

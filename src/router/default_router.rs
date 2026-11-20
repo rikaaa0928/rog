@@ -122,6 +122,37 @@ impl DefaultBaseRouter {
         (self.default_tag.clone(), domains.first().cloned())
     }
 
+    pub(crate) fn allows_ebpf_direct_offload(
+        &self,
+        ip: &str,
+        all_domains: &[String],
+        direct_connectors: &std::collections::HashSet<String>,
+    ) -> bool {
+        use crate::router::matcher::MatchKind;
+        for rule in &self.rules {
+            let Some(data) = self.data_map.get(&rule.name) else {
+                continue;
+            };
+            if data.kind() != MatchKind::Domain
+                && data.match_host(ip)
+                && rule.exclude.is_match(ip)
+                && direct_connectors.contains(&rule.select)
+            {
+                return false;
+            }
+        }
+        if all_domains.is_empty() {
+            return direct_connectors.contains(self.route_mapped_with_domain(ip, &[]).0.as_str());
+        }
+        all_domains.iter().all(|domain| {
+            direct_connectors.contains(
+                self.route_mapped_with_domain(ip, std::slice::from_ref(domain))
+                    .0
+                    .as_str(),
+            )
+        })
+    }
+
     pub(crate) async fn route(&self, addr: &RunAddr) -> (String, String) {
         for rule in &self.rules {
             let mut hosts = vec![addr.addr.clone().to_string()];
@@ -231,5 +262,31 @@ mod dns_tests {
         assert_eq!(r.route_mapped("1.1.1.1", &domains), "IP");
         assert_eq!(r.route_dns("c.example").outbound, "D");
         assert_eq!(r.route_mapped("8.8.8.8", &domains), "D");
+    }
+
+    #[tokio::test]
+    async fn ebpf_offload_blocks_shared_ip_with_mixed_or_excluded_routes() {
+        let direct: std::collections::HashSet<String> = ["Direct".into()].into_iter().collect();
+        let r = build(&[
+            ("domain-suffix", "llm.rikaaa0928.moe", "ROGJPH3", vec![]),
+            ("cidr", "141.147.149.0/24", "Direct", vec!["^141\\.147\\.149\\.97$".into()]),
+            ("domain-suffix", "ip.rikaaa0928.moe", "Direct", vec![]),
+            ("domain-suffix", "baidu.com", "Direct", vec![]),
+        ]);
+        // Excluded from a Direct CIDR rule => never offload even before non-Direct domain is queried.
+        assert!(!r.allows_ebpf_direct_offload(
+            "141.147.149.97",
+            &["ragents-api.ip.rikaaa0928.moe".into()],
+            &direct,
+        ));
+        // Mixed domain routes on a shared IP => never offload.
+        assert!(!r.allows_ebpf_direct_offload(
+            "141.147.149.98",
+            &["ip.rikaaa0928.moe".into(), "llm.rikaaa0928.moe".into()],
+            &direct,
+        ));
+        // Pure Direct IP or all-Direct domains => safe to offload.
+        assert!(r.allows_ebpf_direct_offload("141.147.149.98", &["ip.rikaaa0928.moe".into()], &direct));
+        assert!(r.allows_ebpf_direct_offload("220.181.38.148", &["www.baidu.com".into()], &direct));
     }
 }

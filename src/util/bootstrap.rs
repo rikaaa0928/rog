@@ -122,16 +122,21 @@ pub(crate) async fn connect(
 ) -> io::Result<TcpStream> {
     let connect_timeout = Duration::from_secs(5);
     let Some(servers) = servers else {
-        return timeout(connect_timeout, TcpStream::connect((host, port)))
+        let stream = timeout(connect_timeout, TcpStream::connect((host, port)))
             .await
             .map_err(|_| {
                 io::Error::new(io::ErrorKind::TimedOut, "proxy endpoint connect timeout")
-            })?;
+            })??;
+        let _ = stream.set_nodelay(true);
+        return Ok(stream);
     };
     let mut error = io::Error::new(io::ErrorKind::NotFound, "no proxy endpoint address");
     for address in resolve(host, port, servers).await? {
         match timeout(connect_timeout, TcpStream::connect(address)).await {
-            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Ok(stream)) => {
+                let _ = stream.set_nodelay(true);
+                return Ok(stream);
+            }
             Ok(Err(e)) => error = e,
             Err(_) => {
                 error = io::Error::new(io::ErrorKind::TimedOut, "proxy endpoint connect timeout")
@@ -153,11 +158,13 @@ pub(crate) async fn connect_endpoint(
         .unwrap_or(Duration::from_secs(5));
     let servers = servers(options)?;
     if let Ok(address) = endpoint.parse::<SocketAddr>() {
-        return timeout(connect_timeout, TcpStream::connect(address))
+        let stream = timeout(connect_timeout, TcpStream::connect(address))
             .await
             .map_err(|_| {
                 io::Error::new(io::ErrorKind::TimedOut, "proxy endpoint connect timeout")
-            })?;
+            })??;
+        let _ = stream.set_nodelay(true);
+        return Ok(stream);
     }
     let (host, port) = crate::connector::grpc::parse_address(endpoint)?;
     timeout(

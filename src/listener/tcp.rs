@@ -14,6 +14,7 @@ pub struct TcpRunListener {}
 impl RunAcceptor for TcpRunAcceptor {
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
         let (socket, addr) = self.inner.accept().await?;
+        let _ = socket.set_nodelay(true);
         let mut stream = TcpRunStream::new(socket);
         stream.set_info(&mut |x| x.protocol_name = "tcp".to_string());
         Ok((RunAccStream::TCPStream(Box::new(stream)), addr))

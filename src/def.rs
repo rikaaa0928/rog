@@ -143,6 +143,14 @@ pub trait RouterSet: Send + Sync {
     }
 
     async fn route(&self, l_name: &str, r_name: &str, addr: &RunAddr) -> String;
+
+    fn sync_ebpf_direct_ip(
+        &self,
+        _r_name: &str,
+        _target: std::net::IpAddr,
+        _ttl: std::time::Duration,
+    ) {
+    }
 }
 
 // #[async_trait::async_trait]

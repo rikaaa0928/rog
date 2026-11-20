@@ -883,44 +883,89 @@ mod linux_impl {
         name.to_string()
     }
 
+    fn find_chain_insert_pos(cmd: &str, chain: &str) -> Option<usize> {
+        let out = Command::new(cmd)
+            .args(["-w", "-t", "mangle", "-S", chain])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut idx = 0usize;
+        let mut tproxy_idx = None;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if !trimmed.starts_with("-A ") {
+                continue;
+            }
+            idx += 1;
+            if trimmed.contains("--mark 0x78/")
+                && trimmed.contains("-j RETURN")
+                && !trimmed.contains("connmark")
+            {
+                return Some(idx);
+            }
+            if tproxy_idx.is_none() && trimmed.contains("-j TPROXY") {
+                tproxy_idx = Some(idx);
+            }
+        }
+        tproxy_idx.or(Some(idx + 1))
+    }
+
+    fn mangle_rule_exists(cmd: &str, chain: &str, args: &[&str]) -> bool {
+        let mut full = vec!["-w", "-t", "mangle", "-C", chain];
+        full.extend_from_slice(args);
+        Command::new(cmd)
+            .args(full)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    fn mangle_insert_rule(cmd: &str, chain: &str, pos: usize, args: &[&str]) -> bool {
+        let pos_str = pos.to_string();
+        let mut full = vec!["-w", "-t", "mangle", "-I", chain, pos_str.as_str()];
+        full.extend_from_slice(args);
+        Command::new(cmd)
+            .args(full)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
     fn ensure_mangle_mark_bypass_rule() {
+        let _ = Command::new(find_cmd("modprobe"))
+            .arg("xt_connmark")
+            .output();
         for (bin, chain) in [("iptables", "ROG_TP"), ("ip6tables", "ROG6_TP")] {
             let cmd = find_cmd(bin);
-            let exists = Command::new(&cmd)
-                .args([
-                    "-w",
-                    "-t",
-                    "mangle",
-                    "-C",
-                    chain,
-                    "-m",
-                    "mark",
-                    "--mark",
-                    "0x78/0xff",
-                    "-j",
-                    "RETURN",
-                ])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
-            if !exists {
-                // Insert at rule #3 (after --dst-type LOCAL and --dport 53 RETURN rules)
-                let _ = Command::new(&cmd)
-                    .args([
-                        "-w",
-                        "-t",
-                        "mangle",
-                        "-I",
-                        chain,
-                        "3",
-                        "-m",
-                        "mark",
-                        "--mark",
-                        "0x78/0xff",
-                        "-j",
-                        "RETURN",
-                    ])
-                    .output();
+            let Some(mut pos) = find_chain_insert_pos(&cmd, chain) else {
+                continue;
+            };
+            let mark_ret = ["-m", "mark", "--mark", "0x78/0xff", "-j", "RETURN"];
+            if !mangle_rule_exists(&cmd, chain, &mark_ret) {
+                let _ = mangle_insert_rule(&cmd, chain, pos, &mark_ret);
+                pos = find_chain_insert_pos(&cmd, chain).unwrap_or(pos);
+            }
+            let mark_connmark = [
+                "-m",
+                "mark",
+                "--mark",
+                "0x78/0xff",
+                "-j",
+                "CONNMARK",
+                "--set-xmark",
+                "0x78/0xff",
+            ];
+            if !mangle_rule_exists(&cmd, chain, &mark_connmark)
+                && !mangle_insert_rule(&cmd, chain, pos, &mark_connmark)
+            {
+                continue;
+            }
+            let connmark_ret = ["-m", "connmark", "--mark", "0x78/0xff", "-j", "RETURN"];
+            if !mangle_rule_exists(&cmd, chain, &connmark_ret) {
+                let _ = mangle_insert_rule(&cmd, chain, pos, &connmark_ret);
             }
         }
     }

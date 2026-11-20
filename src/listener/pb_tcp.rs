@@ -55,6 +55,7 @@ impl RunListener for PbTcpListener {
                         continue;
                     }
                 };
+                let _ = tcp_stream.set_nodelay(true);
                 let stream_tx = stream_tx.clone();
                 let udp_tx = udp_tx.clone();
                 let auth = auth.clone();

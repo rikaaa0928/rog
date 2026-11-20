@@ -78,7 +78,7 @@ ensure_rule6() {
     ip6tables -w -t "$table" -C "$chain" "$@" 2>/dev/null || ip6tables -w -t "$table" -A "$chain" "$@"
 }
 
-modprobe -a nf_tproxy_ipv4 nf_tproxy_ipv6 xt_TPROXY xt_socket xt_owner cls_bpf sch_clsact 2>/dev/null || true
+modprobe -a nf_tproxy_ipv4 nf_tproxy_ipv6 xt_TPROXY xt_socket xt_owner xt_connmark cls_bpf sch_clsact 2>/dev/null || true
 
 if [[ -n "$SYSCTL_CONF" && -f "$SYSCTL_CONF" ]]; then
     sysctl --load="$SYSCTL_CONF" >/dev/null
@@ -143,6 +143,9 @@ if [[ "$DO_V4" == true ]]; then
 
     [[ "$DO_TCP" == true ]] && iptables -w -t mangle -A ROG_TP -p tcp -m socket --transparent --nowildcard -j MARK --set-xmark "${FWMARK}/0xff"
     [[ "$DO_TCP" == true ]] && iptables -w -t mangle -A ROG_TP -p tcp -m socket --transparent --nowildcard -j ACCEPT
+    if iptables -w -t mangle -A ROG_TP -m connmark --mark 0x78/0xff -j RETURN 2>/dev/null; then
+        iptables -w -t mangle -A ROG_TP -m mark --mark 0x78/0xff -j CONNMARK --set-xmark 0x78/0xff 2>/dev/null || true
+    fi
     iptables -w -t mangle -A ROG_TP -m mark --mark 0x78/0xff -j RETURN
     [[ "$DO_TCP" == true ]] && iptables -w -t mangle -A ROG_TP -p tcp -j TPROXY --on-port "$TPROXY_PORT" --tproxy-mark "${FWMARK}/0xff"
     [[ "$DO_UDP" == true ]] && iptables -w -t mangle -A ROG_TP -p udp -j TPROXY --on-port "$TPROXY_PORT" --tproxy-mark "${FWMARK}/0xff"
@@ -202,6 +205,9 @@ if [[ "$DO_V6" == true ]] && command -v ip6tables >/dev/null 2>&1; then
 
     [[ "$DO_TCP" == true ]] && ip6tables -w -t mangle -A ROG6_TP -p tcp -m socket --transparent --nowildcard -j MARK --set-xmark "${FWMARK}/0xff"
     [[ "$DO_TCP" == true ]] && ip6tables -w -t mangle -A ROG6_TP -p tcp -m socket --transparent --nowildcard -j ACCEPT
+    if ip6tables -w -t mangle -A ROG6_TP -m connmark --mark 0x78/0xff -j RETURN 2>/dev/null; then
+        ip6tables -w -t mangle -A ROG6_TP -m mark --mark 0x78/0xff -j CONNMARK --set-xmark 0x78/0xff 2>/dev/null || true
+    fi
     ip6tables -w -t mangle -A ROG6_TP -m mark --mark 0x78/0xff -j RETURN
     [[ "$DO_TCP" == true ]] && ip6tables -w -t mangle -A ROG6_TP -p tcp -j TPROXY --on-port "$TPROXY_PORT" --tproxy-mark "${FWMARK}/0xff"
     [[ "$DO_UDP" == true ]] && ip6tables -w -t mangle -A ROG6_TP -p udp -j TPROXY --on-port "$TPROXY_PORT" --tproxy-mark "${FWMARK}/0xff"
