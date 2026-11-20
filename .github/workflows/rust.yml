@@ -11,7 +11,8 @@ env:
 jobs:
   build-and-upload:
     name: Build and upload
-    permissions: write-all
+    permissions:
+      contents: read
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -43,7 +44,7 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Get the release version from the tag
         shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
@@ -92,12 +93,33 @@ jobs:
         with:
           name: docker-binaries-${{ matrix.target }}
           path: release/
+      - name: Upload release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-asset-${{ matrix.target }}
+          path: ${{ env.ASSET }}
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build-and-upload
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-asset-*
+          path: release-assets/
+          merge-multiple: true
+      - name: Verify downloaded assets
+        run: ls -lh release-assets/
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
-            ${{ env.ASSET }}
+            release-assets/*
 
   build-and-push-docker:
     name: Build and push docker image
@@ -108,10 +130,11 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Download all Docker binaries
         uses: actions/download-artifact@v4
         with:
+          pattern: docker-binaries-*
           path: release/
       - name: Reorganize downloaded artifacts
         run: |
