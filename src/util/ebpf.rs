@@ -1,14 +1,188 @@
 use ipnetwork::IpNetwork;
-use proxy_observe::ObserveConnection;
+#[cfg(target_os = "linux")]
+use proxy_observe::ConnectionMeta;
+use proxy_observe::{ObserveConnection, ObserveRegistry};
 use std::collections::HashSet;
 use std::io;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Duration;
 #[cfg(target_os = "linux")]
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
+
+#[allow(dead_code)]
+pub(crate) const DIRECT_FLOW_EVENT_OPEN: u8 = 1;
+#[allow(dead_code)]
+pub(crate) const DIRECT_FLOW_EVENT_CLOSE: u8 = 2;
+#[allow(dead_code)]
+const BPF_RINGBUF_BUSY_BIT: u32 = 1 << 31;
+#[allow(dead_code)]
+const BPF_RINGBUF_DISCARD_BIT: u32 = 1 << 30;
+#[allow(dead_code)]
+const BPF_RINGBUF_HDR_SZ: usize = 8;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DirectFlowKey {
+    pub family: u8,
+    pub proto: u8,
+    pub src_port_be: [u8; 2],
+    pub dst_port_be: [u8; 2],
+    pub _pad: [u8; 2],
+    pub src_ip: [u8; 16],
+    pub dst_ip: [u8; 16],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DirectFlowEvent {
+    pub key: DirectFlowKey,
+    pub kind: u8,
+    pub tcp_flags: u8,
+    pub _pad: [u8; 6],
+}
+
+impl DirectFlowKey {
+    #[allow(dead_code)]
+    pub(crate) fn from_tuple(
+        udp: bool,
+        src_ip: IpAddr,
+        src_port: u16,
+        dst_ip: IpAddr,
+        dst_port: u16,
+    ) -> Option<Self> {
+        let src_ip = match src_ip {
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v6)),
+            other => other,
+        };
+        let dst_ip = match dst_ip {
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v6)),
+            other => other,
+        };
+        let proto = if udp { 17 } else { 6 };
+        match (src_ip, dst_ip) {
+            (IpAddr::V4(s4), IpAddr::V4(d4)) => {
+                let mut src = [0u8; 16];
+                let mut dst = [0u8; 16];
+                src[..4].copy_from_slice(&s4.octets());
+                dst[..4].copy_from_slice(&d4.octets());
+                Some(Self {
+                    family: 4,
+                    proto,
+                    src_port_be: src_port.to_be_bytes(),
+                    dst_port_be: dst_port.to_be_bytes(),
+                    _pad: [0; 2],
+                    src_ip: src,
+                    dst_ip: dst,
+                })
+            }
+            (IpAddr::V6(s6), IpAddr::V6(d6)) => Some(Self {
+                family: 6,
+                proto,
+                src_port_be: src_port.to_be_bytes(),
+                dst_port_be: dst_port.to_be_bytes(),
+                _pad: [0; 2],
+                src_ip: s6.octets(),
+                dst_ip: d6.octets(),
+            }),
+            _ => None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn to_tuple(&self) -> Option<(u8, IpAddr, u16, IpAddr, u16)> {
+        let (src_ip, dst_ip) = match self.family {
+            4 => (
+                IpAddr::V4(Ipv4Addr::new(
+                    self.src_ip[0],
+                    self.src_ip[1],
+                    self.src_ip[2],
+                    self.src_ip[3],
+                )),
+                IpAddr::V4(Ipv4Addr::new(
+                    self.dst_ip[0],
+                    self.dst_ip[1],
+                    self.dst_ip[2],
+                    self.dst_ip[3],
+                )),
+            ),
+            6 => (
+                IpAddr::V6(Ipv6Addr::from(self.src_ip)),
+                IpAddr::V6(Ipv6Addr::from(self.dst_ip)),
+            ),
+            _ => return None,
+        };
+        Some((
+            self.proto,
+            src_ip,
+            u16::from_be_bytes(self.src_port_be),
+            dst_ip,
+            u16::from_be_bytes(self.dst_port_be),
+        ))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                (self as *const Self) as *const u8,
+                std::mem::size_of::<Self>(),
+            )
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn decode_ringbuf_records(
+    ring: &[u8],
+    start_pos: u64,
+    producer_pos: u64,
+) -> (u64, Vec<DirectFlowEvent>) {
+    let mut events = Vec::new();
+    let ring_len = ring.len();
+    if ring_len == 0 || !ring_len.is_power_of_two() {
+        return (start_pos, events);
+    }
+    let mask = ring_len - 1;
+    let mut cons_pos = start_pos;
+    while cons_pos < producer_pos {
+        let off = (cons_pos as usize) & mask;
+        if off + BPF_RINGBUF_HDR_SZ > ring_len {
+            break;
+        }
+        let len = u32::from_ne_bytes(ring[off..off + 4].try_into().unwrap());
+        if (len & BPF_RINGBUF_BUSY_BIT) != 0 {
+            break;
+        }
+        let data_len = (len & 0x3fff_ffff) as usize;
+        let stride = (BPF_RINGBUF_HDR_SZ + ((data_len + 7) & !7)) as u64;
+        if (len & BPF_RINGBUF_DISCARD_BIT) == 0 && data_len >= std::mem::size_of::<DirectFlowEvent>()
+        {
+            let data_off = off + BPF_RINGBUF_HDR_SZ;
+            if data_off + std::mem::size_of::<DirectFlowEvent>() <= ring_len {
+                let ev = unsafe {
+                    std::ptr::read_unaligned(
+                        ring.as_ptr().add(data_off) as *const DirectFlowEvent
+                    )
+                };
+                events.push(ev);
+            } else {
+                let mut tmp = [0u8; std::mem::size_of::<DirectFlowEvent>()];
+                for (i, b) in tmp.iter_mut().enumerate() {
+                    *b = ring[(data_off + i) & mask];
+                }
+                let ev = unsafe {
+                    std::ptr::read_unaligned(tmp.as_ptr() as *const DirectFlowEvent)
+                };
+                events.push(ev);
+            }
+        }
+        cons_pos = cons_pos.saturating_add(stride);
+    }
+    (cons_pos, events)
+}
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -82,6 +256,35 @@ pub(crate) fn build_tc_direct_prog_bytecode(
     v6_lru_fd: i32,
     v6_lpm_fd: i32,
 ) -> Vec<u8> {
+    build_tc_direct_prog_bytecode_inner(v4_lru_fd, v4_lpm_fd, v6_lru_fd, v6_lpm_fd, None)
+}
+
+#[allow(dead_code)]
+pub(crate) fn build_tc_direct_prog_with_flow_log_bytecode(
+    v4_lru_fd: i32,
+    v4_lpm_fd: i32,
+    v6_lru_fd: i32,
+    v6_lpm_fd: i32,
+    flow_seen_fd: i32,
+    ringbuf_fd: i32,
+) -> Vec<u8> {
+    build_tc_direct_prog_bytecode_inner(
+        v4_lru_fd,
+        v4_lpm_fd,
+        v6_lru_fd,
+        v6_lpm_fd,
+        Some((flow_seen_fd, ringbuf_fd)),
+    )
+}
+
+#[allow(dead_code)]
+fn build_tc_direct_prog_bytecode_inner(
+    v4_lru_fd: i32,
+    v4_lpm_fd: i32,
+    v6_lru_fd: i32,
+    v6_lpm_fd: i32,
+    flow_log: Option<(i32, i32)>,
+) -> Vec<u8> {
     use BpfItem::*;
     let map_ld = |dst: u8, fd: i32| -> [BpfItem; 2] {
         [
@@ -101,8 +304,26 @@ pub(crate) fn build_tc_direct_prog_bytecode(
             },
         ]
     };
+    let imm64_ld = |dst: u8, val: u64| -> [BpfItem; 2] {
+        [
+            Insn {
+                code: 0x18,
+                dst,
+                src: 0,
+                off: 0,
+                imm: (val as u32) as i32,
+            },
+            Insn {
+                code: 0x00,
+                dst: 0,
+                src: 0,
+                off: 0,
+                imm: ((val >> 32) as u32) as i32,
+            },
+        ]
+    };
 
-    let mut items = Vec::with_capacity(64);
+    let mut items = Vec::with_capacity(if flow_log.is_some() { 220 } else { 64 });
     // r6 = r1 (skb)
     items.push(Insn {
         code: 0xbf,
@@ -189,6 +410,15 @@ pub(crate) fn build_tc_direct_prog_bytecode(
         label: "exit",
         imm: 0,
     });
+    if flow_log.is_some() {
+        items.push(Insn {
+            code: 0xb7,
+            dst: 8,
+            src: 0,
+            off: 0,
+            imm: 4,
+        }); // r8 = family 4
+    }
     // r7 = *(u32 *)(r2 + 30) (ip4 daddr)
     items.push(Insn {
         code: 0x61,
@@ -326,6 +556,15 @@ pub(crate) fn build_tc_direct_prog_bytecode(
         label: "exit",
         imm: 0,
     });
+    if flow_log.is_some() {
+        items.push(Insn {
+            code: 0xb7,
+            dst: 8,
+            src: 0,
+            off: 0,
+            imm: 6,
+        }); // r8 = family 6
+    }
     // *(u32 *)(r10 - 24) = 128 (prefixlen)
     items.push(Insn {
         code: 0xb7,
@@ -473,6 +712,905 @@ pub(crate) fn build_tc_direct_prog_bytecode(
         imm: 0,
     }); // skb->mark = r0
 
+    if let Some((flow_seen_fd, ringbuf_fd)) = flow_log {
+        // Zero DirectFlowEvent (48 bytes at r10 - 48 .. r10 - 0)
+        items.push(Insn {
+            code: 0xb7,
+            dst: 0,
+            src: 0,
+            off: 0,
+            imm: 0,
+        });
+        for off in [-48i16, -40, -32, -24, -16, -8] {
+            items.push(Insn {
+                code: 0x7b,
+                dst: 10,
+                src: 0,
+                off,
+                imm: 0,
+            });
+        }
+        // event.key.family = r8 (4 or 6)
+        items.push(Insn {
+            code: 0x73,
+            dst: 10,
+            src: 8,
+            off: -48,
+            imm: 0,
+        });
+        items.push(Jmp {
+            code: 0x55,
+            dst: 8,
+            src: 0,
+            label: "flow_v6",
+            imm: 4,
+        });
+
+        // flow_v4: bpf_skb_load_bytes(skb=r6, offset=14, to=r10-88, len=20)
+        items.push(Insn {
+            code: 0xbf,
+            dst: 1,
+            src: 6,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: 14,
+        });
+        items.push(Insn {
+            code: 0xbf,
+            dst: 3,
+            src: 10,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x07,
+            dst: 3,
+            src: 0,
+            off: 0,
+            imm: -88,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 4,
+            src: 0,
+            off: 0,
+            imm: 20,
+        });
+        items.push(Insn {
+            code: 0x85,
+            dst: 0,
+            src: 0,
+            off: 0,
+            imm: 26,
+        }); // bpf_skb_load_bytes
+        items.push(Jmp {
+            code: 0x55,
+            dst: 0,
+            src: 0,
+            label: "exit",
+            imm: 0,
+        });
+
+        // Skip non-first IPv4 fragments (frag_off & 0x1fff != 0 in network order)
+        items.push(Insn {
+            code: 0x69,
+            dst: 1,
+            src: 10,
+            off: -82,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x57,
+            dst: 1,
+            src: 0,
+            off: 0,
+            imm: u16::from_le_bytes(0x1fffu16.to_be_bytes()) as i32,
+        });
+        items.push(Jmp {
+            code: 0x55,
+            dst: 1,
+            src: 0,
+            label: "exit",
+            imm: 0,
+        });
+
+        // r1 = ihl_bytes = ((*(u8 *)(r10 - 88)) & 0x0f) << 2
+        items.push(Insn {
+            code: 0x71,
+            dst: 1,
+            src: 10,
+            off: -88,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x57,
+            dst: 1,
+            src: 0,
+            off: 0,
+            imm: 0x0f,
+        });
+        items.push(Insn {
+            code: 0x67,
+            dst: 1,
+            src: 0,
+            off: 0,
+            imm: 2,
+        });
+        items.push(Jmp {
+            code: 0xa5,
+            dst: 1,
+            src: 0,
+            label: "exit",
+            imm: 20,
+        }); // if ihl_bytes < 20 goto exit
+        items.push(Insn {
+            code: 0xbf,
+            dst: 9,
+            src: 1,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x07,
+            dst: 9,
+            src: 0,
+            off: 0,
+            imm: 14,
+        }); // r9 = l4_off (34..=74)
+        // r7 = protocol = *(u8 *)(r10 - 79)
+        items.push(Insn {
+            code: 0x71,
+            dst: 7,
+            src: 10,
+            off: -79,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x73,
+            dst: 10,
+            src: 7,
+            off: -47,
+            imm: 0,
+        }); // key.proto = r7
+        // copy saddr (r10 - 76 -> r10 - 40) and daddr (r10 - 72 -> r10 - 24)
+        items.push(Insn {
+            code: 0x61,
+            dst: 1,
+            src: 10,
+            off: -76,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x63,
+            dst: 10,
+            src: 1,
+            off: -40,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x61,
+            dst: 1,
+            src: 10,
+            off: -72,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x63,
+            dst: 10,
+            src: 1,
+            off: -24,
+            imm: 0,
+        });
+        items.push(Jmp {
+            code: 0x05,
+            dst: 0,
+            src: 0,
+            label: "flow_l4",
+            imm: 0,
+        });
+
+        // flow_v6: bpf_skb_load_bytes(skb=r6, offset=14, to=r10-88, len=40)
+        items.push(Label("flow_v6"));
+        items.push(Insn {
+            code: 0xbf,
+            dst: 1,
+            src: 6,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: 14,
+        });
+        items.push(Insn {
+            code: 0xbf,
+            dst: 3,
+            src: 10,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x07,
+            dst: 3,
+            src: 0,
+            off: 0,
+            imm: -88,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 4,
+            src: 0,
+            off: 0,
+            imm: 40,
+        });
+        items.push(Insn {
+            code: 0x85,
+            dst: 0,
+            src: 0,
+            off: 0,
+            imm: 26,
+        });
+        items.push(Jmp {
+            code: 0x55,
+            dst: 0,
+            src: 0,
+            label: "exit",
+            imm: 0,
+        });
+        // r7 = nexthdr = *(u8 *)(r10 - 82)
+        items.push(Insn {
+            code: 0x71,
+            dst: 7,
+            src: 10,
+            off: -82,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x73,
+            dst: 10,
+            src: 7,
+            off: -47,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 9,
+            src: 0,
+            off: 0,
+            imm: 54,
+        }); // r9 = l4_off = 14 + 40
+        // copy IPv6 saddr (r10 - 80..-64 -> r10 - 40..-24) and daddr (r10 - 64..-48 -> r10 - 24..-8)
+        for (src_off, dst_off) in [(-80i16, -40i16), (-72, -32), (-64, -24), (-56, -16)] {
+            items.push(Insn {
+                code: 0x79,
+                dst: 1,
+                src: 10,
+                off: src_off,
+                imm: 0,
+            });
+            items.push(Insn {
+                code: 0x7b,
+                dst: 10,
+                src: 1,
+                off: dst_off,
+                imm: 0,
+            });
+        }
+
+        // flow_l4: r7 = proto, r9 = l4_off
+        items.push(Label("flow_l4"));
+        items.push(Jmp {
+            code: 0x15,
+            dst: 7,
+            src: 0,
+            label: "flow_tcp",
+            imm: 6,
+        });
+        items.push(Jmp {
+            code: 0x15,
+            dst: 7,
+            src: 0,
+            label: "flow_udp",
+            imm: 17,
+        });
+        items.push(Jmp {
+            code: 0x05,
+            dst: 0,
+            src: 0,
+            label: "exit",
+            imm: 0,
+        });
+
+        // flow_tcp: load 14 bytes at r9 into r10 - 88
+        items.push(Label("flow_tcp"));
+        items.push(Insn {
+            code: 0xbf,
+            dst: 1,
+            src: 6,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0xbf,
+            dst: 2,
+            src: 9,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0xbf,
+            dst: 3,
+            src: 10,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x07,
+            dst: 3,
+            src: 0,
+            off: 0,
+            imm: -88,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 4,
+            src: 0,
+            off: 0,
+            imm: 14,
+        });
+        items.push(Insn {
+            code: 0x85,
+            dst: 0,
+            src: 0,
+            off: 0,
+            imm: 26,
+        });
+        items.push(Jmp {
+            code: 0x55,
+            dst: 0,
+            src: 0,
+            label: "exit",
+            imm: 0,
+        });
+        // r8 = tcp_flags = *(u8 *)(r10 - 75); event.tcp_flags = r8
+        items.push(Insn {
+            code: 0x71,
+            dst: 8,
+            src: 10,
+            off: -75,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x73,
+            dst: 10,
+            src: 8,
+            off: -7,
+            imm: 0,
+        });
+        items.push(Jmp {
+            code: 0x05,
+            dst: 0,
+            src: 0,
+            label: "flow_ports",
+            imm: 0,
+        });
+
+        // flow_udp: load 4 bytes at r9 into r10 - 88
+        items.push(Label("flow_udp"));
+        items.push(Insn {
+            code: 0xbf,
+            dst: 1,
+            src: 6,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0xbf,
+            dst: 2,
+            src: 9,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0xbf,
+            dst: 3,
+            src: 10,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x07,
+            dst: 3,
+            src: 0,
+            off: 0,
+            imm: -88,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 4,
+            src: 0,
+            off: 0,
+            imm: 4,
+        });
+        items.push(Insn {
+            code: 0x85,
+            dst: 0,
+            src: 0,
+            off: 0,
+            imm: 26,
+        });
+        items.push(Jmp {
+            code: 0x55,
+            dst: 0,
+            src: 0,
+            label: "exit",
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 8,
+            src: 0,
+            off: 0,
+            imm: 0,
+        }); // r8 = 0 (tcp_flags)
+
+        // flow_ports: copy src_port (r10 - 88 -> r10 - 46) and dst_port (r10 - 86 -> r10 - 44)
+        items.push(Label("flow_ports"));
+        items.push(Insn {
+            code: 0x69,
+            dst: 1,
+            src: 10,
+            off: -88,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x6b,
+            dst: 10,
+            src: 1,
+            off: -46,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x69,
+            dst: 1,
+            src: 10,
+            off: -86,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x6b,
+            dst: 10,
+            src: 1,
+            off: -44,
+            imm: 0,
+        });
+
+        // r9 = bpf_ktime_get_ns()
+        items.push(Insn {
+            code: 0x85,
+            dst: 0,
+            src: 0,
+            off: 0,
+            imm: 5,
+        });
+        items.push(Insn {
+            code: 0xbf,
+            dst: 9,
+            src: 0,
+            off: 0,
+            imm: 0,
+        });
+
+        // Lookup flow_seen(key = r10 - 48)
+        items.extend_from_slice(&map_ld(1, flow_seen_fd));
+        items.push(Insn {
+            code: 0xbf,
+            dst: 2,
+            src: 10,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x07,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: -48,
+        });
+        items.push(Insn {
+            code: 0x85,
+            dst: 0,
+            src: 0,
+            off: 0,
+            imm: 1,
+        }); // bpf_map_lookup_elem
+        items.push(Jmp {
+            code: 0x15,
+            dst: 0,
+            src: 0,
+            label: "emit_open",
+            imm: 0,
+        });
+
+        // Hit in flow_seen: r7 = map_value_ptr
+        items.push(Insn {
+            code: 0xbf,
+            dst: 7,
+            src: 0,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x79,
+            dst: 1,
+            src: 7,
+            off: 0,
+            imm: 0,
+        }); // r1 = state_ns
+        items.push(Jmp {
+            code: 0xc5,
+            dst: 1,
+            src: 0,
+            label: "hit_closed",
+            imm: 0,
+        }); // if (s64)r1 < 0 goto hit_closed
+
+        // hit_open: if (r8 & 0x05) != 0 goto emit_close
+        items.push(Insn {
+            code: 0xbf,
+            dst: 2,
+            src: 8,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x57,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: 0x05,
+        });
+        items.push(Jmp {
+            code: 0x55,
+            dst: 2,
+            src: 0,
+            label: "emit_close",
+            imm: 0,
+        });
+        // Slide last_seen_ns = r9 in-place
+        items.push(Insn {
+            code: 0x7b,
+            dst: 7,
+            src: 9,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Jmp {
+            code: 0x05,
+            dst: 0,
+            src: 0,
+            label: "exit",
+            imm: 0,
+        });
+
+        // hit_closed: allow fast re-open only on pure SYN ((r8 & 0x17) == 0x02),
+        // ignore FIN/RST, otherwise enforce 10s TIME_WAIT guard.
+        items.push(Label("hit_closed"));
+        items.push(Insn {
+            code: 0xbf,
+            dst: 2,
+            src: 8,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x57,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: 0x17,
+        });
+        items.push(Jmp {
+            code: 0x15,
+            dst: 2,
+            src: 0,
+            label: "emit_open",
+            imm: 0x02,
+        });
+        items.push(Insn {
+            code: 0xbf,
+            dst: 2,
+            src: 8,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x57,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: 0x05,
+        });
+        items.push(Jmp {
+            code: 0x55,
+            dst: 2,
+            src: 0,
+            label: "exit",
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0xbf,
+            dst: 2,
+            src: 1,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x67,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: 1,
+        });
+        items.push(Insn {
+            code: 0x77,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: 1,
+        }); // r2 = closed_ns (bit 63 cleared)
+        items.push(Jmp {
+            code: 0xad,
+            dst: 9,
+            src: 2,
+            label: "exit",
+            imm: 0,
+        }); // if now_ns < closed_ns goto exit
+        items.push(Insn {
+            code: 0xbf,
+            dst: 3,
+            src: 9,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x1f,
+            dst: 3,
+            src: 2,
+            off: 0,
+            imm: 0,
+        }); // r3 = now_ns - closed_ns
+        items.extend_from_slice(&imm64_ld(4, 10_000_000_000));
+        items.push(Jmp {
+            code: 0xad,
+            dst: 3,
+            src: 4,
+            label: "exit",
+            imm: 0,
+        }); // if elapsed < 10s goto exit
+
+        // emit_open: ignore stray FIN/RST packets
+        items.push(Label("emit_open"));
+        items.push(Insn {
+            code: 0xbf,
+            dst: 2,
+            src: 8,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x57,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: 0x05,
+        });
+        items.push(Jmp {
+            code: 0x55,
+            dst: 2,
+            src: 0,
+            label: "exit",
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x7b,
+            dst: 10,
+            src: 9,
+            off: -96,
+            imm: 0,
+        }); // *(u64 *)(r10 - 96) = now_ns
+        items.extend_from_slice(&map_ld(1, flow_seen_fd));
+        items.push(Insn {
+            code: 0xbf,
+            dst: 2,
+            src: 10,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x07,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: -48,
+        });
+        items.push(Insn {
+            code: 0xbf,
+            dst: 3,
+            src: 10,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x07,
+            dst: 3,
+            src: 0,
+            off: 0,
+            imm: -96,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 4,
+            src: 0,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x85,
+            dst: 0,
+            src: 0,
+            off: 0,
+            imm: 2,
+        }); // bpf_map_update_elem
+        items.push(Insn {
+            code: 0xb7,
+            dst: 1,
+            src: 0,
+            off: 0,
+            imm: DIRECT_FLOW_EVENT_OPEN as i32,
+        });
+        items.push(Insn {
+            code: 0x73,
+            dst: 10,
+            src: 1,
+            off: -8,
+            imm: 0,
+        }); // event.kind = OPEN
+        items.extend_from_slice(&map_ld(1, ringbuf_fd));
+        items.push(Insn {
+            code: 0xbf,
+            dst: 2,
+            src: 10,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x07,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: -48,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 3,
+            src: 0,
+            off: 0,
+            imm: std::mem::size_of::<DirectFlowEvent>() as i32,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 4,
+            src: 0,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x85,
+            dst: 0,
+            src: 0,
+            off: 0,
+            imm: 130,
+        }); // bpf_ringbuf_output
+        items.push(Jmp {
+            code: 0x05,
+            dst: 0,
+            src: 0,
+            label: "exit",
+            imm: 0,
+        });
+
+        // emit_close: set CLOSED bit (1 << 63) | now_ns in flow_seen and emit CLOSE event
+        items.push(Label("emit_close"));
+        items.push(Insn {
+            code: 0xb7,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: 1,
+        });
+        items.push(Insn {
+            code: 0x67,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: 63,
+        });
+        items.push(Insn {
+            code: 0x4f,
+            dst: 2,
+            src: 9,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x7b,
+            dst: 7,
+            src: 2,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 1,
+            src: 0,
+            off: 0,
+            imm: DIRECT_FLOW_EVENT_CLOSE as i32,
+        });
+        items.push(Insn {
+            code: 0x73,
+            dst: 10,
+            src: 1,
+            off: -8,
+            imm: 0,
+        }); // event.kind = CLOSE
+        items.extend_from_slice(&map_ld(1, ringbuf_fd));
+        items.push(Insn {
+            code: 0xbf,
+            dst: 2,
+            src: 10,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x07,
+            dst: 2,
+            src: 0,
+            off: 0,
+            imm: -48,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 3,
+            src: 0,
+            off: 0,
+            imm: std::mem::size_of::<DirectFlowEvent>() as i32,
+        });
+        items.push(Insn {
+            code: 0xb7,
+            dst: 4,
+            src: 0,
+            off: 0,
+            imm: 0,
+        });
+        items.push(Insn {
+            code: 0x85,
+            dst: 0,
+            src: 0,
+            off: 0,
+            imm: 130,
+        }); // bpf_ringbuf_output
+    }
+
     items.push(Label("exit"));
     items.push(Insn {
         code: 0xb7,
@@ -581,14 +1719,18 @@ pub(crate) fn build_sockhash_verdict_bytecode(sockhash_fd: i32) -> Vec<u8> {
 mod linux_impl {
     use super::*;
     use log::{debug, info, warn};
+    use std::collections::HashMap;
     use std::mem;
     use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
     use std::process::Command;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+    use tokio::io::unix::AsyncFd;
     use tokio::sync::Notify;
 
     const BPF_MAP_CREATE: libc::c_int = 0;
+    const BPF_MAP_LOOKUP_ELEM: libc::c_int = 1;
     const BPF_MAP_UPDATE_ELEM: libc::c_int = 2;
     const BPF_MAP_DELETE_ELEM: libc::c_int = 3;
     const BPF_PROG_LOAD: libc::c_int = 5;
@@ -597,6 +1739,7 @@ mod linux_impl {
     const BPF_MAP_TYPE_LRU_HASH: u32 = 9;
     const BPF_MAP_TYPE_LPM_TRIE: u32 = 11;
     const BPF_MAP_TYPE_SOCKHASH: u32 = 18;
+    const BPF_MAP_TYPE_RINGBUF: u32 = 27;
 
     const BPF_PROG_TYPE_SCHED_CLS: u32 = 3;
     const BPF_PROG_TYPE_SK_SKB: u32 = 14;
@@ -609,6 +1752,7 @@ mod linux_impl {
         v4_lpm: OwnedFd,
         v6_lru: OwnedFd,
         v6_lpm: OwnedFd,
+        flow_seen: Option<OwnedFd>,
         _prog: OwnedFd,
         active_cidrs: Mutex<HashSet<IpNetwork>>,
     }
@@ -679,6 +1823,17 @@ mod linux_impl {
         attr[4..8].copy_from_slice(&(attach_bpf_fd as u32).to_ne_bytes());
         attr[8..12].copy_from_slice(&attach_type.to_ne_bytes());
         bpf_syscall(BPF_PROG_ATTACH, &attr)?;
+        Ok(())
+    }
+
+    fn map_lookup_elem(map_fd: i32, key: &[u8], value: &mut [u8]) -> io::Result<()> {
+        let mut attr = [0u8; 128];
+        let key_ptr = key.as_ptr() as usize as u64;
+        let val_ptr = value.as_mut_ptr() as usize as u64;
+        attr[0..4].copy_from_slice(&(map_fd as u32).to_ne_bytes());
+        attr[8..16].copy_from_slice(&key_ptr.to_ne_bytes());
+        attr[16..24].copy_from_slice(&val_ptr.to_ne_bytes());
+        bpf_syscall(BPF_MAP_LOOKUP_ELEM, &attr)?;
         Ok(())
     }
 
@@ -1071,10 +2226,241 @@ mod linux_impl {
         DIRECT_ENABLED.store(false, Ordering::SeqCst);
     }
 
+    struct RingBufMapping {
+        consumer_ptr: *mut libc::c_void,
+        producer_ptr: *mut libc::c_void,
+        page_size: usize,
+        ring_size: usize,
+    }
+
+    unsafe impl Send for RingBufMapping {}
+
+    impl RingBufMapping {
+        fn new(ring_fd: i32, ring_size: usize) -> io::Result<Self> {
+            let ps = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+            let page_size = usize::try_from(ps).unwrap_or(4096).max(4096);
+            if ring_size == 0 || !ring_size.is_power_of_two() || ring_size % page_size != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "invalid ringbuf size",
+                ));
+            }
+            let consumer_ptr = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    page_size,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    ring_fd,
+                    0,
+                )
+            };
+            if consumer_ptr == libc::MAP_FAILED {
+                return Err(io::Error::last_os_error());
+            }
+            let producer_ptr = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    page_size + 2 * ring_size,
+                    libc::PROT_READ,
+                    libc::MAP_SHARED,
+                    ring_fd,
+                    page_size as libc::off_t,
+                )
+            };
+            if producer_ptr == libc::MAP_FAILED {
+                let err = io::Error::last_os_error();
+                unsafe {
+                    libc::munmap(consumer_ptr, page_size);
+                }
+                return Err(err);
+            }
+            Ok(Self {
+                consumer_ptr,
+                producer_ptr,
+                page_size,
+                ring_size,
+            })
+        }
+
+        fn poll_events(&self) -> Vec<DirectFlowEvent> {
+            let mut out = Vec::new();
+            let mask = self.ring_size - 1;
+            let cons_atom = unsafe { &*(self.consumer_ptr as *const AtomicU64) };
+            let prod_atom = unsafe { &*(self.producer_ptr as *const AtomicU64) };
+            let data_base = unsafe { (self.producer_ptr as *const u8).add(self.page_size) };
+
+            let mut cons_pos = cons_atom.load(Ordering::Relaxed);
+            let prod_pos = prod_atom.load(Ordering::Acquire);
+            while cons_pos < prod_pos {
+                let off = (cons_pos as usize) & mask;
+                let hdr_ptr = unsafe { data_base.add(off) };
+                let len = unsafe { (*(hdr_ptr as *const std::sync::atomic::AtomicU32)).load(Ordering::Acquire) };
+                if (len & BPF_RINGBUF_BUSY_BIT) != 0 {
+                    break;
+                }
+                let data_len = (len & 0x3fff_ffff) as usize;
+                let stride = (BPF_RINGBUF_HDR_SZ + ((data_len + 7) & !7)) as u64;
+                if (len & BPF_RINGBUF_DISCARD_BIT) == 0
+                    && data_len >= std::mem::size_of::<DirectFlowEvent>()
+                {
+                    let ev = unsafe {
+                        std::ptr::read_unaligned(
+                            hdr_ptr.add(BPF_RINGBUF_HDR_SZ) as *const DirectFlowEvent
+                        )
+                    };
+                    out.push(ev);
+                }
+                cons_pos = cons_pos.saturating_add(stride);
+            }
+            cons_atom.store(cons_pos, Ordering::Release);
+            out
+        }
+    }
+
+    impl Drop for RingBufMapping {
+        fn drop(&mut self) {
+            unsafe {
+                libc::munmap(self.producer_ptr, self.page_size + 2 * self.ring_size);
+                libc::munmap(self.consumer_ptr, self.page_size);
+            }
+        }
+    }
+
+    struct TrackedDirectFlow {
+        observe: ObserveConnection,
+        last_seen: Instant,
+        is_tcp: bool,
+    }
+
+    fn handle_flow_events(
+        events: Vec<DirectFlowEvent>,
+        active_flows: &mut HashMap<DirectFlowKey, TrackedDirectFlow>,
+        router: &crate::router::DefaultRouter,
+        listener_name: &str,
+        router_name: &str,
+        direct_connectors: &HashSet<String>,
+        observe_registry: &ObserveRegistry,
+        dns_server_enabled: bool,
+    ) {
+        let now = Instant::now();
+        for ev in events {
+            let Some((proto, src_ip, src_port, dst_ip, dst_port)) = ev.key.to_tuple() else {
+                continue;
+            };
+            if dns_server_enabled && proto == 17 && dst_port == 53 {
+                continue;
+            }
+            if is_private_or_local_ip(dst_ip) {
+                continue;
+            }
+            match ev.kind {
+                DIRECT_FLOW_EVENT_OPEN => {
+                    let proto_str = if proto == 17 { "udp" } else { "tcp" };
+                    let (selected, domains, matched_domain) =
+                        router.lookup_ebpf_direct_route(router_name, src_ip, dst_ip);
+                    let outbound = if direct_connectors.contains(selected.as_str()) {
+                        selected
+                    } else {
+                        direct_connectors
+                            .iter()
+                            .next()
+                            .cloned()
+                            .unwrap_or(selected)
+                    };
+                    info!(
+                        "Route listener: {} router: {} proto: {} src_ip: {} src_port: {} dst_ip: {} dst_port: {} domains: {:?} -> {}",
+                        listener_name,
+                        router_name,
+                        proto_str,
+                        src_ip,
+                        src_port,
+                        dst_ip,
+                        dst_port,
+                        domains,
+                        outbound
+                    );
+                    let site = matched_domain.or_else(|| domains.first().cloned());
+                    let obs = observe_registry.open(ConnectionMeta {
+                        service: "rog".to_string(),
+                        network: proto_str.to_string(),
+                        listener: listener_name.to_string(),
+                        router: Some(router_name.to_string()),
+                        route: Some(outbound.clone()),
+                        inbound: Some("ebpf_direct".to_string()),
+                        outbound: Some(outbound),
+                        source: crate::util::format_endpoint(&src_ip.to_string(), src_port),
+                        destination: crate::util::format_endpoint(&dst_ip.to_string(), dst_port),
+                        site,
+                    });
+                    active_flows.insert(
+                        ev.key,
+                        TrackedDirectFlow {
+                            observe: obs,
+                            last_seen: now,
+                            is_tcp: proto == 6,
+                        },
+                    );
+                }
+                DIRECT_FLOW_EVENT_CLOSE => {
+                    if let Some(flow) = active_flows.remove(&ev.key) {
+                        flow.observe.finish();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn reap_idle_flows(active_flows: &mut HashMap<DirectFlowKey, TrackedDirectFlow>) {
+        if active_flows.is_empty() {
+            return;
+        }
+        let flow_seen_fd = DIRECT_STATE
+            .get()
+            .and_then(|s| s.flow_seen.as_ref())
+            .map(|fd| fd.as_raw_fd());
+        let now_ns = monotonic_ns();
+        let now = Instant::now();
+        let tcp_idle_ns = 180_000_000_000u64;
+        let udp_idle_ns = 60_000_000_000u64;
+
+        active_flows.retain(|key, entry| {
+            let idle_limit_ns = if entry.is_tcp { tcp_idle_ns } else { udp_idle_ns };
+            let idle_limit_dur = Duration::from_nanos(idle_limit_ns);
+            let keep = if let (Some(fd), true) = (flow_seen_fd, now_ns > 0) {
+                let mut val_bytes = [0u8; 8];
+                if map_lookup_elem(fd, key.as_bytes(), &mut val_bytes).is_ok() {
+                    let state_ns = u64::from_ne_bytes(val_bytes);
+                    if (state_ns & (1u64 << 63)) != 0 {
+                        false
+                    } else if now_ns.saturating_sub(state_ns) <= idle_limit_ns {
+                        entry.last_seen = now;
+                        true
+                    } else {
+                        let _ = map_delete_elem(fd, key.as_bytes());
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                now.saturating_duration_since(entry.last_seen) <= idle_limit_dur
+            };
+            if !keep {
+                entry.observe.finish();
+            }
+            keep
+        });
+    }
+
     pub fn enable_ebpf_offload(
         router: Arc<crate::router::DefaultRouter>,
+        listener_name: String,
         router_name: String,
         direct_connectors: HashSet<String>,
+        observe_registry: ObserveRegistry,
+        dns_server_enabled: bool,
         shutdown: CancellationToken,
     ) {
         if DIRECT_DISABLED.load(Ordering::SeqCst) {
@@ -1089,19 +2475,57 @@ mod linux_impl {
             return;
         };
 
-        let init_res = (|| -> io::Result<()> {
+        let ring_size: usize = 256 * 1024;
+        let init_res = (|| -> io::Result<Option<(OwnedFd, RingBufMapping)>> {
             let v4_lru = create_bpf_map(BPF_MAP_TYPE_LRU_HASH, 4, 8, 32768, 0)?;
             let v4_lpm = create_bpf_map(BPF_MAP_TYPE_LPM_TRIE, 8, 1, 16384, BPF_F_NO_PREALLOC)?;
             let v6_lru = create_bpf_map(BPF_MAP_TYPE_LRU_HASH, 16, 8, 32768, 0)?;
             let v6_lpm = create_bpf_map(BPF_MAP_TYPE_LPM_TRIE, 20, 1, 16384, BPF_F_NO_PREALLOC)?;
 
-            let bytecode = build_tc_direct_prog_bytecode(
-                v4_lru.as_raw_fd(),
-                v4_lpm.as_raw_fd(),
-                v6_lru.as_raw_fd(),
-                v6_lpm.as_raw_fd(),
-            );
-            let prog = load_bpf_prog(BPF_PROG_TYPE_SCHED_CLS, &bytecode)?;
+            let mut flow_seen_opt: Option<OwnedFd> = None;
+            let mut ringbuf_pair: Option<(OwnedFd, RingBufMapping)> = None;
+            let prog = match (|| -> io::Result<(OwnedFd, OwnedFd, RingBufMapping, OwnedFd)> {
+                let flow_seen = create_bpf_map(
+                    BPF_MAP_TYPE_LRU_HASH,
+                    std::mem::size_of::<DirectFlowKey>() as u32,
+                    8,
+                    32768,
+                    0,
+                )?;
+                let ring_fd =
+                    create_bpf_map(BPF_MAP_TYPE_RINGBUF, 0, 0, ring_size as u32, 0)?;
+                let mapping = RingBufMapping::new(ring_fd.as_raw_fd(), ring_size)?;
+                let bytecode = build_tc_direct_prog_with_flow_log_bytecode(
+                    v4_lru.as_raw_fd(),
+                    v4_lpm.as_raw_fd(),
+                    v6_lru.as_raw_fd(),
+                    v6_lpm.as_raw_fd(),
+                    flow_seen.as_raw_fd(),
+                    ring_fd.as_raw_fd(),
+                );
+                let prog = load_bpf_prog(BPF_PROG_TYPE_SCHED_CLS, &bytecode)?;
+                Ok((flow_seen, ring_fd, mapping, prog))
+            })() {
+                Ok((flow_seen, ring_fd, mapping, prog)) => {
+                    flow_seen_opt = Some(flow_seen);
+                    ringbuf_pair = Some((ring_fd, mapping));
+                    prog
+                }
+                Err(e) => {
+                    warn!(
+                        "ebpf_direct: ringbuf flow logging unavailable ({}), using mark-only TC program",
+                        e
+                    );
+                    let bytecode = build_tc_direct_prog_bytecode(
+                        v4_lru.as_raw_fd(),
+                        v4_lpm.as_raw_fd(),
+                        v6_lru.as_raw_fd(),
+                        v6_lpm.as_raw_fd(),
+                    );
+                    load_bpf_prog(BPF_PROG_TYPE_SCHED_CLS, &bytecode)?
+                }
+            };
+
             attach_tc_ingress_bpf(ifindex, prog.as_raw_fd())?;
             ensure_mangle_mark_bypass_rule();
 
@@ -1110,20 +2534,24 @@ mod linux_impl {
                 v4_lpm,
                 v6_lru,
                 v6_lpm,
+                flow_seen: flow_seen_opt,
                 _prog: prog,
                 active_cidrs: Mutex::new(HashSet::new()),
             });
-            Ok(())
+            Ok(ringbuf_pair)
         })();
 
-        if let Err(e) = init_res {
-            DIRECT_ENABLED.store(false, Ordering::SeqCst);
-            warn!(
-                "ebpf_direct: kernel TC eBPF offload unavailable on {} ({}), falling back to userspace Direct",
-                ifname, e
-            );
-            return;
-        }
+        let ringbuf_pair = match init_res {
+            Ok(pair) => pair,
+            Err(e) => {
+                DIRECT_ENABLED.store(false, Ordering::SeqCst);
+                warn!(
+                    "ebpf_direct: kernel TC eBPF offload unavailable on {} ({}), falling back to userspace Direct",
+                    ifname, e
+                );
+                return;
+            }
+        };
 
         let notify = CIDR_REFRESH_NOTIFY
             .get_or_init(|| Arc::new(Notify::new()))
@@ -1132,29 +2560,152 @@ mod linux_impl {
         sync_direct_cidrs(&initial_cidrs);
 
         info!(
-            "ebpf_direct: attached TC ingress eBPF fast-path on {} (ifindex={}, mark=0x78, connectors={:?}, static_cidrs={})",
+            "ebpf_direct: attached TC ingress eBPF fast-path on {} (ifindex={}, mark=0x78, flow_log={}, connectors={:?}, static_cidrs={})",
             ifname,
             ifindex,
+            ringbuf_pair.is_some(),
             direct_connectors,
             initial_cidrs.len()
         );
 
+        let router_cidr = router.clone();
+        let router_name_cidr = router_name.clone();
+        let direct_connectors_cidr = direct_connectors.clone();
+        let shutdown_cidr = shutdown.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     biased;
-                    _ = shutdown.cancelled() => {
+                    _ = shutdown_cidr.cancelled() => {
                         detach_tc_ingress_bpf(ifindex);
                         info!("ebpf_direct: detached TC ingress eBPF fast-path from {}", ifname);
                         break;
                     }
                     _ = notify.notified() => {
-                        let cidrs = router.direct_cidrs(&router_name, &direct_connectors);
+                        let cidrs = router_cidr.direct_cidrs(&router_name_cidr, &direct_connectors_cidr);
                         sync_direct_cidrs(&cidrs);
                     }
                 }
             }
         });
+
+        if let Some((ring_fd, mapping)) = ringbuf_pair {
+            tokio::spawn(async move {
+                let mut active_flows: HashMap<DirectFlowKey, TrackedDirectFlow> = HashMap::new();
+                let mut reap_tick = tokio::time::interval(Duration::from_secs(15));
+                reap_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+                match AsyncFd::new(ring_fd) {
+                    Ok(async_ring) => loop {
+                        tokio::select! {
+                            biased;
+                            _ = shutdown.cancelled() => {
+                                active_flows.clear();
+                                break;
+                            }
+                            guard_res = async_ring.readable() => {
+                                match guard_res {
+                                    Ok(mut guard) => {
+                                        let events = mapping.poll_events();
+                                        guard.clear_ready();
+                                        if !events.is_empty() {
+                                            handle_flow_events(
+                                                events,
+                                                &mut active_flows,
+                                                &router,
+                                                &listener_name,
+                                                &router_name,
+                                                &direct_connectors,
+                                                &observe_registry,
+                                                dns_server_enabled,
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("ebpf_direct: ringbuf AsyncFd error: {}", e);
+                                        break;
+                                    }
+                                }
+                            }
+                            _ = reap_tick.tick() => {
+                                let events = mapping.poll_events();
+                                if !events.is_empty() {
+                                    handle_flow_events(
+                                        events,
+                                        &mut active_flows,
+                                        &router,
+                                        &listener_name,
+                                        &router_name,
+                                        &direct_connectors,
+                                        &observe_registry,
+                                        dns_server_enabled,
+                                    );
+                                }
+                                reap_idle_flows(&mut active_flows);
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        warn!(
+                            "ebpf_direct: ringbuf AsyncFd unavailable ({}), using periodic polling",
+                            e
+                        );
+                        let mut poll_tick = tokio::time::interval(Duration::from_millis(100));
+                        poll_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                        loop {
+                            tokio::select! {
+                                biased;
+                                _ = shutdown.cancelled() => {
+                                    active_flows.clear();
+                                    break;
+                                }
+                                _ = poll_tick.tick() => {
+                                    let events = mapping.poll_events();
+                                    if !events.is_empty() {
+                                        handle_flow_events(
+                                            events,
+                                            &mut active_flows,
+                                            &router,
+                                            &listener_name,
+                                            &router_name,
+                                            &direct_connectors,
+                                            &observe_registry,
+                                            dns_server_enabled,
+                                        );
+                                    }
+                                }
+                                _ = reap_tick.tick() => {
+                                    reap_idle_flows(&mut active_flows);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    pub fn note_direct_flow(
+        udp: bool,
+        src_ip: IpAddr,
+        src_port: u16,
+        dst_ip: IpAddr,
+        dst_port: u16,
+    ) {
+        if src_port == 0 || dst_port == 0 || !DIRECT_ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
+        let Some(flow_seen) = DIRECT_STATE.get().and_then(|s| s.flow_seen.as_ref()) else {
+            return;
+        };
+        let Some(key) = DirectFlowKey::from_tuple(udp, src_ip, src_port, dst_ip, dst_port) else {
+            return;
+        };
+        let now_ns = monotonic_ns();
+        if now_ns == 0 {
+            return;
+        }
+        let _ = map_update_elem(flow_seen.as_raw_fd(), key.as_bytes(), &now_ns.to_ne_bytes(), 0);
     }
 
     pub fn offload_direct_ip(ip: IpAddr, ttl: Duration) {
@@ -1226,8 +2777,8 @@ mod linux_impl {
 
 #[cfg(target_os = "linux")]
 pub use linux_impl::{
-    disable_ebpf_offload, enable_ebpf_offload, notify_cidr_refresh, offload_direct_ip,
-    relay_tcp_streams, remove_direct_ip, sync_direct_cidrs,
+    disable_ebpf_offload, enable_ebpf_offload, note_direct_flow, notify_cidr_refresh,
+    offload_direct_ip, relay_tcp_streams, remove_direct_ip, sync_direct_cidrs,
 };
 
 #[cfg(not(target_os = "linux"))]
@@ -1236,9 +2787,22 @@ pub fn disable_ebpf_offload() {}
 #[cfg(not(target_os = "linux"))]
 pub fn enable_ebpf_offload(
     _router: Arc<crate::router::DefaultRouter>,
+    _listener_name: String,
     _router_name: String,
     _direct_connectors: HashSet<String>,
+    _observe_registry: ObserveRegistry,
+    _dns_server_enabled: bool,
     _shutdown: CancellationToken,
+) {
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn note_direct_flow(
+    _udp: bool,
+    _src_ip: IpAddr,
+    _src_port: u16,
+    _dst_ip: IpAddr,
+    _dst_port: u16,
 ) {
 }
 
@@ -1282,9 +2846,108 @@ mod tests {
         // Last instruction must be exit (0x95)
         assert_eq!(tc_code[tc_code.len() - 8], 0x95);
 
+        let tc_flow_code = build_tc_direct_prog_with_flow_log_bytecode(3, 4, 5, 6, 8, 9);
+        assert_eq!(tc_flow_code.len() % 8, 0);
+        assert!(tc_flow_code.len() / 8 > 140);
+        assert_eq!(tc_flow_code[tc_flow_code.len() - 8], 0x95);
+
         let sh_code = build_sockhash_verdict_bytecode(7);
         assert_eq!(sh_code.len() % 8, 0);
         assert_eq!(sh_code.len() / 8, 11);
         assert_eq!(sh_code[sh_code.len() - 8], 0x95);
+    }
+
+    #[test]
+    fn test_direct_flow_key_and_ringbuf_decode() {
+        assert_eq!(std::mem::size_of::<DirectFlowKey>(), 40);
+        assert_eq!(std::mem::size_of::<DirectFlowEvent>(), 48);
+
+        let k4 = DirectFlowKey::from_tuple(
+            false,
+            "::ffff:192.168.0.48".parse().unwrap(),
+            51234,
+            "220.181.38.148".parse().unwrap(),
+            443,
+        )
+        .unwrap();
+        assert_eq!(
+            k4.to_tuple().unwrap(),
+            (
+                6,
+                "192.168.0.48".parse().unwrap(),
+                51234,
+                "220.181.38.148".parse().unwrap(),
+                443
+            )
+        );
+
+        let k6 = DirectFlowKey::from_tuple(
+            true,
+            "240e:305::1".parse().unwrap(),
+            60000,
+            "2400:3200::1".parse().unwrap(),
+            443,
+        )
+        .unwrap();
+        assert_eq!(
+            k6.to_tuple().unwrap(),
+            (
+                17,
+                "240e:305::1".parse().unwrap(),
+                60000,
+                "2400:3200::1".parse().unwrap(),
+                443
+            )
+        );
+
+        let ev_open = DirectFlowEvent {
+            key: k4,
+            kind: DIRECT_FLOW_EVENT_OPEN,
+            tcp_flags: 0x02,
+            _pad: [0; 6],
+        };
+        let ev_close = DirectFlowEvent {
+            key: k6,
+            kind: DIRECT_FLOW_EVENT_CLOSE,
+            tcp_flags: 0,
+            _pad: [0; 6],
+        };
+
+        // Construct a 256-byte ring starting at pos=168 containing:
+        // OPEN (168..224) + discarded record (224..240) + wrap-around CLOSE (240..296), then BUSY at 296.
+        let mut ring = vec![0u8; 256];
+        let write_rec = |ring: &mut [u8], pos: usize, hdr_len: u32, payload: &[u8]| {
+            let off = pos & (ring.len() - 1);
+            ring[off..off + 4].copy_from_slice(&hdr_len.to_ne_bytes());
+            for (i, b) in payload.iter().enumerate() {
+                ring[(off + BPF_RINGBUF_HDR_SZ + i) & (ring.len() - 1)] = *b;
+            }
+        };
+
+        let open_bytes = unsafe {
+            std::slice::from_raw_parts(
+                (&ev_open as *const DirectFlowEvent) as *const u8,
+                std::mem::size_of::<DirectFlowEvent>(),
+            )
+        };
+        let close_bytes = unsafe {
+            std::slice::from_raw_parts(
+                (&ev_close as *const DirectFlowEvent) as *const u8,
+                std::mem::size_of::<DirectFlowEvent>(),
+            )
+        };
+
+        // Record 0 at pos=168 (56B stride -> next=224)
+        write_rec(&mut ring, 168, 48, open_bytes);
+        // Record 1 at pos=224 discarded (len=8 -> 16B stride -> next=240)
+        write_rec(&mut ring, 224, 8 | BPF_RINGBUF_DISCARD_BIT, &[0u8; 8]);
+        // Record 2 at pos=240 (wraps around 256 boundary! 56B stride -> next=296)
+        write_rec(&mut ring, 240, 48, close_bytes);
+        // Record 3 at pos=296 busy (must stop here)
+        write_rec(&mut ring, 296, 48 | BPF_RINGBUF_BUSY_BIT, &[0u8; 48]);
+
+        let (new_cons, decoded) = decode_ringbuf_records(&ring, 168, 352);
+        assert_eq!(new_cons, 296);
+        assert_eq!(decoded, vec![ev_open, ev_close]);
     }
 }

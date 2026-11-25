@@ -85,6 +85,15 @@ impl def::RouterSet for DefaultRouter {
                             std::time::Duration::from_secs(1800),
                         );
                     }
+                    if self.ebpf_direct_connectors.contains(selected.as_str()) {
+                        crate::util::ebpf::note_direct_flow(
+                            addr.udp,
+                            client,
+                            context.client_port.unwrap_or(0),
+                            target,
+                            addr.port,
+                        );
+                    }
                     log::info!(
                         "Route listener: {} router: {} proto: {} src_ip: {} src_port: {} dst_ip: {} dst_port: {} domains: {:?} -> {}",
                         l_name,
@@ -202,6 +211,27 @@ impl DefaultRouter {
             .get(r_name)
             .map(|r| r.direct_cidrs(direct_connectors))
             .unwrap_or_default()
+    }
+
+    pub(crate) fn lookup_ebpf_direct_route(
+        &self,
+        r_name: &str,
+        client_ip: std::net::IpAddr,
+        target_ip: std::net::IpAddr,
+    ) -> (String, Vec<String>, Option<String>) {
+        let domains = self
+            .dns_table
+            .as_ref()
+            .map(|t| t.get_domains(r_name, client_ip, target_ip))
+            .unwrap_or_default();
+        let target_str = target_ip.to_string();
+        if let Some(router) = self.router_map.get(r_name) {
+            let (selected, matched_domain) = router.route_mapped_with_domain(&target_str, &domains);
+            (selected, domains, matched_domain)
+        } else {
+            let fallback = domains.first().cloned();
+            ("default".to_string(), domains, fallback)
+        }
     }
 }
 

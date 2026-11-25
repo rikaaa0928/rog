@@ -78,8 +78,11 @@ pub async fn run(options: RunOptions) -> std::io::Result<()> {
             let direct_connectors = cfg.resolve_ebpf_direct_connectors();
             crate::util::ebpf::enable_ebpf_offload(
                 router.clone(),
+                tproxy_listener.name.clone(),
                 tproxy_listener.router.clone(),
                 direct_connectors,
+                observe_registry.clone(),
+                cfg.dns.is_some(),
                 shutdown.clone(),
             );
         } else {

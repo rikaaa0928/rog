@@ -134,7 +134,6 @@ impl DefaultBaseRouter {
                 continue;
             };
             if data.kind() != MatchKind::Domain
-                && data.match_host(ip)
                 && rule.exclude.is_match(ip)
                 && direct_connectors.contains(&rule.select)
             {
@@ -275,6 +274,17 @@ mod dns_tests {
         ]);
         // Excluded from a Direct CIDR rule => never offload even before non-Direct domain is queried.
         assert!(!r.allows_ebpf_direct_offload(
+            "141.147.149.97",
+            &["ragents-api.ip.rikaaa0928.moe".into()],
+            &direct,
+        ));
+        // Excluded even when the CIDR matcher itself is still empty (e.g. remote rule loading at startup).
+        let r_unloaded = build(&[
+            ("domain-suffix", "llm.rikaaa0928.moe", "ROGJPH3", vec![]),
+            ("cidr", "", "Direct", vec!["^141\\.147\\.149\\.97$".into()]),
+            ("domain-suffix", "ip.rikaaa0928.moe", "Direct", vec![]),
+        ]);
+        assert!(!r_unloaded.allows_ebpf_direct_offload(
             "141.147.149.97",
             &["ragents-api.ip.rikaaa0928.moe".into()],
             &direct,
