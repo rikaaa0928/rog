@@ -37,6 +37,9 @@ impl RunListener for PbTcpListener {
         let (udp_tx, udp_rx) = mpsc::channel::<(OwnedReadHalf, OwnedWriteHalf, String)>(8);
         let auth = self.cfg.listener.pw.as_ref().unwrap().clone();
         let bind_addr = addr.to_owned();
+        let tcp_opts = crate::util::grpc_transport::TcpSocketOptions::from_options_with_defaults(
+            &self.cfg.listener.options,
+        );
 
         spawn(async move {
             let listener = match TcpListener::bind(&bind_addr).await {
@@ -55,7 +58,7 @@ impl RunListener for PbTcpListener {
                         continue;
                     }
                 };
-                let _ = tcp_stream.set_nodelay(true);
+                crate::util::grpc_transport::apply_tcp_socket_options(&tcp_stream, &tcp_opts);
                 let stream_tx = stream_tx.clone();
                 let udp_tx = udp_tx.clone();
                 let auth = auth.clone();

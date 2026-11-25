@@ -6,7 +6,7 @@ use std::any::Any;
 use std::io::{self, ErrorKind};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -83,6 +83,7 @@ struct PooledClientConn {
     id: u64,
     conn: ActiveClientConn,
     quinn_conn: Option<quinn::Connection>,
+    h2_alive: Option<Arc<AtomicBool>>,
     keep_alive: Arc<ConnKeepAlive>,
     is_h3: bool,
 }
@@ -92,6 +93,7 @@ impl PooledClientConn {
         id: u64,
         conn: ActiveClientConn,
         quinn_conn: Option<quinn::Connection>,
+        h2_alive: Option<Arc<AtomicBool>>,
         endpoint: Option<quinn::Endpoint>,
         is_h3: bool,
     ) -> Self {
@@ -103,17 +105,74 @@ impl PooledClientConn {
             id,
             conn,
             quinn_conn,
+            h2_alive,
             keep_alive,
             is_h3,
         }
     }
 
     fn is_alive(&self) -> bool {
+        if let Some(ref alive) = self.h2_alive
+            && !alive.load(Ordering::Acquire)
+        {
+            return false;
+        }
         match self.quinn_conn {
             Some(ref qc) => qc.close_reason().is_none(),
             None => true,
         }
     }
+}
+
+fn spawn_h2_driver<T>(
+    mut conn: h2::client::Connection<T>,
+    authority: String,
+    keep_alive_interval: Option<Duration>,
+    keep_alive_timeout: Duration,
+    label: &'static str,
+) -> Arc<AtomicBool>
+where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let alive = Arc::new(AtomicBool::new(true));
+    let alive_clone = alive.clone();
+    let ping_pong = conn.ping_pong();
+    tokio::spawn(async move {
+        let mut ping_fut = std::pin::pin!(async move {
+            let (Some(mut pp), Some(interval_dur)) = (ping_pong, keep_alive_interval) else {
+                std::future::pending::<()>().await;
+                return Ok::<(), String>(());
+            };
+            let mut ticker = tokio::time::interval(interval_dur);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                match tokio::time::timeout(keep_alive_timeout, pp.ping(h2::Ping::opaque())).await {
+                    Ok(Ok(_pong)) => {}
+                    Ok(Err(e)) => return Err(format!("ping failed: {e}")),
+                    Err(_) => {
+                        return Err(format!("ping timed out after {:?}", keep_alive_timeout));
+                    }
+                }
+            }
+        });
+
+        tokio::select! {
+            res = &mut conn => {
+                if let Err(e) = res {
+                    debug!("{label} connection to {authority} closed: {e}");
+                }
+            }
+            res = &mut ping_fut => {
+                if let Err(reason) = res {
+                    warn!("{label} connection to {authority} {reason}");
+                }
+            }
+        }
+        alive_clone.store(false, Ordering::Release);
+    });
+    alive
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -484,7 +543,7 @@ impl H3RunConnector {
         &self,
         addrs: &[SocketAddr],
         use_tls: bool,
-    ) -> io::Result<ActiveClientConn> {
+    ) -> io::Result<(ActiveClientConn, Arc<AtomicBool>)> {
         let mut last_err = None;
         for &remote_addr in addrs {
             match tokio::time::timeout(
@@ -503,11 +562,19 @@ impl H3RunConnector {
                             self.grpc_opts.tcp_keepalive_retries,
                         );
                     }
+                    if let Some(user_timeout) = self.grpc_opts.tcp_user_timeout {
+                        let _ = crate::util::grpc_transport::apply_tcp_user_timeout(
+                            &tcp,
+                            user_timeout,
+                        );
+                    }
                     let mut h2_builder = h2::client::Builder::new();
                     h2_builder
                         .initial_window_size(self.stream_window)
                         .initial_connection_window_size(self.conn_window)
                         .max_frame_size(DEFAULT_H2_MAX_FRAME_SIZE);
+                    let keep_alive_interval = self.grpc_opts.effective_keep_alive_interval();
+                    let keep_alive_timeout = self.grpc_opts.keep_alive_timeout;
 
                     if use_tls {
                         let connector =
@@ -528,31 +595,35 @@ impl H3RunConnector {
                             .handshake(tls_stream)
                             .await
                             .map_err(|e| io::Error::other(format!("h2 handshake error: {e}")))?;
-                        tokio::spawn(async move {
-                            if let Err(e) = conn.await {
-                                debug!("H2 fallback TLS connection closed: {e}");
-                            }
-                        });
+                        let alive = spawn_h2_driver(
+                            conn,
+                            self.authority.clone(),
+                            keep_alive_interval,
+                            keep_alive_timeout,
+                            "H2 fallback TLS",
+                        );
                         info!(
                             "H2 (TLS fallback) connection established to {} ({})",
                             self.authority, remote_addr
                         );
-                        return Ok(ActiveClientConn::H2(sender));
+                        return Ok((ActiveClientConn::H2(sender), alive));
                     } else {
                         let (sender, conn) = h2_builder
                             .handshake(tcp)
                             .await
                             .map_err(|e| io::Error::other(format!("h2c handshake error: {e}")))?;
-                        tokio::spawn(async move {
-                            if let Err(e) = conn.await {
-                                debug!("H2c connection closed: {e}");
-                            }
-                        });
+                        let alive = spawn_h2_driver(
+                            conn,
+                            self.authority.clone(),
+                            keep_alive_interval,
+                            keep_alive_timeout,
+                            "H2c",
+                        );
                         info!(
                             "H2c connection established to {} ({})",
                             self.authority, remote_addr
                         );
-                        return Ok(ActiveClientConn::H2(sender));
+                        return Ok((ActiveClientConn::H2(sender), alive));
                     }
                 }
                 Ok(Err(e)) => last_err = Some(e),
@@ -576,27 +647,46 @@ impl H3RunConnector {
         }
         match self.scheme {
             TransportScheme::HttpCleartext => {
-                let conn = self.establish_h2(&addrs, false).await?;
-                Ok(PooledClientConn::new(id, conn, None, None, false))
+                let (conn, alive) = self.establish_h2(&addrs, false).await?;
+                Ok(PooledClientConn::new(id, conn, None, Some(alive), None, false))
             }
             TransportScheme::HttpsOrH3 | TransportScheme::H3Insecure => {
                 if self.force_h2 || (self.fallback_h2 && self.is_h3_in_cooldown()) {
-                    let conn = self.establish_h2(&addrs, true).await?;
-                    return Ok(PooledClientConn::new(id, conn, None, None, false));
+                    let (conn, alive) = self.establish_h2(&addrs, true).await?;
+                    return Ok(PooledClientConn::new(
+                        id,
+                        conn,
+                        None,
+                        Some(alive),
+                        None,
+                        false,
+                    ));
                 }
                 match self.establish_quinn_h3(&addrs).await {
-                    Ok((conn, quinn_conn, ep)) => {
-                        Ok(PooledClientConn::new(id, conn, Some(quinn_conn), ep, true))
-                    }
+                    Ok((conn, quinn_conn, ep)) => Ok(PooledClientConn::new(
+                        id,
+                        conn,
+                        Some(quinn_conn),
+                        None,
+                        ep,
+                        true,
+                    )),
                     Err(h3_err) => {
                         if self.fallback_h2 {
                             warn!(
                                 "QUIC H3 connection to {} failed ({}), falling back to HTTP/2 over TLS",
                                 self.authority, h3_err
                             );
-                            let conn = self.establish_h2(&addrs, true).await?;
+                            let (conn, alive) = self.establish_h2(&addrs, true).await?;
                             self.enter_h3_cooldown(H3_HANDSHAKE_FAIL_COOLDOWN);
-                            Ok(PooledClientConn::new(id, conn, None, None, false))
+                            Ok(PooledClientConn::new(
+                                id,
+                                conn,
+                                None,
+                                Some(alive),
+                                None,
+                                false,
+                            ))
                         } else {
                             Err(h3_err)
                         }
@@ -1043,5 +1133,65 @@ mod tests {
             }
         }
         assert!(connector.is_h3_in_cooldown());
+    }
+
+    #[tokio::test]
+    async fn test_h2_ping_watchdog_closes_unresponsive_connection() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Simulate a half-open / blackholed peer: accept H2, send 200 OK headers on the stream,
+        // then park the H2 connection task without polling it (so PINGs go unanswered and no FIN is sent).
+        let server_task = tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let mut h2_conn = h2::server::handshake(sock).await.unwrap();
+            if let Some(Ok((_req, mut respond))) = h2_conn.accept().await {
+                let resp = http::Response::builder().status(200).body(()).unwrap();
+                let _send = respond.send_response(resp, false).unwrap();
+                // Park h2_conn without polling to blackhole PINGs and DATA while keeping TCP open.
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                drop(h2_conn);
+            }
+        });
+
+        let mut opts = HashMap::new();
+        opts.insert("connections".to_string(), toml::Value::Integer(1));
+        opts.insert("keep_alive".to_string(), toml::Value::Boolean(true));
+        opts.insert(
+            "keep_alive_interval_secs".to_string(),
+            toml::Value::Integer(1),
+        );
+        opts.insert(
+            "keep_alive_timeout_secs".to_string(),
+            toml::Value::Integer(1),
+        );
+        let conn_cfg = config::Connector {
+            name: "out".to_string(),
+            proto: "h3".to_string(),
+            endpoint: Some(format!("h2c://127.0.0.1:{port}")),
+            user: None,
+            pw: Some("secret123".to_string()),
+            dns: None,
+            options: Some(opts),
+        };
+        let connector = H3RunConnector::new(&conn_cfg).await.unwrap();
+        let mut stream = connector.connect("1.1.1.1:443".to_string()).await.unwrap();
+        stream.write(b"ping").await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let res = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf))
+            .await
+            .expect("h2 ping watchdog should abort stalled stream promptly");
+        match res {
+            Ok(0) | Err(_) => {}
+            Ok(n) => panic!("unexpected bytes from blackholed h2 peer: {n}"),
+        }
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let pooled = connector.pool[0].lock().await;
+        if let Some(ref conn) = *pooled {
+            assert!(!conn.is_alive(), "timed-out h2 connection should be marked dead");
+        }
+        server_task.abort();
     }
 }

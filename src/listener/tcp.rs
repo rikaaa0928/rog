@@ -1,20 +1,33 @@
 use crate::def::{RunAccStream, RunAcceptor, RunListener, RunStream};
 use crate::stream::tcp::TcpRunStream;
 use crate::util::RunAddr;
+use crate::util::grpc_transport::{TcpSocketOptions, apply_tcp_socket_options};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
 pub struct TcpRunAcceptor {
     inner: TcpListener,
+    tcp_opts: TcpSocketOptions,
 }
 
-pub struct TcpRunListener {}
+pub struct TcpRunListener {
+    tcp_opts: TcpSocketOptions,
+}
+
+impl TcpRunListener {
+    pub fn from_options(options: &Option<HashMap<String, toml::Value>>) -> Self {
+        Self {
+            tcp_opts: TcpSocketOptions::from_options_with_defaults(options),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl RunAcceptor for TcpRunAcceptor {
     async fn accept(&self) -> std::io::Result<(RunAccStream, SocketAddr)> {
         let (socket, addr) = self.inner.accept().await?;
-        let _ = socket.set_nodelay(true);
+        apply_tcp_socket_options(&socket, &self.tcp_opts);
         let mut stream = TcpRunStream::new(socket);
         stream.set_info(&mut |x| x.protocol_name = "tcp".to_string());
         Ok((RunAccStream::TCPStream(Box::new(stream)), addr))
@@ -41,6 +54,9 @@ impl RunAcceptor for TcpRunAcceptor {
 impl RunListener for TcpRunListener {
     async fn listen(&self, addr: &str) -> std::io::Result<Box<dyn RunAcceptor>> {
         let listener = TcpListener::bind(addr).await?;
-        Ok(Box::new(TcpRunAcceptor { inner: listener }))
+        Ok(Box::new(TcpRunAcceptor {
+            inner: listener,
+            tcp_opts: self.tcp_opts.clone(),
+        }))
     }
 }

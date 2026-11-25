@@ -15,7 +15,7 @@ pub(crate) mod tcp;
 pub async fn create(cfg: &config::Connector) -> std::io::Result<Box<dyn RunConnector>> {
     match cfg.proto.as_str() {
         "tcp" => {
-            let res = TcpRunConnector::new();
+            let res = TcpRunConnector::new(cfg);
             Ok(Box::new(res))
         }
         "grpc" => {

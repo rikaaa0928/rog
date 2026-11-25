@@ -11,6 +11,87 @@ use tower::service_fn;
 
 use crate::util::parse::parse_size;
 
+pub(crate) const DEFAULT_TCP_KEEPALIVE_SECS: u64 = 20;
+pub(crate) const DEFAULT_TCP_KEEPALIVE_INTERVAL_SECS: u64 = 5;
+pub(crate) const DEFAULT_TCP_KEEPALIVE_RETRIES: u32 = 3;
+pub(crate) const DEFAULT_TCP_USER_TIMEOUT_SECS: u64 = 35;
+
+#[derive(Debug, Clone)]
+pub(crate) struct TcpSocketOptions {
+    pub tcp_nodelay: bool,
+    pub tcp_keepalive: Option<Duration>,
+    pub tcp_keepalive_interval: Option<Duration>,
+    pub tcp_keepalive_retries: Option<u32>,
+    pub tcp_user_timeout: Option<Duration>,
+}
+
+impl Default for TcpSocketOptions {
+    fn default() -> Self {
+        Self::from_options_with_defaults(&None)
+    }
+}
+
+impl TcpSocketOptions {
+    pub fn from_options_with_defaults(
+        options: &Option<std::collections::HashMap<String, toml::Value>>,
+    ) -> Self {
+        let tcp_nodelay = option_bool(options, &["tcp_nodelay"], true);
+        let tcp_keepalive = match option_u64(options, &["tcp_keepalive_secs"]) {
+            Some(0) => None,
+            Some(secs) => Some(Duration::from_secs(secs)),
+            None => {
+                if option_bool_opt(options, &["tcp_keepalive"]) == Some(false) {
+                    None
+                } else {
+                    Some(Duration::from_secs(DEFAULT_TCP_KEEPALIVE_SECS))
+                }
+            }
+        };
+        let tcp_keepalive_interval = if tcp_keepalive.is_some() {
+            match option_u64(options, &["tcp_keepalive_interval_secs"]) {
+                Some(0) => None,
+                Some(secs) => Some(Duration::from_secs(secs)),
+                None => Some(Duration::from_secs(DEFAULT_TCP_KEEPALIVE_INTERVAL_SECS)),
+            }
+        } else {
+            None
+        };
+        let tcp_keepalive_retries = if tcp_keepalive.is_some() {
+            match option_u32(options, &["tcp_keepalive_retries"]) {
+                Some(0) => None,
+                Some(n) => Some(n),
+                None => Some(DEFAULT_TCP_KEEPALIVE_RETRIES),
+            }
+        } else {
+            None
+        };
+        let default_user_timeout = default_tcp_user_timeout(
+            tcp_keepalive_interval,
+            tcp_keepalive_retries,
+        );
+        let tcp_user_timeout = match option_u64(options, &["tcp_user_timeout_secs"]) {
+            Some(0) => None,
+            Some(secs) => Some(Duration::from_secs(secs)),
+            None => Some(default_user_timeout),
+        };
+        Self {
+            tcp_nodelay,
+            tcp_keepalive,
+            tcp_keepalive_interval,
+            tcp_keepalive_retries,
+            tcp_user_timeout,
+        }
+    }
+}
+
+fn default_tcp_user_timeout(interval: Option<Duration>, retries: Option<u32>) -> Duration {
+    let probe_window = interval
+        .unwrap_or_else(|| Duration::from_secs(DEFAULT_TCP_KEEPALIVE_INTERVAL_SECS))
+        .saturating_mul(retries.unwrap_or(DEFAULT_TCP_KEEPALIVE_RETRIES))
+        .saturating_add(Duration::from_secs(5));
+    probe_window.max(Duration::from_secs(DEFAULT_TCP_USER_TIMEOUT_SECS))
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct GrpcTransportOptions {
     pub keep_alive: bool,
@@ -22,6 +103,7 @@ pub(crate) struct GrpcTransportOptions {
     pub tcp_keepalive: Option<Duration>,
     pub tcp_keepalive_interval: Option<Duration>,
     pub tcp_keepalive_retries: Option<u32>,
+    pub tcp_user_timeout: Option<Duration>,
     pub tcp_nodelay: bool,
     pub initial_stream_window_size: Option<u32>,
     pub initial_connection_window_size: Option<u32>,
@@ -53,6 +135,20 @@ impl GrpcTransportOptions {
         let max_message_size =
             option_size(options, &["max_message_size", "max_message_size_bytes"]);
 
+        let tcp_keepalive = option_duration_secs_opt(options, &["tcp_keepalive_secs"]);
+        let tcp_keepalive_interval = option_duration_secs_opt(
+            options,
+            &["tcp_keepalive_interval_secs"],
+        );
+        let tcp_keepalive_retries = option_u32(options, &["tcp_keepalive_retries"]);
+        let tcp_user_timeout = match option_u64(options, &["tcp_user_timeout_secs"]) {
+            Some(0) => None,
+            Some(secs) => Some(Duration::from_secs(secs)),
+            None => tcp_keepalive.map(|_| {
+                default_tcp_user_timeout(tcp_keepalive_interval, tcp_keepalive_retries)
+            }),
+        };
+
         Self {
             keep_alive,
             keep_alive_interval,
@@ -67,12 +163,10 @@ impl GrpcTransportOptions {
                 ],
             ),
             connect_timeout: option_duration_secs_opt(options, &["connect_timeout_secs"]),
-            tcp_keepalive: option_duration_secs_opt(options, &["tcp_keepalive_secs"]),
-            tcp_keepalive_interval: option_duration_secs_opt(
-                options,
-                &["tcp_keepalive_interval_secs"],
-            ),
-            tcp_keepalive_retries: option_u32(options, &["tcp_keepalive_retries"]),
+            tcp_keepalive,
+            tcp_keepalive_interval,
+            tcp_keepalive_retries,
+            tcp_user_timeout,
             tcp_nodelay: option_bool(options, &["tcp_nodelay"], true),
             initial_stream_window_size: option_size_u32(
                 options,
@@ -262,6 +356,9 @@ pub(crate) async fn connect_channel_with_bootstrap(
                         tcp_keepalive_interval,
                         tcp_keepalive_retries,
                     )?;
+                    let user_timeout =
+                        default_tcp_user_timeout(tcp_keepalive_interval, tcp_keepalive_retries);
+                    let _ = apply_tcp_user_timeout(&stream, user_timeout);
                 }
 
                 Ok::<_, io::Error>(TokioIo::new(stream))
@@ -296,15 +393,50 @@ pub(crate) fn apply_tcp_keepalive(
         all(target_os = "wasi", not(target_env = "p1")),
     ))]
     {
-        if let Some(interval) = interval {
-            keepalive = keepalive.with_interval(interval);
-        }
-        if let Some(retries) = retries {
-            keepalive = keepalive.with_retries(retries);
-        }
+        keepalive = keepalive.with_interval(
+            interval.unwrap_or_else(|| Duration::from_secs(DEFAULT_TCP_KEEPALIVE_INTERVAL_SECS)),
+        );
+        keepalive = keepalive.with_retries(retries.unwrap_or(DEFAULT_TCP_KEEPALIVE_RETRIES));
     }
 
     SockRef::from(stream).set_tcp_keepalive(&keepalive)
+}
+
+pub(crate) fn apply_tcp_user_timeout(stream: &TcpStream, timeout: Duration) -> io::Result<()> {
+    #[cfg(any(
+        target_os = "android",
+        target_os = "fuchsia",
+        target_os = "linux",
+        target_os = "cygwin",
+    ))]
+    {
+        SockRef::from(stream).set_tcp_user_timeout(Some(timeout))
+    }
+    #[cfg(not(any(
+        target_os = "android",
+        target_os = "fuchsia",
+        target_os = "linux",
+        target_os = "cygwin",
+    )))]
+    {
+        let _ = (stream, timeout);
+        Ok(())
+    }
+}
+
+pub(crate) fn apply_tcp_socket_options(stream: &TcpStream, opts: &TcpSocketOptions) {
+    let _ = stream.set_nodelay(opts.tcp_nodelay);
+    if let Some(keepalive) = opts.tcp_keepalive {
+        let _ = apply_tcp_keepalive(
+            stream,
+            keepalive,
+            opts.tcp_keepalive_interval,
+            opts.tcp_keepalive_retries,
+        );
+    }
+    if let Some(user_timeout) = opts.tcp_user_timeout {
+        let _ = apply_tcp_user_timeout(stream, user_timeout);
+    }
 }
 
 fn option_value<'a>(
@@ -337,6 +469,13 @@ fn option_duration_secs(
 ) -> Duration {
     let secs = option_u64(options, keys).unwrap_or(default_secs);
     Duration::from_secs(secs)
+}
+
+pub(crate) fn option_duration_secs_opt_public(
+    options: &Option<std::collections::HashMap<String, toml::Value>>,
+    keys: &[&str],
+) -> Option<Duration> {
+    option_duration_secs_opt(options, keys)
 }
 
 fn option_duration_secs_opt(
@@ -420,5 +559,81 @@ mod tests {
             Some(Duration::from_secs(25))
         );
         assert_eq!(opts.max_idle_timeout, Some(Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn test_tcp_socket_options_defaults_overrides_and_disable() {
+        let defaults = TcpSocketOptions::from_options_with_defaults(&None);
+        assert!(defaults.tcp_nodelay);
+        assert_eq!(
+            defaults.tcp_keepalive,
+            Some(Duration::from_secs(DEFAULT_TCP_KEEPALIVE_SECS))
+        );
+        assert_eq!(
+            defaults.tcp_keepalive_interval,
+            Some(Duration::from_secs(DEFAULT_TCP_KEEPALIVE_INTERVAL_SECS))
+        );
+        assert_eq!(
+            defaults.tcp_keepalive_retries,
+            Some(DEFAULT_TCP_KEEPALIVE_RETRIES)
+        );
+        assert_eq!(
+            defaults.tcp_user_timeout,
+            Some(Duration::from_secs(DEFAULT_TCP_USER_TIMEOUT_SECS))
+        );
+
+        let mut custom = HashMap::new();
+        custom.insert("tcp_nodelay".to_string(), toml::Value::Boolean(false));
+        custom.insert("tcp_keepalive_secs".to_string(), toml::Value::Integer(45));
+        custom.insert(
+            "tcp_keepalive_interval_secs".to_string(),
+            toml::Value::Integer(12),
+        );
+        custom.insert("tcp_keepalive_retries".to_string(), toml::Value::Integer(4));
+        let custom_opts = TcpSocketOptions::from_options_with_defaults(&Some(custom));
+        assert!(!custom_opts.tcp_nodelay);
+        assert_eq!(custom_opts.tcp_keepalive, Some(Duration::from_secs(45)));
+        assert_eq!(
+            custom_opts.tcp_keepalive_interval,
+            Some(Duration::from_secs(12))
+        );
+        assert_eq!(custom_opts.tcp_keepalive_retries, Some(4));
+        // 12 * 4 + 5 = 53s > 35s
+        assert_eq!(custom_opts.tcp_user_timeout, Some(Duration::from_secs(53)));
+
+        let mut disabled = HashMap::new();
+        disabled.insert("tcp_keepalive_secs".to_string(), toml::Value::Integer(0));
+        disabled.insert("tcp_user_timeout_secs".to_string(), toml::Value::Integer(0));
+        let disabled_opts = TcpSocketOptions::from_options_with_defaults(&Some(disabled));
+        assert_eq!(disabled_opts.tcp_keepalive, None);
+        assert_eq!(disabled_opts.tcp_keepalive_interval, None);
+        assert_eq!(disabled_opts.tcp_keepalive_retries, None);
+        assert_eq!(disabled_opts.tcp_user_timeout, None);
+
+        let mut flag_disabled = HashMap::new();
+        flag_disabled.insert("tcp_keepalive".to_string(), toml::Value::Boolean(false));
+        let flag_disabled_opts = TcpSocketOptions::from_options_with_defaults(&Some(flag_disabled));
+        assert_eq!(flag_disabled_opts.tcp_keepalive, None);
+        assert_eq!(
+            flag_disabled_opts.tcp_user_timeout,
+            Some(Duration::from_secs(DEFAULT_TCP_USER_TIMEOUT_SECS))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_tcp_socket_options_on_connected_pair() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accept_task = tokio::spawn(async move { listener.accept().await.unwrap() });
+        let client = TcpStream::connect(addr).await.unwrap();
+        let (server, _) = accept_task.await.unwrap();
+
+        let opts = TcpSocketOptions::default();
+        apply_tcp_socket_options(&client, &opts);
+        apply_tcp_socket_options(&server, &opts);
+
+        assert!(client.nodelay().unwrap());
+        assert!(SockRef::from(&client).keepalive().unwrap());
+        assert!(SockRef::from(&server).keepalive().unwrap());
     }
 }

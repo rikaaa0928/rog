@@ -190,6 +190,7 @@ impl RunListener for H3Listener {
         let tcp_keepalive = grpc_opts.tcp_keepalive;
         let tcp_keepalive_interval = grpc_opts.tcp_keepalive_interval;
         let tcp_keepalive_retries = grpc_opts.tcp_keepalive_retries;
+        let tcp_user_timeout = grpc_opts.tcp_user_timeout;
 
         tokio::spawn(async move {
             loop {
@@ -207,6 +208,12 @@ impl RunListener for H3Listener {
                         tcp_keepalive,
                         tcp_keepalive_interval,
                         tcp_keepalive_retries,
+                    );
+                }
+                if let Some(user_timeout) = tcp_user_timeout {
+                    let _ = crate::util::grpc_transport::apply_tcp_user_timeout(
+                        &socket,
+                        user_timeout,
                     );
                 }
                 let tcp_tx = tcp_tx_h2.clone();

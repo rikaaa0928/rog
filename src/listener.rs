@@ -25,7 +25,7 @@ pub async fn create(
 ) -> std::io::Result<Box<dyn RunAcceptor>> {
     match cfg.listener.proto.as_str() {
         "socks5" => {
-            let listener = TcpRunListener {}
+            let listener = TcpRunListener::from_options(&cfg.listener.options)
                 .listen(cfg.listener.endpoint.as_str())
                 .await?;
             let socks5 = Box::new(SocksRunAcceptor::new(listener, None, None));
@@ -47,7 +47,7 @@ pub async fn create(
             Ok(acc)
         }
         "http" => {
-            let listener = TcpRunListener {}
+            let listener = TcpRunListener::from_options(&cfg.listener.options)
                 .listen(cfg.listener.endpoint.as_str())
                 .await?;
             let http = Box::new(HttpRunAcceptor::new(
@@ -64,7 +64,7 @@ pub async fn create(
             Ok(acc)
         }
         "htss5" => {
-            let listener = TcpRunListener {}
+            let listener = TcpRunListener::from_options(&cfg.listener.options)
                 .listen(cfg.listener.endpoint.as_str())
                 .await?;
             let http = Box::new(Htss5RunAcceptor::new(

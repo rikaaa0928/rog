@@ -185,6 +185,7 @@ pub struct TproxyOptions {
     pub suppress_ipv6_ra_ttl_secs: u64,
     pub ebpf_direct_offload: bool,
     pub ebpf_direct_connectors: Vec<String>,
+    pub tcp_opts: crate::util::grpc_transport::TcpSocketOptions,
 }
 
 impl TproxyOptions {
@@ -249,6 +250,10 @@ impl TproxyOptions {
             }
         }
 
+        let tcp_opts = crate::util::grpc_transport::TcpSocketOptions::from_options_with_defaults(
+            &listener.options,
+        );
+
         Self {
             mode,
             udp_idle_timeout_secs,
@@ -257,6 +262,7 @@ impl TproxyOptions {
             suppress_ipv6_ra_ttl_secs,
             ebpf_direct_offload,
             ebpf_direct_connectors,
+            tcp_opts,
         }
     }
 }
@@ -656,6 +662,7 @@ impl TproxyListener {
             info!("tproxy listening tcp {}", listen_addr);
             let accept_tx_tcp = accept_tx.clone();
             let shutdown_tcp = self.shutdown.clone();
+            let tcp_opts = options.tcp_opts.clone();
 
             tokio::spawn(async move {
                 let unmapped_listen = unmapped_socket_addr(listen_addr);
@@ -681,7 +688,10 @@ impl TproxyListener {
                                         continue;
                                     }
                                     crate::util::ra_suppress::note_client_ip(peer.ip());
-                                    let _ = stream.set_nodelay(true);
+                                    crate::util::grpc_transport::apply_tcp_socket_options(
+                                        &stream,
+                                        &tcp_opts,
+                                    );
                                     let mut tcp_stream = TcpRunStream::new(stream);
                                     tcp_stream.set_info(&mut |x| {
                                         x.protocol_name = "tproxy".to_string();

@@ -156,6 +156,9 @@ pub(crate) async fn connect_endpoint(
         .filter(|&v| v > 0)
         .map(|v| Duration::from_secs(v as u64))
         .unwrap_or(Duration::from_secs(5));
+    let tcp_opts = crate::util::grpc_transport::TcpSocketOptions::from_options_with_defaults(
+        options,
+    );
     let servers = servers(options)?;
     if let Ok(address) = endpoint.parse::<SocketAddr>() {
         let stream = timeout(connect_timeout, TcpStream::connect(address))
@@ -163,16 +166,18 @@ pub(crate) async fn connect_endpoint(
             .map_err(|_| {
                 io::Error::new(io::ErrorKind::TimedOut, "proxy endpoint connect timeout")
             })??;
-        let _ = stream.set_nodelay(true);
+        crate::util::grpc_transport::apply_tcp_socket_options(&stream, &tcp_opts);
         return Ok(stream);
     }
     let (host, port) = crate::connector::grpc::parse_address(endpoint)?;
-    timeout(
+    let stream = timeout(
         connect_timeout + Duration::from_secs(4),
         connect(&host, port, servers.as_deref()),
     )
     .await
-    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "proxy endpoint connect timeout"))?
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "proxy endpoint connect timeout"))??;
+    crate::util::grpc_transport::apply_tcp_socket_options(&stream, &tcp_opts);
+    Ok(stream)
 }
 
 #[cfg(test)]
