@@ -201,6 +201,7 @@ name = "Proxy"
 proto = "h3"
 endpoint = "https://proxy.example.com:443"
 pw = "your_password"
+# ipv6 = true # Default true; set to false if this exit lacks IPv6 so DNS strips AAAA and HTTPS ipv6hint for domains routed here
 # Inherits dns and bootstrap_dns from [dns].default_servers / bootstrap_servers automatically
 [connector.options]
 connect_timeout_secs = 5

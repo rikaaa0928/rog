@@ -15,26 +15,60 @@ pub async fn handle_raw_udp(
     mut r: Box<dyn RunUdpReader>,
     w: Box<dyn RunUdpWriter>,
     config: Arc<ObjectConfig>,
+    sniff_cfg: Arc<crate::util::sniff::SniffConfig>,
     router: Arc<dyn RouterSet>,
     connector_cache: Arc<Mutex<HashMap<String, Arc<Box<dyn RunConnector>>>>>,
     observe_registry: ObserveRegistry,
 ) -> Result<()> {
     debug!("raw udp, route based on the first packet");
-    let mut first_packet = r.read().await?;
-    let orig_dst_addr = first_packet.meta.dst_addr.clone();
+    let first_packet = r.read().await?;
+    let src_ip = first_packet.meta.src_addr.parse().ok();
+    let src_port = first_packet.meta.src_port;
+    let dst_ip = first_packet.meta.dst_addr.clone();
+    let dst_port = first_packet.meta.dst_port;
+
+    let mut sniffed_domain = None;
+    let mut buffered_packets = Vec::new();
+    if config.listener.proto == "tproxy" && sniff_cfg.supports_port(dst_port) {
+        let should_sniff = match sniff_cfg.mode {
+            crate::util::sniff::SniffMode::Off => false,
+            crate::util::sniff::SniffMode::Always => true,
+            crate::util::sniff::SniffMode::Ambiguous => router.is_ambiguous_ip(
+                config.listener.router.as_str(),
+                src_ip,
+                dst_ip.as_str(),
+            ),
+        };
+        if should_sniff {
+            let (domain, pkts) = crate::util::sniff::sniff_udp_quic_packets(
+                r.as_mut(),
+                first_packet,
+                sniff_cfg.timeout,
+            )
+            .await;
+            sniffed_domain = domain;
+            buffered_packets = pkts;
+        } else {
+            buffered_packets.push(first_packet);
+        }
+    } else {
+        buffered_packets.push(first_packet);
+    }
+
     let (client_name, mapped_domain) = router
         .route_with_domain(
             config.listener.name.as_str(),
             config.listener.router.as_str(),
             &RunAddr {
-                addr: first_packet.meta.dst_addr.clone(),
-                port: first_packet.meta.dst_port,
+                addr: dst_ip.clone(),
+                port: dst_port,
                 udp: true,
             },
             &crate::def::RouteContext {
-                client_ip: first_packet.meta.src_addr.parse().ok(),
-                client_port: Some(first_packet.meta.src_port),
+                client_ip: src_ip,
+                client_port: Some(src_port),
                 use_dns_mapping: config.listener.proto == "tproxy",
+                sniffed_domain: sniffed_domain.clone(),
             },
         )
         .await;
@@ -45,12 +79,6 @@ pub async fn handle_raw_udp(
             format!("Connector config '{}' not found for UDP", client_name),
         )
     })?;
-    let rewrite_v6_domain =
-        if conn_conf.proto != "tcp" && orig_dst_addr.parse::<std::net::Ipv6Addr>().is_ok() {
-            mapped_domain
-        } else {
-            None
-        };
 
     let connector_obj: Arc<Box<dyn RunConnector>>;
     {
@@ -75,12 +103,12 @@ pub async fn handle_raw_udp(
         route: Some(client_name.clone()),
         inbound: Some(config.listener.name.clone()),
         outbound: Some(client_name.clone()),
-        source: format_endpoint(&first_packet.meta.src_addr, first_packet.meta.src_port),
-        destination: format_endpoint(&first_packet.meta.dst_addr, first_packet.meta.dst_port),
-        site: None,
+        source: format_endpoint(&buffered_packets[0].meta.src_addr, src_port),
+        destination: format_endpoint(&dst_ip, dst_port),
+        site: sniffed_domain.or(mapped_domain),
     });
 
-    let src_endpoint = format_endpoint(&first_packet.meta.src_addr, first_packet.meta.src_port);
+    let src_endpoint = format_endpoint(&buffered_packets[0].meta.src_addr, src_port);
     let (mut udp_reader, udp_writer) =
         connector_obj
             .udp_tunnel(src_endpoint)
@@ -89,12 +117,14 @@ pub async fn handle_raw_udp(
                 io::Error::other("UDP tunnel creation failed or not supported by connector")
             })?;
 
-    let first_packet_len = first_packet.data.len() as u64;
-    if let Some(ref domain) = rewrite_v6_domain {
-        first_packet.meta.dst_addr = domain.clone();
+    for pkt in buffered_packets {
+        if pkt.data.is_empty() {
+            continue;
+        }
+        let pkt_len = pkt.data.len() as u64;
+        udp_writer.write(pkt).await?;
+        observe.add_tx(pkt_len);
     }
-    udp_writer.write(first_packet).await?;
-    observe.add_tx(first_packet_len);
 
     let cancel_token = CancellationToken::new();
 
@@ -102,7 +132,6 @@ pub async fn handle_raw_udp(
 
     let token_b = cancel_token.clone();
     let observe_tx = observe.clone();
-    let rewrite_domain_b = rewrite_v6_domain.clone();
     let b: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         loop {
             let res: Result<UDPPacket> = select! {
@@ -120,7 +149,7 @@ pub async fn handle_raw_udp(
                     debug!("raw udp loop b read error {:?}", e);
                     break;
                 }
-                Ok(mut packet) => {
+                Ok(packet) => {
                     debug!(
                         "raw udp loop b read src_addr {:?} {} {:?} {}",
                         packet.meta.src_addr,
@@ -131,9 +160,6 @@ pub async fn handle_raw_udp(
                     if packet.data.is_empty() {
                         warn!("raw udp drop");
                         continue;
-                    }
-                    if let Some(ref domain) = rewrite_domain_b {
-                        packet.meta.dst_addr = domain.clone();
                     }
 
                     debug!("raw udp server get udp_packet {:?}", &packet);
@@ -154,7 +180,6 @@ pub async fn handle_raw_udp(
 
     let token_c = cancel_token.clone();
     let observe_rx = observe.clone();
-    let restore_v6_addr = rewrite_v6_domain.as_ref().map(|_| orig_dst_addr);
     let c: tokio::task::JoinHandle<Result<()>> = spawn(async move {
         loop {
             let res: Result<UDPPacket> = select! {
@@ -172,11 +197,8 @@ pub async fn handle_raw_udp(
                     debug!("raw udp loop c tunnel read error {:?}", e);
                     break;
                 }
-                Ok(mut udp_packet) => {
+                Ok(udp_packet) => {
                     let packet_len = udp_packet.data.len() as u64;
-                    if let Some(ref orig_ip) = restore_v6_addr {
-                        udp_packet.meta.dst_addr = orig_ip.clone();
-                    }
                     debug!(
                         "raw udp tunnel udp_packet read src {:?} {:?}",
                         udp_packet.meta.src_addr, udp_packet.meta.src_port,

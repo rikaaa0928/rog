@@ -105,6 +105,7 @@ pub struct RouteContext {
     pub client_ip: Option<std::net::IpAddr>,
     pub client_port: Option<u16>,
     pub use_dns_mapping: bool,
+    pub sniffed_domain: Option<String>,
 }
 
 pub struct DnsRouteDecision {
@@ -150,6 +151,15 @@ pub trait RouterSet: Send + Sync {
         _target: std::net::IpAddr,
         _ttl: std::time::Duration,
     ) {
+    }
+
+    fn is_ambiguous_ip(
+        &self,
+        _r_name: &str,
+        _client_ip: Option<std::net::IpAddr>,
+        _target_ip: &str,
+    ) -> bool {
+        false
     }
 }
 

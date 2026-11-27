@@ -209,6 +209,7 @@ name = "Proxy"
 proto = "h3"
 endpoint = "https://proxy.example.com:443"
 pw = "your_password"
+# ipv6 = true # 默认 true；若该出口无公网 IPv6 可设为 false，DNS 层将对路由到该节点的域名自动屏蔽 AAAA 与 HTTPS ipv6hint
 # 未配置 dns 和 bootstrap_dns 时，自动回退使用 [dns].default_servers / bootstrap_servers
 [connector.options]
 connect_timeout_secs = 5

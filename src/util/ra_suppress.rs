@@ -264,6 +264,11 @@ mod linux_impl {
         )
     }
 
+    fn read_iface_mac(ifname: &str) -> Option<[u8; 6]> {
+        let s = std::fs::read_to_string(format!("/sys/class/net/{ifname}/address")).ok()?;
+        parse_mac(s.trim())
+    }
+
     fn read_arp_table(ifname: &str) -> HashMap<Ipv4Addr, [u8; 6]> {
         let mut map = HashMap::new();
         let Ok(content) = std::fs::read_to_string("/proc/net/arp") else {
@@ -303,6 +308,7 @@ mod linux_impl {
     fn send_suppression_for_client(
         tx_fd: libc::c_int,
         ifindex: u32,
+        local_mac: Option<[u8; 6]>,
         client: &TrackedClient,
         routers: &HashMap<Ipv6Addr, RouterRaTemplate>,
     ) {
@@ -310,9 +316,10 @@ mod linux_impl {
             if client.mac == tpl.router_mac {
                 continue;
             }
+            let eth_src_mac = local_mac.unwrap_or(tpl.router_mac);
             let frame_mc = build_eth_ipv6_ra_frame(
                 client.mac,
-                tpl.router_mac,
+                eth_src_mac,
                 router_v6,
                 ALL_NODES_MULTICAST,
                 &tpl.icmp_payload,
@@ -322,7 +329,7 @@ mod linux_impl {
             if let Some(client_v6) = client.link_local_v6 {
                 let frame_uc = build_eth_ipv6_ra_frame(
                     client.mac,
-                    tpl.router_mac,
+                    eth_src_mac,
                     router_v6,
                     client_v6,
                     &tpl.icmp_payload,
@@ -526,11 +533,16 @@ mod linux_impl {
         })?;
         let (icmp6_async, ifindex) = open_icmp6_socket(&ifname)?;
         let tx_sock = open_tx_packet_socket()?;
+        let local_mac = read_iface_mac(&ifname);
 
         info!(
-            "ra_suppress: enabled on interface {} (ifindex={}, main_router={}, client_ttl={}s)",
+            "ra_suppress: enabled on interface {} (ifindex={}, local_mac={}, main_router={}, client_ttl={}s)",
             ifname,
             ifindex,
+            local_mac
+                .as_ref()
+                .map(format_mac)
+                .unwrap_or_else(|| "unknown".to_string()),
             gw_v4,
             CLIENT_TTL_SECS.load(Ordering::Relaxed)
         );
@@ -582,7 +594,13 @@ mod linux_impl {
                         if routers.is_empty() {
                             send_router_solicitation(icmp6_async.get_ref().as_raw_fd(), ifindex);
                         } else {
-                            send_suppression_for_client(tx_sock.as_raw_fd(), ifindex, entry, &routers);
+                            send_suppression_for_client(
+                                tx_sock.as_raw_fd(),
+                                ifindex,
+                                local_mac,
+                                entry,
+                                &routers,
+                            );
                         }
                     }
                 }
@@ -626,7 +644,13 @@ mod linux_impl {
                                     );
                                 }
                                 for client in clients.values() {
-                                    send_suppression_for_client(tx_sock.as_raw_fd(), ifindex, client, &routers);
+                                    send_suppression_for_client(
+                                        tx_sock.as_raw_fd(),
+                                        ifindex,
+                                        local_mac,
+                                        client,
+                                        &routers,
+                                    );
                                 }
                             }
                         }
@@ -639,7 +663,13 @@ mod linux_impl {
                                     if client.mac == mac {
                                         client.link_local_v6 = Some(src_v6);
                                         if pkt[0] == 133 {
-                                            send_suppression_for_client(tx_sock.as_raw_fd(), ifindex, client, &routers);
+                                            send_suppression_for_client(
+                                                tx_sock.as_raw_fd(),
+                                                ifindex,
+                                                local_mac,
+                                                client,
+                                                &routers,
+                                            );
                                         }
                                     }
                                 }
@@ -655,7 +685,13 @@ mod linux_impl {
                     }
                     sync_and_prune_clients(&ifname, gw_v4, &mut clients, &mac_to_ll6);
                     for client in clients.values() {
-                        send_suppression_for_client(tx_sock.as_raw_fd(), ifindex, client, &routers);
+                        send_suppression_for_client(
+                            tx_sock.as_raw_fd(),
+                            ifindex,
+                            local_mac,
+                            client,
+                            &routers,
+                        );
                     }
                 }
             }

@@ -543,6 +543,7 @@ impl H3RunConnector {
         &self,
         addrs: &[SocketAddr],
         use_tls: bool,
+        is_fallback: bool,
     ) -> io::Result<(ActiveClientConn, Arc<AtomicBool>)> {
         let mut last_err = None;
         for &remote_addr in addrs {
@@ -595,17 +596,29 @@ impl H3RunConnector {
                             .handshake(tls_stream)
                             .await
                             .map_err(|e| io::Error::other(format!("h2 handshake error: {e}")))?;
+                        let driver_label = if is_fallback {
+                            "H2 fallback TLS"
+                        } else {
+                            "H2 TLS"
+                        };
                         let alive = spawn_h2_driver(
                             conn,
                             self.authority.clone(),
                             keep_alive_interval,
                             keep_alive_timeout,
-                            "H2 fallback TLS",
+                            driver_label,
                         );
-                        info!(
-                            "H2 (TLS fallback) connection established to {} ({})",
-                            self.authority, remote_addr
-                        );
+                        if is_fallback {
+                            info!(
+                                "H2 (TLS fallback) connection established to {} ({})",
+                                self.authority, remote_addr
+                            );
+                        } else {
+                            info!(
+                                "H2 (TLS) connection established to {} ({})",
+                                self.authority, remote_addr
+                            );
+                        }
                         return Ok((ActiveClientConn::H2(sender), alive));
                     } else {
                         let (sender, conn) = h2_builder
@@ -647,12 +660,13 @@ impl H3RunConnector {
         }
         match self.scheme {
             TransportScheme::HttpCleartext => {
-                let (conn, alive) = self.establish_h2(&addrs, false).await?;
+                let (conn, alive) = self.establish_h2(&addrs, false, false).await?;
                 Ok(PooledClientConn::new(id, conn, None, Some(alive), None, false))
             }
             TransportScheme::HttpsOrH3 | TransportScheme::H3Insecure => {
                 if self.force_h2 || (self.fallback_h2 && self.is_h3_in_cooldown()) {
-                    let (conn, alive) = self.establish_h2(&addrs, true).await?;
+                    let is_fallback = !self.force_h2;
+                    let (conn, alive) = self.establish_h2(&addrs, true, is_fallback).await?;
                     return Ok(PooledClientConn::new(
                         id,
                         conn,
@@ -677,7 +691,7 @@ impl H3RunConnector {
                                 "QUIC H3 connection to {} failed ({}), falling back to HTTP/2 over TLS",
                                 self.authority, h3_err
                             );
-                            let (conn, alive) = self.establish_h2(&addrs, true).await?;
+                            let (conn, alive) = self.establish_h2(&addrs, true, true).await?;
                             self.enter_h3_cooldown(H3_HANDSHAKE_FAIL_COOLDOWN);
                             Ok(PooledClientConn::new(
                                 id,
@@ -1020,6 +1034,7 @@ mod tests {
                 user: None,
                 pw: Some("secret123".to_string()),
                 dns: None,
+                ipv6: None,
                 options: Some(opts),
             };
             let connector = H3RunConnector::new(&conn_cfg).await.unwrap();
@@ -1070,6 +1085,7 @@ mod tests {
             user: None,
             pw: Some("secret123".to_string()),
             dns: None,
+            ipv6: None,
             options: Some(opts),
         };
         let connector = H3RunConnector::new(&conn_cfg).await.unwrap();
@@ -1172,6 +1188,7 @@ mod tests {
             user: None,
             pw: Some("secret123".to_string()),
             dns: None,
+            ipv6: None,
             options: Some(opts),
         };
         let connector = H3RunConnector::new(&conn_cfg).await.unwrap();

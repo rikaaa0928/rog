@@ -122,6 +122,19 @@ impl DefaultBaseRouter {
         (self.default_tag.clone(), domains.first().cloned())
     }
 
+    pub(crate) fn has_ip_exclude_match(&self, ip: &str) -> bool {
+        use crate::router::matcher::MatchKind;
+        for rule in &self.rules {
+            let Some(data) = self.data_map.get(&rule.name) else {
+                continue;
+            };
+            if data.kind() != MatchKind::Domain && rule.exclude.is_match(ip) {
+                return true;
+            }
+        }
+        false
+    }
+
     pub(crate) fn allows_ebpf_direct_offload(
         &self,
         ip: &str,

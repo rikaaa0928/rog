@@ -1,7 +1,13 @@
 use super::table::canonical;
 use hickory_proto::{
     op::{Message, MessageType, OpCode, ResponseCode},
-    rr::{DNSClass, RData, RecordType, rdata::svcb::SvcParamValue},
+    rr::{
+        DNSClass, RData, Record, RecordType,
+        rdata::{
+            HTTPS,
+            svcb::{Mandatory, SVCB, SvcParamKey, SvcParamValue},
+        },
+    },
 };
 use std::{collections::HashSet, net::IpAddr};
 pub fn error_reply(query: &Message, code: ResponseCode) -> Vec<u8> {
@@ -223,6 +229,111 @@ pub fn addresses(query: &Message, response: &Message) -> Vec<(IpAddr, u32)> {
     vec![]
 }
 
+fn strip_svcb_ipv6_hint(svcb: &SVCB) -> Option<SVCB> {
+    let mut changed = false;
+    let mut params = Vec::with_capacity(svcb.svc_params().len());
+    for (k, v) in svcb.svc_params() {
+        if *k == SvcParamKey::Ipv6Hint || matches!(v, SvcParamValue::Ipv6Hint(_)) {
+            changed = true;
+            continue;
+        }
+        if *k == SvcParamKey::Mandatory
+            && let SvcParamValue::Mandatory(m) = v
+            && m.0.contains(&SvcParamKey::Ipv6Hint)
+        {
+            changed = true;
+            let filtered: Vec<_> = m
+                .0
+                .iter()
+                .copied()
+                .filter(|&key| key != SvcParamKey::Ipv6Hint)
+                .collect();
+            if !filtered.is_empty() {
+                params.push((*k, SvcParamValue::Mandatory(Mandatory(filtered))));
+            }
+            continue;
+        }
+        params.push((*k, v.clone()));
+    }
+    if changed {
+        Some(SVCB::new(
+            svcb.svc_priority(),
+            svcb.target_name().clone(),
+            params,
+        ))
+    } else {
+        None
+    }
+}
+
+fn strip_ipv6_records(records: &mut Vec<Record>) -> bool {
+    let before = records.len();
+    records.retain(|r| !matches!(r.data(), RData::AAAA(_)));
+    let mut changed = records.len() != before;
+    for r in records.iter_mut() {
+        let updated = match r.data() {
+            RData::HTTPS(https) => strip_svcb_ipv6_hint(&https.0).map(|s| RData::HTTPS(HTTPS(s))),
+            RData::SVCB(svcb) => strip_svcb_ipv6_hint(svcb).map(RData::SVCB),
+            _ => None,
+        };
+        if let Some(new_data) = updated {
+            r.set_data(new_data);
+            changed = true;
+        }
+    }
+    changed
+}
+
+pub fn svcb_target_names(query: &Message, response: &Message) -> Vec<String> {
+    if response.truncated() || response.response_code() != ResponseCode::NoError {
+        return vec![];
+    }
+    let Some(q) = query.query() else {
+        return vec![];
+    };
+    if !matches!(
+        q.query_type(),
+        RecordType::HTTPS | RecordType::SVCB | RecordType::ANY
+    ) {
+        return vec![];
+    }
+    let mut targets = Vec::new();
+    for r in response.answers() {
+        if r.dns_class() != DNSClass::IN {
+            continue;
+        }
+        let target_name = match r.data() {
+            RData::HTTPS(https) => https.0.target_name(),
+            RData::SVCB(svcb) => svcb.target_name(),
+            _ => continue,
+        };
+        if !target_name.is_root() {
+            let name = canonical(&target_name.to_ascii());
+            if !name.is_empty() && !targets.contains(&name) {
+                targets.push(name);
+            }
+        }
+    }
+    targets
+}
+
+pub fn strip_ipv6_from_message(query: &Message, response: &mut Message) -> bool {
+    let mut changed = false;
+    if query
+        .query()
+        .is_some_and(|q| q.query_type() == RecordType::AAAA)
+    {
+        if !response.answers().is_empty() {
+            response.answers_mut().clear();
+            changed = true;
+        }
+    } else {
+        changed |= strip_ipv6_records(response.answers_mut());
+    }
+    changed |= strip_ipv6_records(response.additionals_mut());
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,5 +455,129 @@ mod tests {
                 ("2606:4700:3034::6815:35ec".parse().unwrap(), 120),
             ]
         );
+    }
+
+    #[test]
+    fn strip_ipv6_removes_aaaa_and_svcb_ipv6hint_but_keeps_alpn_and_ipv4hint() {
+        use hickory_proto::rr::rdata::{
+            AAAA, HTTPS,
+            svcb::{Alpn, IpHint, Mandatory, SVCB, SvcParamKey, SvcParamValue},
+        };
+        let mut q = Message::new();
+        q.set_id(9).add_query(Query::query(
+            Name::from_ascii("app.example.com.").unwrap(),
+            RecordType::HTTPS,
+        ));
+        let mut r = Message::new();
+        r.set_id(9)
+            .set_message_type(MessageType::Response)
+            .add_query(q.queries()[0].clone());
+        let svcb = SVCB::new(
+            1,
+            Name::from_ascii("svc.example.net.").unwrap(),
+            vec![
+                (
+                    SvcParamKey::Mandatory,
+                    SvcParamValue::Mandatory(Mandatory(vec![
+                        SvcParamKey::Alpn,
+                        SvcParamKey::Ipv6Hint,
+                    ])),
+                ),
+                (
+                    SvcParamKey::Alpn,
+                    SvcParamValue::Alpn(Alpn(vec!["h3".to_string(), "h2".to_string()])),
+                ),
+                (
+                    SvcParamKey::Ipv4Hint,
+                    SvcParamValue::Ipv4Hint(IpHint(vec![A("104.21.53.236".parse().unwrap())])),
+                ),
+                (
+                    SvcParamKey::Ipv6Hint,
+                    SvcParamValue::Ipv6Hint(IpHint(vec![AAAA(
+                        "2606:4700:3034::6815:35ec".parse().unwrap(),
+                    )])),
+                ),
+            ],
+        );
+        r.add_answer(Record::from_rdata(
+            Name::from_ascii("app.example.com.").unwrap(),
+            120,
+            RData::HTTPS(HTTPS(svcb)),
+        ));
+        r.add_additional(Record::from_rdata(
+            Name::from_ascii("svc.example.net.").unwrap(),
+            120,
+            RData::A(A("104.21.53.236".parse().unwrap())),
+        ));
+        r.add_additional(Record::from_rdata(
+            Name::from_ascii("svc.example.net.").unwrap(),
+            120,
+            RData::AAAA(AAAA("2606:4700:3034::6815:35ec".parse().unwrap())),
+        ));
+
+        assert_eq!(
+            svcb_target_names(&q, &r),
+            vec!["svc.example.net".to_string()]
+        );
+        assert!(strip_ipv6_from_message(&q, &mut r));
+        assert_eq!(
+            addresses(&q, &r),
+            vec![("104.21.53.236".parse().unwrap(), 120)]
+        );
+        let RData::HTTPS(https) = r.answers()[0].data() else {
+            panic!("expected HTTPS record");
+        };
+        assert!(
+            https
+                .0
+                .svc_params()
+                .iter()
+                .any(|(k, _)| *k == SvcParamKey::Alpn)
+        );
+        assert!(
+            !https
+                .0
+                .svc_params()
+                .iter()
+                .any(|(k, _)| *k == SvcParamKey::Ipv6Hint)
+        );
+        let mandatory = https
+            .0
+            .svc_params()
+            .iter()
+            .find_map(|(k, v)| match (k, v) {
+                (SvcParamKey::Mandatory, SvcParamValue::Mandatory(m)) => Some(&m.0),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(mandatory, &vec![SvcParamKey::Alpn]);
+
+        // AAAA query with CNAME + AAAA clears answers cleanly
+        let mut qa = Message::new();
+        qa.set_id(10).add_query(Query::query(
+            Name::from_ascii("app.example.com.").unwrap(),
+            RecordType::AAAA,
+        ));
+        let mut ra = Message::new();
+        ra.set_id(10)
+            .set_message_type(MessageType::Response)
+            .add_query(qa.queries()[0].clone());
+        ra.add_answer(Record::from_rdata(
+            Name::from_ascii("app.example.com.").unwrap(),
+            60,
+            RData::CNAME(CNAME(Name::from_ascii("svc.example.net.").unwrap())),
+        ));
+        ra.add_answer(Record::from_rdata(
+            Name::from_ascii("svc.example.net.").unwrap(),
+            60,
+            RData::AAAA(AAAA("2606:4700:3034::6815:35ec".parse().unwrap())),
+        ));
+        assert_eq!(
+            cname_chain(&qa, &ra),
+            vec![("svc.example.net".to_string(), 60)]
+        );
+        assert!(strip_ipv6_from_message(&qa, &mut ra));
+        assert!(ra.answers().is_empty());
+        assert!(addresses(&qa, &ra).is_empty());
     }
 }

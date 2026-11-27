@@ -134,7 +134,26 @@ pub struct Connector {
     pub user: Option<String>,
     pub pw: Option<String>,
     pub proto: String,
+    #[serde(default)]
+    pub ipv6: Option<bool>,
     pub options: Option<HashMap<String, toml::Value>>,
+}
+
+impl Connector {
+    pub fn ipv6_enabled(&self) -> bool {
+        if let Some(v) = self.ipv6 {
+            return v;
+        }
+        if let Some(v) = self
+            .options
+            .as_ref()
+            .and_then(|o| o.get("ipv6"))
+            .and_then(|v| v.as_bool())
+        {
+            return v;
+        }
+        true
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -272,5 +291,43 @@ default = "DirectA"
             err.to_string()
                 .contains("unknown ebpf_direct_connectors connector: NonExistent")
         );
+    }
+
+    #[test]
+    fn test_connector_ipv6_option_defaults_true_and_supports_override() {
+        let cfg = load_config_str(
+            r#"
+[[listener]]
+name = "socks"
+endpoint = "127.0.0.1:1080"
+proto = "socks5"
+router = "main"
+
+[[connector]]
+name = "default_c"
+proto = "tcp"
+
+[[connector]]
+name = "v4_top"
+proto = "h3"
+endpoint = "https://example.com:443"
+ipv6 = false
+
+[[connector]]
+name = "v4_opt"
+proto = "h3"
+endpoint = "https://example.com:443"
+[connector.options]
+ipv6 = false
+
+[[router]]
+name = "main"
+default = "default_c"
+"#,
+        )
+        .unwrap();
+        assert!(cfg.connector[0].ipv6_enabled());
+        assert!(!cfg.connector[1].ipv6_enabled());
+        assert!(!cfg.connector[2].ipv6_enabled());
     }
 }

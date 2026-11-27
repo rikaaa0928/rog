@@ -185,6 +185,7 @@ pub struct TproxyOptions {
     pub suppress_ipv6_ra_ttl_secs: u64,
     pub ebpf_direct_offload: bool,
     pub ebpf_direct_connectors: Vec<String>,
+    pub sniff: crate::util::sniff::SniffConfig,
     pub tcp_opts: crate::util::grpc_transport::TcpSocketOptions,
 }
 
@@ -250,6 +251,7 @@ impl TproxyOptions {
             }
         }
 
+        let sniff = crate::util::sniff::SniffConfig::from_listener(listener);
         let tcp_opts = crate::util::grpc_transport::TcpSocketOptions::from_options_with_defaults(
             &listener.options,
         );
@@ -262,6 +264,7 @@ impl TproxyOptions {
             suppress_ipv6_ra_ttl_secs,
             ebpf_direct_offload,
             ebpf_direct_connectors,
+            sniff,
             tcp_opts,
         }
     }
@@ -1027,6 +1030,12 @@ mod tests {
         assert_eq!(opts.udp_max_senders, DEFAULT_TPROXY_SENDER_LRU_CAP);
         assert!(opts.suppress_ipv6_ra);
         assert_eq!(opts.suppress_ipv6_ra_ttl_secs, 300);
+        assert_eq!(opts.sniff.mode, crate::util::sniff::SniffMode::Ambiguous);
+        assert_eq!(
+            opts.sniff.timeout,
+            std::time::Duration::from_millis(crate::util::sniff::DEFAULT_SNIFF_TIMEOUT_MS)
+        );
+        assert!(!opts.sniff.override_destination);
 
         let mut map = HashMap::new();
         map.insert("mode".to_string(), toml::Value::String("tcp".to_string()));
@@ -1040,6 +1049,19 @@ mod tests {
             "suppress_ipv6_ra_ttl_secs".to_string(),
             toml::Value::Integer(180),
         );
+        map.insert(
+            "sniff".to_string(),
+            toml::Value::String("always".to_string()),
+        );
+        map.insert("sniff_timeout_ms".to_string(), toml::Value::Integer(250));
+        map.insert(
+            "sniff_ports".to_string(),
+            toml::Value::Array(vec![toml::Value::Integer(443), toml::Value::Integer(8443)]),
+        );
+        map.insert(
+            "sniff_override_destination".to_string(),
+            toml::Value::Boolean(true),
+        );
         listener.options = Some(map);
 
         let opts = TproxyOptions::from_listener(&listener);
@@ -1048,5 +1070,9 @@ mod tests {
         assert_eq!(opts.udp_max_senders, 1024);
         assert!(!opts.suppress_ipv6_ra);
         assert_eq!(opts.suppress_ipv6_ra_ttl_secs, 180);
+        assert_eq!(opts.sniff.mode, crate::util::sniff::SniffMode::Always);
+        assert_eq!(opts.sniff.timeout, std::time::Duration::from_millis(250));
+        assert_eq!(opts.sniff.ports, vec![443, 8443]);
+        assert!(opts.sniff.override_destination);
     }
 }

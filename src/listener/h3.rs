@@ -551,6 +551,7 @@ mod tests {
                 user: None,
                 pw: Some("secret123".to_string()),
                 dns: None,
+                ipv6: None,
                 options: None,
             };
             let connector = H3RunConnector::new(&conn_cfg).await.unwrap();

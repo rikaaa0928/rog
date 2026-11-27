@@ -103,6 +103,7 @@ pub async fn handle_udp_connection(
                 client_ip: Some(src_addr.ip()),
                 client_port: Some(src_addr.port()),
                 use_dns_mapping: false,
+                sniffed_domain: None,
             },
         )
         .await;

@@ -55,6 +55,7 @@ struct ResponseCacheKey {
     qtype: RecordType,
     qclass: DNSClass,
     outbound: String,
+    ipv6_disabled: bool,
     recursion_desired: bool,
     has_edns: bool,
     checking_disabled: bool,
@@ -286,6 +287,7 @@ impl DnsServer {
         query: &Message,
         domain: &str,
         outbound_name: &str,
+        ipv6_disabled: bool,
     ) -> Option<ResponseCacheKey> {
         let q = query.query()?;
         let edns = query.extensions().as_ref();
@@ -297,6 +299,7 @@ impl DnsServer {
             qtype: q.query_type(),
             qclass: q.query_class(),
             outbound: outbound_name.to_string(),
+            ipv6_disabled,
             recursion_desired: query.recursion_desired(),
             has_edns: edns.is_some(),
             checking_disabled: query.checking_disabled(),
@@ -415,6 +418,64 @@ impl DnsServer {
         handles.retain(|h| !h.is_finished());
         handles.push(handle);
     }
+    async fn response_disables_ipv6(
+        &self,
+        initial_ipv6_disabled: bool,
+        cnames: &[(String, u32)],
+        svcb_targets: &[String],
+    ) -> bool {
+        if initial_ipv6_disabled {
+            return true;
+        }
+        for target in cnames.iter().map(|(name, _)| name).chain(svcb_targets.iter()) {
+            if let Ok(decision) = self.router.route_dns(&self.cfg.router, target).await
+                && self
+                    .config
+                    .connector
+                    .iter()
+                    .find(|c| c.name == decision.outbound)
+                    .is_some_and(|c| !c.ipv6_enabled())
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    async fn finalize_upstream_response(
+        &self,
+        initial_ipv6_disabled: bool,
+        query: &Message,
+        mut raw_data: Vec<u8>,
+        mut response: Message,
+    ) -> (
+        Vec<u8>,
+        Message,
+        Vec<(String, u32)>,
+        Vec<(IpAddr, u32)>,
+        Option<Duration>,
+    ) {
+        let cnames = message::cname_chain(query, &response);
+        let svcb_targets = message::svcb_target_names(query, &response);
+        let mut fresh_ttl = self.cache_fresh_ttl(&response);
+        if self
+            .response_disables_ipv6(initial_ipv6_disabled, &cnames, &svcb_targets)
+            .await
+            && message::strip_ipv6_from_message(query, &mut response)
+        {
+            if let Ok(encoded) = response.to_vec() {
+                raw_data = encoded;
+            }
+            if fresh_ttl.is_none() {
+                fresh_ttl = self.cache_fresh_ttl(&response);
+            }
+        } else {
+            fresh_ttl = self.cache_fresh_ttl(&response);
+        }
+        let addresses = message::addresses(query, &response);
+        (raw_data, response, cnames, addresses, fresh_ttl)
+    }
+
     async fn learn_records(
         &self,
         client: SocketAddr,
@@ -713,9 +774,15 @@ impl DnsServer {
             };
             match res {
                 Ok((raw_data, response)) => {
-                    let cnames = message::cname_chain(&query, &response);
-                    let addresses = message::addresses(&query, &response);
-                    if let Some(fresh_ttl) = server.cache_fresh_ttl(&response) {
+                    let (raw_data, response, cnames, addresses, fresh_ttl) = server
+                        .finalize_upstream_response(
+                            key.ipv6_disabled,
+                            &query,
+                            raw_data,
+                            response,
+                        )
+                        .await;
+                    if let Some(fresh_ttl) = fresh_ttl {
                         let now = Instant::now();
                         let stale_until = now
                             + fresh_ttl
@@ -827,34 +894,40 @@ impl DnsServer {
                             attempt_deadline,
                         ) => res,
                     };
-                    if let Ok((_raw, response)) = res
-                        && let Some(fresh_ttl) = server.cache_fresh_ttl(&response)
-                    {
-                        let now = Instant::now();
-                        let stale_until =
-                            now + fresh_ttl + Duration::from_secs(STALE_GRACE_SECS);
-                        let cnames = message::cname_chain(&query, &response);
-                        let addresses = message::addresses(&query, &response);
-                        let cached = CachedResponse {
-                            response,
-                            cnames: cnames.clone(),
-                            addresses: addresses.clone(),
-                            inserted_at: now,
-                            fresh_ttl,
-                            stale_until,
-                            last_accessed_at: now,
-                            refresh_cooldown_until: None,
-                        };
-                        server
-                            .response_cache
-                            .lock()
-                            .unwrap()
-                            .put(key.clone(), cached.clone());
-                        server
-                            .learn_records(client, &domain, &cnames, &addresses, now)
+                    if let Ok((raw_data, response)) = res {
+                        let (_raw, response, cnames, addresses, fresh_ttl) = server
+                            .finalize_upstream_response(
+                                key.ipv6_disabled,
+                                &query,
+                                raw_data,
+                                response,
+                            )
                             .await;
-                        refreshed = Some(cached);
-                        break;
+                        if let Some(fresh_ttl) = fresh_ttl {
+                            let now = Instant::now();
+                            let stale_until =
+                                now + fresh_ttl + Duration::from_secs(STALE_GRACE_SECS);
+                            let cached = CachedResponse {
+                                response,
+                                cnames: cnames.clone(),
+                                addresses: addresses.clone(),
+                                inserted_at: now,
+                                fresh_ttl,
+                                stale_until,
+                                last_accessed_at: now,
+                                refresh_cooldown_until: None,
+                            };
+                            server
+                                .response_cache
+                                .lock()
+                                .unwrap()
+                                .put(key.clone(), cached.clone());
+                            server
+                                .learn_records(client, &domain, &cnames, &addresses, now)
+                                .await;
+                            refreshed = Some(cached);
+                            break;
+                        }
                     }
                 }
                 if let Some(cached) = refreshed {
@@ -933,7 +1006,8 @@ impl DnsServer {
         if matched_cfg.proto == "block" {
             return Ok(message::error_reply(query, ResponseCode::Refused));
         }
-        if self.cfg.disable_aaaa
+        let ipv6_disabled = self.cfg.disable_aaaa || !matched_cfg.ipv6_enabled();
+        if ipv6_disabled
             && query
                 .query()
                 .is_some_and(|q| q.query_type() == RecordType::AAAA)
@@ -978,7 +1052,7 @@ impl DnsServer {
 
         let now = Instant::now();
         let mut stale_entry: Option<CachedResponse> = None;
-        if let Some(key) = Self::cache_key(query, &domain, &route_scope) {
+        if let Some(key) = Self::cache_key(query, &domain, &route_scope, ipv6_disabled) {
             let lookup = {
                 let mut cache = self.response_cache.lock().unwrap();
                 if let Some(entry) = cache.get_mut(&key) {
@@ -1109,8 +1183,9 @@ impl DnsServer {
         let (raw_data, response) = self
             .query_upstreams_hedged(&targets, client, bytes, query, deadline)
             .await?;
-        let cnames = message::cname_chain(query, &response);
-        let addresses = message::addresses(query, &response);
+        let (raw_data, _response, cnames, addresses, _) = self
+            .finalize_upstream_response(ipv6_disabled, query, raw_data, response)
+            .await;
         self.learn_records(client, &domain, &cnames, &addresses, Instant::now())
             .await;
         Ok(raw_data)
@@ -1294,6 +1369,7 @@ exclude=[]
                     client_ip: Some(client.local_addr().unwrap().ip()),
                     client_port: Some(client.local_addr().unwrap().port()),
                     use_dns_mapping: true,
+                    sniffed_domain: None,
                 },
             )
             .await;
@@ -1909,6 +1985,230 @@ exclude=[]
         tokio::time::sleep(Duration::from_millis(2200)).await;
         server.prune_response_cache();
         assert_eq!(server.response_cache.lock().unwrap().len(), 0);
+
+        token.cancel();
+        task.await.unwrap().unwrap();
+        t_up.abort();
+    }
+
+    #[tokio::test]
+    async fn per_connector_ipv6_false_blocks_aaaa_strips_https_ipv6hint_and_handles_cname() {
+        use hickory_proto::rr::rdata::{
+            AAAA, CNAME, HTTPS,
+            svcb::{Alpn, IpHint, SVCB, SvcParamKey, SvcParamValue},
+        };
+        use std::sync::atomic::AtomicUsize;
+
+        let upstream_aaaa_hits = Arc::new(AtomicUsize::new(0));
+        let upstream_aaaa_hits_srv = upstream_aaaa_hits.clone();
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let upstream = socket.local_addr().unwrap();
+        let t_up = tokio::spawn(async move {
+            let mut buf = vec![0; 65535];
+            loop {
+                let (n, c) = socket.recv_from(&mut buf).await.unwrap();
+                let q = Message::from_vec(&buf[..n]).unwrap();
+                let q0 = q.queries()[0].clone();
+                let qname = canonical(&q0.name().to_ascii());
+                let mut r = Message::new();
+                r.set_id(q.id())
+                    .set_message_type(MessageType::Response)
+                    .set_response_code(ResponseCode::NoError)
+                    .add_query(q0.clone());
+                match q0.query_type() {
+                    RecordType::A => {
+                        r.add_answer(Record::from_rdata(
+                            q0.name().clone(),
+                            60,
+                            RData::A(A("203.0.113.10".parse().unwrap())),
+                        ));
+                    }
+                    RecordType::AAAA => {
+                        upstream_aaaa_hits_srv.fetch_add(1, Ordering::Relaxed);
+                        if qname == "alias.dual.example" {
+                            r.add_answer(Record::from_rdata(
+                                q0.name().clone(),
+                                60,
+                                RData::CNAME(CNAME(Name::from_ascii("cdn.v4only.example.").unwrap())),
+                            ));
+                            r.add_answer(Record::from_rdata(
+                                Name::from_ascii("cdn.v4only.example.").unwrap(),
+                                60,
+                                RData::AAAA(AAAA("2001:db8::99".parse().unwrap())),
+                            ));
+                        } else {
+                            r.add_answer(Record::from_rdata(
+                                q0.name().clone(),
+                                60,
+                                RData::AAAA(AAAA("2001:db8::1".parse().unwrap())),
+                            ));
+                        }
+                    }
+                    RecordType::HTTPS => {
+                        let svcb = SVCB::new(
+                            1,
+                            Name::root(),
+                            vec![
+                                (
+                                    SvcParamKey::Alpn,
+                                    SvcParamValue::Alpn(Alpn(vec![
+                                        "h3".to_string(),
+                                        "h2".to_string(),
+                                    ])),
+                                ),
+                                (
+                                    SvcParamKey::Ipv4Hint,
+                                    SvcParamValue::Ipv4Hint(IpHint(vec![A("203.0.113.10"
+                                        .parse()
+                                        .unwrap())])),
+                                ),
+                                (
+                                    SvcParamKey::Ipv6Hint,
+                                    SvcParamValue::Ipv6Hint(IpHint(vec![AAAA("2001:db8::10"
+                                        .parse()
+                                        .unwrap())])),
+                                ),
+                            ],
+                        );
+                        r.add_answer(Record::from_rdata(
+                            q0.name().clone(),
+                            60,
+                            RData::HTTPS(HTTPS(svcb)),
+                        ));
+                    }
+                    _ => {}
+                }
+                socket.send_to(&r.to_vec().unwrap(), c).await.unwrap();
+            }
+        });
+
+        let cfg: Config = toml::from_str(&format!(
+            r#"
+listener=[]
+[dns]
+endpoint="127.0.0.1:5353"
+router="main"
+default_servers=["{upstream}"]
+disable_aaaa=false
+upstream_timeout_ms=200
+request_timeout_ms=1000
+[[connector]]
+name="dual"
+proto="tcp"
+[[connector]]
+name="v4only"
+proto="tcp"
+ipv6=false
+[[data]]
+name="v4domains"
+format="domain-suffix"
+data="v4only.example"
+[[router]]
+name="main"
+default="dual"
+[[router.route_rules]]
+name="v4domains"
+select="v4only"
+exclude=[]
+"#
+        ))
+        .unwrap();
+        cfg.validate().unwrap();
+        let table = Arc::new(IpDomainTable::new(100, 10, 100));
+        let router = Arc::new(
+            DefaultRouter::new(&cfg.router, cfg.data.as_ref().unwrap(), Resolver::new()).await,
+        );
+        let mut settings = cfg.dns.clone().unwrap();
+        settings.endpoint = "127.0.0.1:0".into();
+        let server = DnsServer::bind(settings, cfg, router, table.clone())
+            .await
+            .unwrap();
+        let addr = server.socket.local_addr().unwrap();
+        let token = CancellationToken::new();
+        let task = tokio::spawn(server.run(token.clone()));
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+
+        let query_type = |name: &str, rtype: RecordType, id: u16| {
+            let client = &client;
+            let name = name.to_string();
+            async move {
+                let mut q = Message::new();
+                q.set_id(id)
+                    .add_query(Query::query(Name::from_ascii(&name).unwrap(), rtype));
+                client.send_to(&q.to_vec().unwrap(), addr).await.unwrap();
+                let mut buf = vec![0; 65535];
+                let (n, _) =
+                    tokio::time::timeout(Duration::from_secs(3), client.recv_from(&mut buf))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                Message::from_vec(&buf[..n]).unwrap()
+            }
+        };
+
+        // 1. Direct v4only domain: A works, AAAA returns empty NOERROR without hitting upstream
+        let v4_a = query_type("app.v4only.example.", RecordType::A, 601).await;
+        assert_eq!(v4_a.answers().len(), 1);
+        let v4_aaaa = query_type("app.v4only.example.", RecordType::AAAA, 602).await;
+        assert_eq!(v4_aaaa.response_code(), ResponseCode::NoError);
+        assert!(v4_aaaa.answers().is_empty());
+        assert_eq!(upstream_aaaa_hits.load(Ordering::Relaxed), 0);
+
+        // 2. Dual domain still returns AAAA normally
+        let dual_aaaa = query_type("ok.dual.example.", RecordType::AAAA, 603).await;
+        assert_eq!(dual_aaaa.answers().len(), 1);
+        assert_eq!(upstream_aaaa_hits.load(Ordering::Relaxed), 1);
+
+        // 3. HTTPS query on v4only strips ipv6hint while preserving alpn and ipv4hint
+        let v4_https = query_type("app.v4only.example.", RecordType::HTTPS, 604).await;
+        assert_eq!(v4_https.answers().len(), 1);
+        let RData::HTTPS(https) = v4_https.answers()[0].data() else {
+            panic!("expected HTTPS record");
+        };
+        assert!(
+            https
+                .0
+                .svc_params()
+                .iter()
+                .any(|(k, _)| *k == SvcParamKey::Alpn)
+        );
+        assert!(
+            https
+                .0
+                .svc_params()
+                .iter()
+                .any(|(k, _)| *k == SvcParamKey::Ipv4Hint)
+        );
+        assert!(
+            !https
+                .0
+                .svc_params()
+                .iter()
+                .any(|(k, _)| *k == SvcParamKey::Ipv6Hint)
+        );
+        assert!(
+            table
+                .get_domains(
+                    "main",
+                    client.local_addr().unwrap().ip(),
+                    "2001:db8::10".parse().unwrap()
+                )
+                .is_empty()
+        );
+
+        // 4. Dual domain that CNAMEs to v4only target strips AAAA on first uncached query
+        let cname_aaaa = query_type("alias.dual.example.", RecordType::AAAA, 605).await;
+        assert_eq!(cname_aaaa.response_code(), ResponseCode::NoError);
+        assert!(cname_aaaa.answers().is_empty());
+        assert!(
+            table
+                .get_domains(
+                    "main",
+                    client.local_addr().unwrap().ip(),
+                    "2001:db8::99".parse().unwrap()
+                )
+                .is_empty()
+        );
 
         token.cancel();
         task.await.unwrap().unwrap();

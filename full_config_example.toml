@@ -38,6 +38,10 @@ router = "main_router" # 引用下面定义的路由器
 # mode = "tcp+udp" # 支持 "tcp+udp"（默认）、"tcp"、"udp"
 # udp_idle_timeout_secs = 60 # UDP 会话空闲清理时长（秒）
 # udp_max_senders = 512 # 伪装回包套接字 LRU 缓存容量上限
+# sniff = "ambiguous" # TPROXY TCP(TLS SNI / HTTP Host) + UDP(QUIC Initial SNI) 首包嗅探模式："ambiguous"（仅共用冲突 IP / exclude IP / 无 DNS 映射时嗅探，默认）、"always"（所有嗅探端口都嗅探）、"off"
+# sniff_timeout_ms = 100 # 首包嗅探最长等待毫秒数（超时立刻回退原 IP 路由，避免阻塞 server-first 协议）
+# sniff_ports = [80, 443, 8443] # 触发嗅探的目标端口列表
+# sniff_override_destination = false # 默认不改写目标 IP，仅用嗅探域名做路由决策与 Observe site 展示
 
 # 连接器配置
 # 注：当启用了 [dns] 时：
@@ -54,6 +58,7 @@ dns = ["system", "223.5.5.5:53"] # 使用本机默认 DNS（如路由器 DHCP �
 name = "proxy_outbound"
 proto = "socks5"
 endpoint = "127.0.0.1:1081" # 代理服务器地址（未指定 dns 时自动继承 dns.default_servers）
+# ipv6 = true # 默认 true；若该出口节点不支持公网 IPv6 可设为 false，DNS 层将自动对路由到该节点的域名屏蔽 AAAA 及 HTTPS ipv6hint
 
 # gRPC / rev_grpc / h3 推荐传输配置，可放在 proto = "grpc" / "h3" 的 listener/connector
 # 或 reverse_server.options / proto = "rev_grpc" 的 listener 上。
